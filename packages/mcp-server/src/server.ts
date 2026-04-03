@@ -52,7 +52,10 @@ export async function createServer(vaultRoot: string, opts?: { provider?: LlmPro
       "chat_with_pulse",
       "Have a multi-turn conversation about recorded activities and knowledge.",
       { message: z.string(), sessionId: z.string().optional() },
-      async (input) => handleChatWithPulse(vault, provider!, config.llm.model, input)
+      async (input) => {
+        const result = await handleChatWithPulse(vault, provider!, config.llm.model, input);
+        return { content: result.content };
+      }
     );
   }
 

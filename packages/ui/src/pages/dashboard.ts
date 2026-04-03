@@ -33,7 +33,7 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
 
   // Stat card click handlers
   container.querySelectorAll<HTMLElement>(".stat-card[data-nav]").forEach((card) => {
-    card.addEventListener("click", () => nav(card.dataset.nav));
+    card.addEventListener("click", () => nav(card.dataset.nav!));
   });
 
   document.getElementById("btn-refresh")?.addEventListener("click", refreshStats);
@@ -87,7 +87,7 @@ async function refreshStats() {
 
     // Re-bind click handlers after re-render
     grid.querySelectorAll<HTMLElement>(".stat-card[data-nav]").forEach((card) => {
-      card.addEventListener("click", () => nav(card.dataset.nav));
+      card.addEventListener("click", () => nav(card.dataset.nav!));
     });
   } catch (e: any) {
     grid.innerHTML = `<div class="card" style="grid-column: 1/-1; color: var(--danger);">Failed to load vault health: ${e}</div>`;
