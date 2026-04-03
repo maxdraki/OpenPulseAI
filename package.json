@@ -6,7 +6,9 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:sea:mcp": "bash scripts/build-sea.sh mcp-server",
+    "build:sea:dream": "bash scripts/build-sea.sh dream"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

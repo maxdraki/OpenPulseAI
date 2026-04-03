@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenPulseAI Control Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2/cdn/themes/dark.css" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2/cdn/shoelace-autoloader.js"></script>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <nav id="nav">
+        <div class="nav-brand">
+          <sl-icon name="activity" style="font-size: 1.25rem;"></sl-icon>
+          <span>OpenPulseAI</span>
+        </div>
+        <sl-button-group label="Navigation">
+          <sl-button variant="default" data-page="dashboard" class="active" size="small">
+            <sl-icon slot="prefix" name="speedometer2"></sl-icon>
+            Dashboard
+          </sl-button>
+          <sl-button variant="default" data-page="review" size="small">
+            <sl-icon slot="prefix" name="journal-check"></sl-icon>
+            Review
+          </sl-button>
+          <sl-button variant="default" data-page="settings" size="small">
+            <sl-icon slot="prefix" name="gear"></sl-icon>
+            Settings
+          </sl-button>
+        </sl-button-group>
+      </nav>
+      <main id="content"></main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
