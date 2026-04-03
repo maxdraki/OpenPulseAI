@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(npm --version)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(npm view:*)",
+      "Bash(cargo tauri:*)",
+      "Bash(node:*)",
+      "Bash(git init:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm view:*)",
+      "Bash(ls packages/*/package.json)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(pnpm vitest:*)",
+      "Bash(pnpm:*)",
+      "Bash(chmod +x scripts/build-sea.sh)"
+    ]
+  }
+}
