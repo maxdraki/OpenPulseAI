@@ -1,0 +1,13 @@
+{
+  "name": "@openpulse/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
+  }
+}
