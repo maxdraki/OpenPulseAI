@@ -16,17 +16,16 @@ export interface PendingUpdate {
   status: string;
 }
 
-// Try to use Tauri invoke, fall back to mock for browser dev
+// Detect Tauri runtime (window.__TAURI__ is injected by the Tauri webview)
+const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  try {
-    // Dynamic import to avoid build-time resolution — only available when running inside Tauri
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore: optional Tauri runtime dependency
-    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+  if (isTauri) {
+    // Use the global Tauri API (available when withGlobalTauri is enabled)
+    const tauriInvoke = (window as any).__TAURI__.core.invoke;
     return tauriInvoke(cmd, args);
-  } catch {
-    return mockInvoke(cmd, args) as T;
   }
+  return mockInvoke(cmd, args) as T;
 }
 
 // Mock implementations for browser development
