@@ -1,0 +1,15 @@
+export type {
+  ActivityEntry,
+  OpenPulseConfig,
+  LlmProviderName,
+  ClassificationResult,
+  ThemeDocument,
+  PendingUpdate,
+} from "./types.js";
+export { Vault } from "./vault.js";
+export { appendActivity, saveIngestedDocument } from "./hot.js";
+export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";
+export { archiveHotFile } from "./cold.js";
+export { loadConfig, DEFAULT_CONFIG } from "./config.js";
+export type { LlmProvider, CompletionParams } from "./llm/provider.js";
+export { createProvider } from "./llm/factory.js";

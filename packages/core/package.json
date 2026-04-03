@@ -8,6 +8,9 @@
     "build": "tsc"
   },
   "dependencies": {
-    "yaml": "^2.7.0"
+    "yaml": "^2.7.0",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.80.0",
+    "@google/generative-ai": "^0.24.0"
   }
 }
