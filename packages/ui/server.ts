@@ -174,6 +174,71 @@ app.get("/api/vault-path", (_req, res) => {
   res.json({ path: VAULT_ROOT });
 });
 
+app.get("/api/hot-entries", async (_req, res) => {
+  try {
+    const files = await readdir(hotDir);
+    const entries: Array<{ timestamp: string; log: string; theme?: string; source?: string }> = [];
+
+    for (const file of files) {
+      if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
+      const content = await readFile(join(hotDir, file), "utf-8");
+      const blocks = content.split(/\n---\n/).filter((b) => b.trim());
+
+      for (const block of blocks) {
+        const tsMatch = block.match(/^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m);
+        const themeMatch = block.match(/^\*\*Theme:\*\*\s*(.+)/m);
+        const sourceMatch = block.match(/^\*\*Source:\*\*\s*(.+)/m);
+        const logLines = block
+          .split("\n")
+          .filter((l) => !l.startsWith("## ") && !l.startsWith("**Theme:") && !l.startsWith("**Source:") && l.trim());
+
+        if (tsMatch && logLines.length > 0) {
+          entries.push({
+            timestamp: tsMatch[1],
+            log: logLines.join("\n").trim(),
+            theme: themeMatch?.[1],
+            source: sourceMatch?.[1],
+          });
+        }
+      }
+    }
+
+    entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    res.json(entries);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.get("/api/warm-themes", async (_req, res) => {
+  try {
+    const files = await readdir(warmDir, { withFileTypes: true });
+    const themes = [];
+
+    for (const entry of files) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const raw = await readFile(join(warmDir, entry.name), "utf-8");
+      const themeName = entry.name.replace(/\.md$/, "");
+
+      // Parse frontmatter
+      const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
+      let lastUpdated = "";
+      if (fmMatch) {
+        const luMatch = fmMatch[1].match(/lastUpdated:\s*(.+)/);
+        if (luMatch) lastUpdated = luMatch[1].trim();
+      }
+      const content = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
+
+      themes.push({ theme: themeName, content, lastUpdated });
+    }
+
+    themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+    res.json(themes);
+  } catch {
+    res.json([]);
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);

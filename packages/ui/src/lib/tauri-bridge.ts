@@ -88,3 +88,26 @@ export async function getVaultPath(): Promise<string> {
   const result = await apiGet<{ path: string }>("/vault-path");
   return result.path;
 }
+
+export interface HotEntry {
+  timestamp: string;
+  log: string;
+  theme?: string;
+  source?: string;
+}
+
+export interface WarmTheme {
+  theme: string;
+  content: string;
+  lastUpdated: string;
+}
+
+export async function getHotEntries(): Promise<HotEntry[]> {
+  if (isTauri) return tauriInvoke("get_hot_entries");
+  return apiGet("/hot-entries");
+}
+
+export async function getWarmThemes(): Promise<WarmTheme[]> {
+  if (isTauri) return tauriInvoke("get_warm_themes");
+  return apiGet("/warm-themes");
+}

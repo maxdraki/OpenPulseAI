@@ -1,5 +1,7 @@
 import { getVaultHealth, triggerDream } from "../lib/tauri-bridge.js";
 
+const nav = (window as any).__navigate;
+
 export async function renderDashboard(container: HTMLElement): Promise<void> {
   container.innerHTML = `
     <div class="page-header">
@@ -7,9 +9,9 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
       <p class="page-subtitle">Vault health and pipeline controls</p>
     </div>
     <div class="stat-grid" id="stats">
-      ${statCardSkeleton("hot", "Hot Entries")}
-      ${statCardSkeleton("warm", "Warm Themes")}
-      ${statCardSkeleton("pending", "Pending Reviews")}
+      ${statCard("hot", "-", "Hot Entries")}
+      ${statCard("warm", "-", "Warm Themes")}
+      ${statCard("pending", "-", "Pending Reviews")}
     </div>
     <div class="card">
       <h3>Pipeline</h3>
@@ -28,6 +30,11 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   `;
 
   await refreshStats();
+
+  // Stat card click handlers
+  container.querySelectorAll<HTMLElement>(".stat-card[data-nav]").forEach((card) => {
+    card.addEventListener("click", () => nav(card.dataset.nav));
+  });
 
   document.getElementById("btn-refresh")?.addEventListener("click", refreshStats);
   document.getElementById("btn-dream")?.addEventListener("click", async () => {
@@ -48,12 +55,14 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   });
 }
 
-function statCardSkeleton(type: string, label: string): string {
+function statCard(type: string, value: string, label: string): string {
+  const navTarget = type === "hot" ? "hot-log" : type === "warm" ? "warm-themes" : "review";
   return `
-    <div class="stat-card ${type}">
+    <div class="stat-card ${type} clickable" data-nav="${navTarget}">
       <div class="stat-icon">${iconForType(type)}</div>
-      <div class="stat-value">-</div>
+      <div class="stat-value">${value}</div>
       <div class="stat-label">${label}</div>
+      <svg class="stat-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </div>
   `;
 }
@@ -71,23 +80,15 @@ async function refreshStats() {
   const grid = document.getElementById("stats")!;
   try {
     const h = await getVaultHealth();
-    grid.innerHTML = `
-      <div class="stat-card hot">
-        <div class="stat-icon">${iconForType("hot")}</div>
-        <div class="stat-value">${h.hotCount}</div>
-        <div class="stat-label">Hot Entries</div>
-      </div>
-      <div class="stat-card warm">
-        <div class="stat-icon">${iconForType("warm")}</div>
-        <div class="stat-value">${h.warmCount}</div>
-        <div class="stat-label">Warm Themes</div>
-      </div>
-      <div class="stat-card pending">
-        <div class="stat-icon">${iconForType("pending")}</div>
-        <div class="stat-value">${h.pendingCount}</div>
-        <div class="stat-label">Pending Reviews</div>
-      </div>
-    `;
+    grid.innerHTML =
+      statCard("hot", String(h.hotCount), "Hot Entries") +
+      statCard("warm", String(h.warmCount), "Warm Themes") +
+      statCard("pending", String(h.pendingCount), "Pending Reviews");
+
+    // Re-bind click handlers after re-render
+    grid.querySelectorAll<HTMLElement>(".stat-card[data-nav]").forEach((card) => {
+      card.addEventListener("click", () => nav(card.dataset.nav));
+    });
   } catch (e: any) {
     grid.innerHTML = `<div class="card" style="grid-column: 1/-1; color: var(--danger);">Failed to load vault health: ${e}</div>`;
   }

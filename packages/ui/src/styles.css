@@ -650,3 +650,136 @@ body {
 
 .save-status.success { color: var(--success); }
 .save-status.error { color: var(--danger); }
+
+/* ---- Clickable stat cards ---- */
+.stat-card.clickable {
+  cursor: pointer;
+  position: relative;
+}
+
+.stat-arrow {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.stat-card.clickable:hover .stat-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* ---- Back button ---- */
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  transition: color 0.15s ease;
+}
+
+.btn-back:hover { color: var(--accent); }
+
+/* ---- Hot Log entries ---- */
+.hot-entry {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.65rem;
+  transition: border-color 0.15s ease;
+}
+
+.hot-entry:hover { border-color: var(--border-default); }
+
+.hot-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.5rem;
+}
+
+.hot-entry-time {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.hot-entry-theme {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  background: var(--hot-glow);
+  color: var(--hot);
+  border-radius: 10px;
+}
+
+.hot-entry-source {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  background: rgba(96, 165, 250, 0.1);
+  color: var(--accent);
+  border-radius: 10px;
+}
+
+.hot-entry-body {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.55;
+}
+
+/* ---- Warm theme cards ---- */
+.warm-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 0.85rem;
+  transition: border-color 0.15s ease;
+}
+
+.warm-card:hover { border-color: var(--border-default); }
+
+.warm-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+.warm-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--warm);
+}
+
+.warm-card-updated {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+
+.warm-card-content {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  background: var(--bg-base);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  max-height: 300px;
+  overflow-y: auto;
+}
