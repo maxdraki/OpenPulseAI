@@ -111,3 +111,65 @@ export async function getWarmThemes(): Promise<WarmTheme[]> {
   if (isTauri) return tauriInvoke("get_warm_themes");
   return apiGet("/warm-themes");
 }
+
+export interface SourceData {
+  name: string;
+  command: string;
+  args: string[];
+  schedule: string;
+  lookback: string;
+  template: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+  lastStatus: string;
+  entriesCollected: number;
+  lastError?: string;
+}
+
+export interface SourceInput {
+  name: string;
+  command: string;
+  args: string[];
+  schedule: string;
+  lookback: string;
+  template?: string;
+  enabled: boolean;
+  env?: Record<string, string>;
+}
+
+export async function getSources(): Promise<SourceData[]> {
+  if (isTauri) return tauriInvoke("get_sources");
+  return apiGet("/sources");
+}
+
+export async function addSource(source: SourceInput): Promise<void> {
+  if (isTauri) return tauriInvoke("add_source", { source });
+  await apiPost("/sources", source as any);
+}
+
+export async function updateSource(name: string, source: SourceInput): Promise<void> {
+  if (isTauri) return tauriInvoke("update_source", { name, source });
+  const res = await fetch(`${API_BASE}/sources/${name}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(source),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function deleteSource(name: string): Promise<void> {
+  if (isTauri) return tauriInvoke("delete_source", { name });
+  const res = await fetch(`${API_BASE}/sources/${name}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function testSourceConnection(name: string): Promise<{ ok: boolean; message?: string; error?: string }> {
+  if (isTauri) return tauriInvoke("test_source", { name });
+  return apiPost(`/sources/${name}/test`, {});
+}
+
+export async function triggerSourceCollect(name: string): Promise<string> {
+  if (isTauri) return tauriInvoke("trigger_collect", { name });
+  const result = await apiPost<{ output: string }>(`/sources/${name}/collect`, {});
+  return result.output;
+}

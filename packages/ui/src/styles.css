@@ -774,3 +774,84 @@ body {
   max-height: 300px;
   overflow-y: auto;
 }
+
+/* ---- Source cards ---- */
+.source-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 0.85rem;
+  transition: border-color 0.15s ease;
+}
+
+.source-card:hover { border-color: var(--border-default); }
+
+.source-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.65rem;
+}
+
+.source-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+
+.source-card-template {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  background: rgba(96, 165, 250, 0.1);
+  color: var(--accent);
+  border-radius: 10px;
+  margin-left: 0.5rem;
+}
+
+.source-card-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.source-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.source-card-meta {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  margin-bottom: 0.5rem;
+}
+
+.source-card-meta code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.source-card-command {
+  padding: 0.4rem 0.65rem;
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 0.65rem;
+}
+
+.source-card-command code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.source-card-actions {
+  display: flex;
+  gap: 0.5rem;
+}

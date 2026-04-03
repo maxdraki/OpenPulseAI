@@ -239,6 +239,125 @@ app.get("/api/warm-themes", async (_req, res) => {
   }
 });
 
+app.get("/api/sources", async (_req, res) => {
+  const configPath = join(VAULT_ROOT, "config.yaml");
+  try {
+    const { parse } = await import("yaml");
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = parse(raw);
+    const sources = (parsed?.sources ?? []).map((s: any) => ({
+      name: s.name,
+      command: s.command,
+      args: s.args ?? [],
+      schedule: s.schedule ?? "0 23 * * *",
+      lookback: s.lookback ?? "24h",
+      template: s.template ?? null,
+      enabled: s.enabled ?? true,
+    }));
+
+    // Merge collector state
+    const stateDir = join(VAULT_ROOT, "vault", "collector-state");
+    for (const source of sources) {
+      try {
+        const stateRaw = await readFile(join(stateDir, `${source.name}.json`), "utf-8");
+        const state = JSON.parse(stateRaw);
+        source.lastRunAt = state.lastRunAt;
+        source.lastStatus = state.lastStatus;
+        source.entriesCollected = state.entriesCollected;
+        source.lastError = state.lastError;
+      } catch {
+        source.lastRunAt = null;
+        source.lastStatus = "never";
+        source.entriesCollected = 0;
+      }
+    }
+
+    res.json(sources);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.post("/api/sources", async (req, res) => {
+  const configPath = join(VAULT_ROOT, "config.yaml");
+  try {
+    const { parse, stringify } = await import("yaml");
+    let config: any = {};
+    try {
+      config = parse(await readFile(configPath, "utf-8")) ?? {};
+    } catch { /* new config */ }
+
+    if (!config.sources) config.sources = [];
+    config.sources.push(req.body);
+    await writeFile(configPath, stringify(config), "utf-8");
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/sources/:name", async (req, res) => {
+  const configPath = join(VAULT_ROOT, "config.yaml");
+  try {
+    const { parse, stringify } = await import("yaml");
+    const config = parse(await readFile(configPath, "utf-8")) ?? {};
+    if (!config.sources) return res.status(404).json({ error: "No sources configured" });
+    const idx = config.sources.findIndex((s: any) => s.name === req.params.name);
+    if (idx === -1) return res.status(404).json({ error: "Source not found" });
+    config.sources[idx] = req.body;
+    await writeFile(configPath, stringify(config), "utf-8");
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/sources/:name", async (req, res) => {
+  const configPath = join(VAULT_ROOT, "config.yaml");
+  try {
+    const { parse, stringify } = await import("yaml");
+    const config = parse(await readFile(configPath, "utf-8")) ?? {};
+    if (!config.sources) return res.status(404).json({ error: "No sources configured" });
+    config.sources = config.sources.filter((s: any) => s.name !== req.params.name);
+    await writeFile(configPath, stringify(config), "utf-8");
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/sources/:name/test", async (req, res) => {
+  const configPath = join(VAULT_ROOT, "config.yaml");
+  try {
+    const { parse } = await import("yaml");
+    const config = parse(await readFile(configPath, "utf-8"));
+    const source = (config?.sources ?? []).find((s: any) => s.name === req.params.name);
+    if (!source) return res.status(404).json({ error: "Source not found" });
+
+    try {
+      await execFileAsync("which", [source.command], { timeout: 5000 });
+      res.json({ ok: true, message: `Command '${source.command}' found` });
+    } catch {
+      res.json({ ok: false, error: `Command '${source.command}' not found on PATH` });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/sources/:name/collect", async (req, res) => {
+  try {
+    const collectorBin = join(process.cwd(), "..", "collector", "dist", "index.js");
+    const { stderr } = await execFileAsync("node", [collectorBin, "--force", req.params.name], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 60000,
+    });
+    res.json({ output: stderr || "Collection completed." });
+  } catch (e: any) {
+    res.json({ output: e.stderr || e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
