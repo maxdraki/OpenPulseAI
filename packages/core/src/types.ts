@@ -18,6 +18,7 @@ export interface OpenPulseConfig {
     model: string;
     apiKey?: string; // resolved from env or keychain if not set
   };
+  sources: SourceConfig[];
 }
 
 /** Result of classifying a hot entry into a theme */
@@ -44,4 +45,34 @@ export interface PendingUpdate {
   entries: ActivityEntry[]; // source entries that led to this update
   createdAt: string; // ISO 8601
   status: "pending" | "approved" | "rejected" | "edited";
+}
+
+/** MCP source server configuration */
+export interface SourceConfig {
+  name: string;
+  command: string;
+  args: string[];
+  schedule: string;       // cron expression (5-field)
+  lookback: string;       // duration: "1h", "24h", "1w", "30d"
+  template?: string;      // known template name or undefined for LLM auto-discovery
+  enabled: boolean;
+  env?: Record<string, string>;
+}
+
+/** Collector runtime state per source */
+export interface CollectorState {
+  sourceName: string;
+  lastRunAt: string | null; // ISO 8601
+  lastStatus: "success" | "error" | "never";
+  lastError?: string;
+  entriesCollected: number;
+}
+
+/** Multi-turn chat session */
+export interface ChatSession {
+  id: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  themesConsulted: string[];
+  createdAt: string;      // ISO 8601
+  lastActivity: string;   // ISO 8601
 }

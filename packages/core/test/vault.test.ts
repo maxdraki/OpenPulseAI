@@ -47,4 +47,11 @@ describe("Vault", () => {
     const path = vault.themeFilePath("project-auth");
     expect(path).toBe("/tmp/test-vault/vault/warm/project-auth.md");
   });
+
+  it("creates sessions directory on init", async () => {
+    const vault = new Vault(tempDir);
+    await vault.init();
+    const { stat } = await import("node:fs/promises");
+    expect((await stat(vault.sessionsDir)).isDirectory()).toBe(true);
+  });
 });

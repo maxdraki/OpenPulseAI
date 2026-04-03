@@ -5,6 +5,9 @@ export type {
   ClassificationResult,
   ThemeDocument,
   PendingUpdate,
+  SourceConfig,
+  CollectorState,
+  ChatSession,
 } from "./types.js";
 export { Vault } from "./vault.js";
 export { appendActivity, saveIngestedDocument } from "./hot.js";

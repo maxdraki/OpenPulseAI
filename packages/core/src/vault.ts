@@ -8,6 +8,7 @@ export class Vault {
   readonly warmDir: string;
   readonly pendingDir: string;
   readonly coldDir: string;
+  readonly sessionsDir: string;
 
   constructor(root: string) {
     this.root = root;
@@ -16,6 +17,7 @@ export class Vault {
     this.warmDir = join(root, "vault", "warm");
     this.pendingDir = join(root, "vault", "warm", "_pending");
     this.coldDir = join(root, "vault", "cold");
+    this.sessionsDir = join(root, "vault", "sessions");
   }
 
   async init(): Promise<void> {
@@ -24,6 +26,7 @@ export class Vault {
     await mkdir(this.warmDir, { recursive: true });
     await mkdir(this.pendingDir, { recursive: true });
     await mkdir(this.coldDir, { recursive: true });
+    await mkdir(this.sessionsDir, { recursive: true });
   }
 
   dailyLogPath(date: string): string {
