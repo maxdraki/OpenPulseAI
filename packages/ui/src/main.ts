@@ -16,11 +16,16 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   "warm-themes": renderWarmThemes,
 };
 
-let currentPage = "";
+export function navigate(page: string) {
+  // Push to browser history so back/forward buttons work
+  const current = location.hash.replace("#", "") || "dashboard";
+  if (current !== page) {
+    history.pushState(null, "", `#${page}`);
+  }
+  renderPage(page);
+}
 
-export async function navigate(page: string) {
-  currentPage = page;
-
+function renderPage(page: string) {
   // Highlight sidebar nav — detail pages highlight their parent
   const navPage = page === "hot-log" || page === "warm-themes" ? "dashboard" : page;
   navItems.forEach((btn) => {
@@ -32,17 +37,24 @@ export async function navigate(page: string) {
   content.classList.add("fade-in");
 
   const render = pages[page];
-  if (render) await render(content);
+  if (render) render(content);
 }
 
-// Make navigate available globally for inline handlers
+// Make navigate available globally for page modules
 (window as any).__navigate = navigate;
 
+// Sidebar nav clicks
 navItems.forEach((btn) => {
   btn.addEventListener("click", () => navigate(btn.dataset.page!));
 });
 
-// Update review badge with pending count
+// Browser back/forward button support
+window.addEventListener("popstate", () => {
+  const page = location.hash.replace("#", "") || "dashboard";
+  renderPage(page);
+});
+
+// Update review badge
 async function updateBadge() {
   const badge = document.getElementById("review-badge");
   if (!badge) return;
@@ -59,5 +71,8 @@ async function updateBadge() {
   }
 }
 
-navigate("dashboard");
+// Initial render from URL hash or default to dashboard
+const initialPage = location.hash.replace("#", "") || "dashboard";
+history.replaceState(null, "", `#${initialPage}`);
+renderPage(initialPage);
 updateBadge();
