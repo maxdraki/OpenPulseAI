@@ -15,7 +15,21 @@
     <div id="app">
       <aside id="sidebar">
         <div class="sidebar-brand">
-          <div class="brand-pulse"></div>
+          <svg class="brand-logo" width="28" height="28" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <style>
+              @keyframes slowPulse { 0% { stroke-dashoffset: 80; } 100% { stroke-dashoffset: -80; } }
+              .pulse-line { stroke-dasharray: 30, 50; animation: slowPulse 5s linear infinite; }
+            </style>
+            <defs>
+              <linearGradient id="pulseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#3b82f6;" />
+                <stop offset="100%" style="stop-color:#06b6d4;" />
+              </linearGradient>
+            </defs>
+            <rect x="10" y="10" width="80" height="80" rx="15" fill="#1c2029" />
+            <path d="M25 50 H35 L42 35 L58 65 L65 50 H75" fill="none" stroke="#2a3040" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path class="pulse-line" d="M25 50 H35 L42 35 L58 65 L65 50 H75" fill="none" stroke="url(#pulseGrad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
           <span class="brand-text">Open<strong>Pulse</strong></span>
         </div>
         <nav class="sidebar-nav">

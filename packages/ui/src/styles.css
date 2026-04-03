@@ -87,18 +87,9 @@ body {
   margin-bottom: 2rem;
 }
 
-.brand-pulse {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--warm);
-  box-shadow: 0 0 8px var(--warm), 0 0 20px rgba(6, 182, 212, 0.3);
-  animation: pulse 2.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.85); }
+.brand-logo {
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.3));
 }
 
 .brand-text {
