@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npx tsx server.ts & vite",
+    "dev:ui": "vite",
+    "dev:api": "npx tsx server.ts",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
@@ -12,8 +14,13 @@
     "@shoelace-style/shoelace": "^2.20.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "@types/node": "^22.0.0"
+    "vite": "^6.0.0"
   }
 }
