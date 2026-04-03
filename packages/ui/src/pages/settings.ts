@@ -8,38 +8,47 @@ const DEFAULT_MODELS: Record<string, string> = {
 
 export async function renderSettings(container: HTMLElement): Promise<void> {
   container.innerHTML = `
-    <h2 class="page-title">Settings</h2>
+    <div class="page-header">
+      <h2 class="page-title">Settings</h2>
+      <p class="page-subtitle">Configure your LLM provider and vault</p>
+    </div>
     <div class="card">
       <h3>LLM Provider</h3>
-      <div class="settings-form">
-        <sl-select id="provider-select" label="Provider" value="anthropic" size="small">
-          <sl-option value="anthropic">Anthropic (Claude)</sl-option>
-          <sl-option value="openai">OpenAI (GPT)</sl-option>
-          <sl-option value="gemini">Google (Gemini)</sl-option>
-        </sl-select>
-        <sl-input id="model-input" label="Model" size="small" placeholder="Model name"></sl-input>
-        <sl-input id="apikey-input" label="API Key" type="password" size="small" placeholder="Enter your API key" password-toggle>
-          <small slot="help-text">Stored securely via Tauri Stronghold when running as desktop app.</small>
-        </sl-input>
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
-          <sl-button variant="primary" id="btn-save" size="small">Save Settings</sl-button>
-          <span id="save-status" style="font-size: 0.85rem;"></span>
+      <div class="settings-section">
+        <div class="form-group">
+          <label class="form-label" for="provider-select">Provider</label>
+          <select class="form-select" id="provider-select">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="gemini">Google (Gemini)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="model-input">Model</label>
+          <input class="form-input" type="text" id="model-input" placeholder="Model name" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="apikey-input">API Key</label>
+          <input class="form-input" type="password" id="apikey-input" placeholder="Enter your API key" />
+          <p class="form-help">Stored securely via Tauri Stronghold when running as desktop app.</p>
+        </div>
+        <div class="actions-row">
+          <button class="btn btn-primary" id="btn-save">Save Settings</button>
+          <span class="save-status" id="save-status"></span>
         </div>
       </div>
     </div>
     <div class="card">
-      <h3>Vault Location</h3>
-      <p style="color: var(--text-secondary); font-family: 'Google Sans Mono', monospace;" id="vault-path">Loading...</p>
+      <h3>Vault</h3>
+      <div class="vault-path" id="vault-path">Loading...</div>
     </div>
   `;
 
   // Load current settings
   try {
     const config = await getLlmConfig();
-    const providerSelect = document.getElementById("provider-select") as any;
-    const modelInput = document.getElementById("model-input") as any;
-    providerSelect.value = config.provider;
-    modelInput.value = config.model;
+    (document.getElementById("provider-select") as HTMLSelectElement).value = config.provider;
+    (document.getElementById("model-input") as HTMLInputElement).value = config.model;
   } catch { /* use defaults */ }
 
   try {
@@ -47,10 +56,10 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     document.getElementById("vault-path")!.textContent = vaultPath;
   } catch { /* ignore */ }
 
-  const providerSelect = document.getElementById("provider-select") as any;
-  const modelInput = document.getElementById("model-input") as any;
+  const providerSelect = document.getElementById("provider-select") as HTMLSelectElement;
+  const modelInput = document.getElementById("model-input") as HTMLInputElement;
 
-  providerSelect.addEventListener("sl-change", () => {
+  providerSelect.addEventListener("change", () => {
     const provider = providerSelect.value;
     if (!modelInput.value || Object.values(DEFAULT_MODELS).includes(modelInput.value)) {
       modelInput.value = DEFAULT_MODELS[provider] ?? "";
@@ -59,21 +68,22 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
 
   document.getElementById("btn-save")?.addEventListener("click", async () => {
     const status = document.getElementById("save-status")!;
-    const btn = document.getElementById("btn-save") as any;
-    btn.loading = true;
+    const btn = document.getElementById("btn-save")!;
+    btn.classList.add("loading");
     try {
       const provider = providerSelect.value;
       const model = modelInput.value;
-      const apiKey = (document.getElementById("apikey-input") as any).value;
+      const apiKey = (document.getElementById("apikey-input") as HTMLInputElement).value;
       await saveLlmSettings(provider, model, apiKey || undefined);
-      status.textContent = "Saved!";
-      status.style.color = "var(--success)";
-      (document.getElementById("apikey-input") as any).value = "";
+      status.textContent = "Saved";
+      status.className = "save-status success";
+      (document.getElementById("apikey-input") as HTMLInputElement).value = "";
+      setTimeout(() => { status.textContent = ""; }, 2500);
     } catch (e: any) {
       status.textContent = `Error: ${e}`;
-      status.style.color = "var(--danger)";
+      status.className = "save-status error";
     } finally {
-      btn.loading = false;
+      btn.classList.remove("loading");
     }
   });
 }
