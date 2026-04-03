@@ -1,6 +1,6 @@
 import { getWarmThemes } from "../lib/tauri-bridge.js";
 
-const nav = (window as any).__navigate;
+function nav(page: string) { (window as any).__navigate(page); }
 
 export async function renderWarmThemes(container: HTMLElement): Promise<void> {
   container.innerHTML = `

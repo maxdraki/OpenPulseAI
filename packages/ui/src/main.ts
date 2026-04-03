@@ -19,7 +19,6 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
 let currentPage = "";
 
 export async function navigate(page: string) {
-  if (page === currentPage) return;
   currentPage = page;
 
   // Highlight sidebar nav — detail pages highlight their parent
