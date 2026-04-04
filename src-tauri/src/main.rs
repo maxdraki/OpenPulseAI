@@ -3,6 +3,7 @@
 mod vault;
 mod config;
 mod skills;
+mod sidecar;
 
 fn main() {
     tauri::Builder::default()
@@ -19,6 +20,10 @@ fn main() {
             config::get_llm_config,
             config::save_llm_settings,
             skills::get_skills,
+            sidecar::trigger_dream,
+            sidecar::run_skill,
+            sidecar::install_skill,
+            sidecar::remove_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
