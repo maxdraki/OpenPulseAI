@@ -32,7 +32,16 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     },
     {
       title: "Connect Claude Desktop",
-      body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server to Claude Desktop's config. Restart Claude Desktop to pick up the change. Once connected, Claude can use tools like "record what I just did" or "what have I been working on?".`,
+      body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server. Restart Claude Desktop to pick up the change.`,
+      after: `If the automatic setup doesn't work, manually add this to ~/Library/Application Support/Claude/claude_desktop_config.json:`,
+      code: JSON.stringify({
+        mcpServers: {
+          openpulse: {
+            command: "node",
+            args: [`${projectPath}/packages/mcp-server/dist/index.js`],
+          },
+        },
+      }, null, 2),
     },
     {
       title: "Connect Claude Code",
