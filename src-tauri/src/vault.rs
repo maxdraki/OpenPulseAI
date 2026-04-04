@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::fs;
+use std::sync::LazyLock;
 use serde::Serialize;
 use std::cmp::Reverse;
 
@@ -110,15 +111,19 @@ pub fn get_hot_entries(state: tauri::State<'_, AppState>) -> Result<Vec<HotEntry
         Err(_) => return Ok(entries),
     };
 
-    let date_re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}\.md$").unwrap();
-    let ts_re = regex::Regex::new(r"^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)").unwrap();
-    let theme_re = regex::Regex::new(r"^\*\*Theme:\*\*\s*(.+)").unwrap();
-    let source_re = regex::Regex::new(r"^\*\*Source:\*\*\s*(.+)").unwrap();
+    static DATE_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^\d{4}-\d{2}-\d{2}\.md$").unwrap());
+    static TS_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)").unwrap());
+    static THEME_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^\*\*Theme:\*\*\s*(.+)").unwrap());
+    static SOURCE_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^\*\*Source:\*\*\s*(.+)").unwrap());
 
     for entry in files.filter_map(|e| e.ok()) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if !date_re.is_match(&name_str) {
+        if !DATE_RE.is_match(&name_str) {
             continue;
         }
 
@@ -139,11 +144,11 @@ pub fn get_hot_entries(state: tauri::State<'_, AppState>) -> Result<Vec<HotEntry
             let mut log_lines: Vec<&str> = Vec::new();
 
             for line in block.lines() {
-                if let Some(caps) = ts_re.captures(line) {
+                if let Some(caps) = TS_RE.captures(line) {
                     timestamp = Some(caps[1].to_string());
-                } else if let Some(caps) = theme_re.captures(line) {
+                } else if let Some(caps) = THEME_RE.captures(line) {
                     theme = Some(caps[1].to_string());
-                } else if let Some(caps) = source_re.captures(line) {
+                } else if let Some(caps) = SOURCE_RE.captures(line) {
                     source = Some(caps[1].to_string());
                 } else if !line.trim().is_empty() {
                     log_lines.push(line);
@@ -276,12 +281,20 @@ pub fn list_pending_updates(state: tauri::State<'_, AppState>) -> Result<Vec<Pen
     Ok(updates)
 }
 
+fn validate_id(id: &str) -> Result<(), String> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err("Invalid id".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn approve_update(
     state: tauri::State<'_, AppState>,
     id: String,
     edited_content: Option<String>,
 ) -> Result<(), String> {
+    validate_id(&id)?;
     let pending_path = state.pending_dir().join(format!("{}.json", id));
     let raw = fs::read_to_string(&pending_path)
         .map_err(|e| format!("Failed to read pending update: {}", e))?;
@@ -306,6 +319,7 @@ pub fn approve_update(
 
 #[tauri::command]
 pub fn reject_update(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    validate_id(&id)?;
     let pending_path = state.pending_dir().join(format!("{}.json", id));
     fs::remove_file(&pending_path)
         .map_err(|e| format!("Failed to remove pending file: {}", e))?;

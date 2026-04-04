@@ -42,12 +42,24 @@ pub async fn run_skill(app: tauri::AppHandle, name: String) -> Result<String, St
         .await
         .map_err(|e| format!("Failed to run skill: {}", e))?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(if stderr.is_empty() {
-        "Skill completed.".to_string()
+    if output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(if stderr.is_empty() {
+            "Skill completed.".to_string()
+        } else {
+            stderr.into_owned()
+        })
     } else {
-        stderr.into_owned()
-    })
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Skill failed: {}",
+            if stderr.is_empty() {
+                "unknown error".to_string()
+            } else {
+                stderr.into_owned()
+            }
+        ))
+    }
 }
 
 #[tauri::command]

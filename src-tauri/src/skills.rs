@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use crate::vault::AppState;
 
 #[derive(Serialize)]
@@ -158,13 +159,23 @@ fn parse_skill_frontmatter(raw: &str) -> Option<SkillFrontmatter> {
 }
 
 #[tauri::command]
-pub fn get_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillData>, String> {
-    let builtin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("packages")
-        .join("skills")
-        .join("builtin");
+pub fn get_skills(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Vec<SkillData>, String> {
+    // In production: resolve from Tauri's resource directory
+    // In dev: fall back to the workspace path
+    let builtin_dir = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|r| r.join("builtin-skills"))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("packages")
+                .join("skills")
+                .join("builtin")
+        });
 
     let user_dir = state.vault_root.join("skills");
 

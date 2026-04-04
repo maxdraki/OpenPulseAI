@@ -33,7 +33,10 @@
     "externalBin": [
       "sidecars/openpulse-dream",
       "sidecars/openpulse-skills"
-    ]
+    ],
+    "resources": {
+      "../packages/skills/builtin/**/*": "builtin-skills/"
+    }
   },
   "plugins": {
     "shell": {
