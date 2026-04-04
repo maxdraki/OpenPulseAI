@@ -535,6 +535,11 @@ app.get("/api/logs", async (_req, res) => {
   }
 });
 
+app.get("/api/project-path", (_req, res) => {
+  // Resolve from server.ts location (packages/ui/) → repo root
+  res.json({ path: join(process.cwd(), "..", "..") });
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);

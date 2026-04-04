@@ -1,10 +1,14 @@
-import { getVaultPath } from "../lib/tauri-bridge.js";
+import { getVaultPath, getProjectPath } from "../lib/tauri-bridge.js";
 
 export async function renderHelp(container: HTMLElement): Promise<void> {
   // Load real paths
   let vaultPath = "~/OpenPulseAI";
+  let projectPath = "/path/to/OpenPulseAI";
   try {
     vaultPath = await getVaultPath();
+  } catch { /* use default */ }
+  try {
+    projectPath = await getProjectPath();
   } catch { /* use default */ }
 
   const pageHeader = document.createElement("div");
@@ -33,7 +37,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
         mcpServers: {
           openpulse: {
             command: "node",
-            args: [`${vaultPath}/packages/mcp-server/dist/index.js`],
+            args: [`${projectPath}/packages/mcp-server/dist/index.js`],
           },
         },
       }, null, 2),
@@ -46,7 +50,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
         mcpServers: {
           openpulse: {
             command: "node",
-            args: [`${vaultPath}/packages/mcp-server/dist/index.js`],
+            args: [`${projectPath}/packages/mcp-server/dist/index.js`],
           },
         },
       }, null, 2),

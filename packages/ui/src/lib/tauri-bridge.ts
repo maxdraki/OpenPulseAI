@@ -117,6 +117,12 @@ export async function getVaultPath(): Promise<string> {
   return result.path;
 }
 
+export async function getProjectPath(): Promise<string> {
+  if (isTauri) return tauriInvoke("get_project_path");
+  const result = await apiGet<{ path: string }>("/project-path");
+  return result.path;
+}
+
 export interface HotEntry {
   timestamp: string;
   log: string;
