@@ -1,4 +1,12 @@
+import { getVaultPath } from "../lib/tauri-bridge.js";
+
 export async function renderHelp(container: HTMLElement): Promise<void> {
+  // Load real paths
+  let vaultPath = "~/OpenPulseAI";
+  try {
+    vaultPath = await getVaultPath();
+  } catch { /* use default */ }
+
   const pageHeader = document.createElement("div");
   pageHeader.className = "page-header";
   const h2 = document.createElement("h2");
@@ -21,27 +29,27 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     {
       title: "Connect Claude Desktop",
       body: `Add this to your Claude Desktop MCP config (~/.claude/claude_desktop_config.json):`,
-      code: `{
-  "mcpServers": {
-    "openpulse": {
-      "command": "node",
-      "args": ["${getProjectPath()}/packages/mcp-server/dist/index.js"]
-    }
-  }
-}`,
+      code: JSON.stringify({
+        mcpServers: {
+          openpulse: {
+            command: "node",
+            args: [`${vaultPath}/packages/mcp-server/dist/index.js`],
+          },
+        },
+      }, null, 2),
       after: `After restarting Claude Desktop, you can use commands like "record what I just did" or "what have I been working on?" and Claude will use OpenPulse's MCP tools.`,
     },
     {
       title: "Connect Claude Code",
       body: `Add to your .claude/settings.json or project CLAUDE.md:`,
-      code: `{
-  "mcpServers": {
-    "openpulse": {
-      "command": "node",
-      "args": ["${getProjectPath()}/packages/mcp-server/dist/index.js"]
-    }
-  }
-}`,
+      code: JSON.stringify({
+        mcpServers: {
+          openpulse: {
+            command: "node",
+            args: [`${vaultPath}/packages/mcp-server/dist/index.js`],
+          },
+        },
+      }, null, 2),
     },
     {
       title: "MCP Tools Available",
@@ -56,11 +64,11 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     {
       title: "Vault Structure",
       items: [
-        ["Hot (vault/hot/)", "Raw activity logs. One file per day."],
-        ["Warm (vault/warm/)", "Curated thematic summaries, approved by you."],
-        ["Pending (vault/warm/_pending/)", "AI-generated summaries awaiting your review."],
-        ["Cold (vault/cold/)", "Monthly archives."],
-        ["Logs (vault/logs/)", "Application logs for debugging."],
+        [`Hot (${vaultPath}/vault/hot/)`, "Raw activity logs. One file per day."],
+        [`Warm (${vaultPath}/vault/warm/)`, "Curated thematic summaries, approved by you."],
+        [`Pending (${vaultPath}/vault/warm/_pending/)`, "AI-generated summaries awaiting your review."],
+        [`Cold (${vaultPath}/vault/cold/)`, "Monthly archives."],
+        [`Logs (${vaultPath}/vault/logs/)`, "Application logs for debugging."],
       ],
     },
     {
@@ -89,12 +97,24 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     }
 
     if (section.code) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "help-code-wrapper";
       const pre = document.createElement("pre");
       pre.className = "help-code";
       const code = document.createElement("code");
       code.textContent = section.code;
       pre.appendChild(code);
-      card.appendChild(pre);
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "help-copy-btn";
+      copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(section.code!);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+      });
+      wrapper.appendChild(pre);
+      wrapper.appendChild(copyBtn);
+      card.appendChild(wrapper);
     }
 
     if (section.after) {
@@ -126,7 +146,3 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
   container.appendChild(content);
 }
 
-function getProjectPath(): string {
-  // Best guess for dev — in Tauri this would be resolved differently
-  return "/path/to/OpenPulseAI";
-}
