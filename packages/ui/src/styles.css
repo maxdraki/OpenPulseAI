@@ -209,19 +209,20 @@ body {
 }
 
 .theme-switcher {
-  display: flex;
+  display: inline-flex;
   gap: 2px;
   background: var(--border-subtle);
   border-radius: 6px;
   padding: 2px;
+  align-self: flex-start;
 }
 
 .theme-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 28px;
+  width: 26px;
+  height: 22px;
   border: none;
   border-radius: 4px;
   background: transparent;
