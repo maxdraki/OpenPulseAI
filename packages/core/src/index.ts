@@ -7,6 +7,7 @@ export type {
   PendingUpdate,
   SourceConfig,
   CollectorState,
+  SkillDefinition,
   ChatSession,
 } from "./types.js";
 export { Vault } from "./vault.js";

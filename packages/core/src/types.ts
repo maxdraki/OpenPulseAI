@@ -61,11 +61,25 @@ export interface SourceConfig {
 
 /** Collector runtime state per source */
 export interface CollectorState {
-  sourceName: string;
+  skillName: string;        // was: sourceName
   lastRunAt: string | null; // ISO 8601
   lastStatus: "success" | "error" | "never";
   lastError?: string;
   entriesCollected: number;
+}
+
+/** Parsed skill from a SKILL.md file */
+export interface SkillDefinition {
+  name: string;
+  description: string;
+  location: string;        // absolute path to SKILL.md
+  body: string;            // markdown content after frontmatter
+  schedule?: string;       // cron expression (OpenPulse extension)
+  lookback: string;        // default "24h" (OpenPulse extension)
+  requires: {
+    bins: string[];
+    env: string[];
+  };
 }
 
 /** Multi-turn chat session */

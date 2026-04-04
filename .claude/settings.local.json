@@ -32,7 +32,17 @@
       "Bash(ls packages/*/src/*.ts packages/*/src/**/*.ts)",
       "Bash(grep \"stdio\" /home/max/Documents/GitHub/OpenPulseAI/node_modules/.pnpm/@modelcontextprotocol+sdk@*/node_modules/@modelcontextprotocol/sdk/package.json)",
       "Bash(find /home/max/Documents/GitHub/OpenPulseAI -path \"*/node_modules/@modelcontextprotocol/sdk/package.json\" -exec grep -c \"StdioClientTransport\" {} \\\\; -print)",
-      "Bash(find /home/max/Documents/GitHub/OpenPulseAI -path \"*/@modelcontextprotocol/sdk/dist\" -type d -exec find {} -name \"*.js\" -path \"*stdio*\" \\\\;)"
+      "Bash(find /home/max/Documents/GitHub/OpenPulseAI -path \"*/@modelcontextprotocol/sdk/dist\" -type d -exec find {} -name \"*.js\" -path \"*stdio*\" \\\\;)",
+      "WebSearch",
+      "WebFetch(domain:gogcli.sh)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \"import sys,json; [print\\(f['path']\\) for f in json.load\\(sys.stdin\\)['tree'] if 'skill' in f['path'].lower\\(\\)]\")",
+      "Bash(python3 -c \"import sys,json; [print\\(f['name']\\) for f in json.load\\(sys.stdin\\)]\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:skills.sh)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:d[k] for k in ['name','dependencies','devDependencies']}, indent=2\\)\\)\")"
     ]
   }
 }

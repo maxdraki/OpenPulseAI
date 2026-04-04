@@ -42,7 +42,7 @@ export async function collectSource(
     }
 
     const state: CollectorState = {
-      sourceName: source.name,
+      skillName: source.name,
       lastRunAt: now.toISOString(),
       lastStatus: "success",
       entriesCollected: items.length,
@@ -53,7 +53,7 @@ export async function collectSource(
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[collector] Error collecting from ${source.name}: ${message}`);
     const state: CollectorState = {
-      sourceName: source.name,
+      skillName: source.name,
       lastRunAt: now.toISOString(),
       lastStatus: "error",
       lastError: message,

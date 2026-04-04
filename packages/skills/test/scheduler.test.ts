@@ -24,7 +24,7 @@ describe("Scheduler", () => {
   });
 
   it("saves and loads collector state", async () => {
-    const state = { sourceName: "gmail", lastRunAt: new Date().toISOString(), lastStatus: "success" as const, entriesCollected: 5 };
+    const state = { skillName: "gmail", lastRunAt: new Date().toISOString(), lastStatus: "success" as const, entriesCollected: 5 };
     await saveCollectorState(vault, state);
     const loaded = await loadCollectorState(vault, "gmail");
     expect(loaded).not.toBeNull();

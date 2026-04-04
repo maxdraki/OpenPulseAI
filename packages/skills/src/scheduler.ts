@@ -16,9 +16,9 @@ export function isDue(schedule: string, lastRunAt: string | null, now: Date): bo
 
 const stateDir = (vault: Vault) => join(vault.root, "vault", "collector-state");
 
-export async function loadCollectorState(vault: Vault, sourceName: string): Promise<CollectorState | null> {
+export async function loadCollectorState(vault: Vault, skillName: string): Promise<CollectorState | null> {
   try {
-    const raw = await readFile(join(stateDir(vault), `${sourceName}.json`), "utf-8");
+    const raw = await readFile(join(stateDir(vault), `${skillName}.json`), "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;
@@ -28,5 +28,5 @@ export async function loadCollectorState(vault: Vault, sourceName: string): Prom
 export async function saveCollectorState(vault: Vault, state: CollectorState): Promise<void> {
   const dir = stateDir(vault);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, `${state.sourceName}.json`), JSON.stringify(state, null, 2), "utf-8");
+  await writeFile(join(dir, `${state.skillName}.json`), JSON.stringify(state, null, 2), "utf-8");
 }
