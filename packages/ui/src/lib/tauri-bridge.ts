@@ -100,6 +100,17 @@ export async function validateAndListModels(provider: string, apiKey?: string, b
   return apiPost("/validate-models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
+export interface TestModelResult {
+  success: boolean;
+  response?: string;
+  error?: string;
+}
+
+export async function testModel(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<TestModelResult> {
+  if (isTauri) return tauriInvoke("test_model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  return apiPost("/test-model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+}
+
 export async function getVaultPath(): Promise<string> {
   if (isTauri) return tauriInvoke("get_vault_path");
   const result = await apiGet<{ path: string }>("/vault-path");

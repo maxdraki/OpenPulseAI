@@ -427,6 +427,39 @@ app.post("/api/validate-models", async (req, res) => {
   }
 });
 
+app.post("/api/test-model", async (req, res) => {
+  const { provider, model, apiKey, baseUrl } = req.body;
+  if (!provider || !model) return res.status(400).json({ success: false, error: "provider and model are required" });
+
+  try {
+    // Set API key in env so createProvider can find it
+    const envMap: Record<string, string> = {
+      anthropic: "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      gemini: "GEMINI_API_KEY",
+    };
+    const envVar = envMap[provider];
+    if (apiKey && envVar) process.env[envVar] = apiKey;
+
+    const { createProvider } = await import("@openpulse/core");
+    const llmProvider = createProvider({
+      vaultPath: VAULT_ROOT,
+      themes: [],
+      llm: { provider, model, apiKey, baseUrl },
+    } as any);
+
+    const response = await llmProvider.complete({
+      model,
+      prompt: "Say hello in exactly one word.",
+      maxTokens: 16,
+    });
+
+    res.json({ success: true, response: response.trim() });
+  } catch (e: any) {
+    res.json({ success: false, error: e.message ?? String(e) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);

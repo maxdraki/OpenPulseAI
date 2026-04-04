@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 
 const PROVIDERS = [
@@ -89,10 +89,16 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   saveBtn.className = "btn btn-primary";
   saveBtn.id = "btn-save";
   saveBtn.textContent = "Save";
+  const testBtn = document.createElement("button");
+  testBtn.className = "btn btn-secondary";
+  testBtn.id = "btn-test";
+  testBtn.textContent = "Test";
+  testBtn.style.display = "none";
   const saveStatus = document.createElement("span");
   saveStatus.className = "save-status";
   saveStatus.id = "save-status";
   modelActionsRow.appendChild(saveBtn);
+  modelActionsRow.appendChild(testBtn);
   modelActionsRow.appendChild(saveStatus);
 
   modelSection.appendChild(modelFormGroup);
@@ -297,6 +303,12 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
     await saveLlmSettings(provider, model, apiKey || undefined, baseUrl || undefined);
     saveStatus.textContent = "Saved";
     saveStatus.className = "save-status success";
+
+    // Show test button
+    const testBtn = document.getElementById("btn-test") as HTMLButtonElement;
+    testBtn.style.display = "";
+    testBtn.onclick = () => handleTest(provider, model, apiKey, baseUrl);
+
     setTimeout(() => { saveStatus.textContent = ""; }, 2500);
   } catch (e: any) {
     saveStatus.textContent = `Error: ${e?.message ?? e}`;
@@ -304,5 +316,32 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
   } finally {
     saveBtn.classList.remove("loading");
     saveBtn.disabled = false;
+  }
+}
+
+async function handleTest(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<void> {
+  const testBtn = document.getElementById("btn-test") as HTMLButtonElement;
+  const saveStatus = document.getElementById("save-status")!;
+
+  testBtn.classList.add("loading");
+  testBtn.disabled = true;
+  saveStatus.textContent = "Testing...";
+  saveStatus.className = "save-status";
+
+  try {
+    const result = await testModel(provider, model, apiKey, baseUrl);
+    if (result.success) {
+      saveStatus.textContent = `\u2713 "${result.response}"`;
+      saveStatus.className = "save-status success";
+    } else {
+      saveStatus.textContent = result.error ?? "Test failed";
+      saveStatus.className = "save-status error";
+    }
+  } catch (e: any) {
+    saveStatus.textContent = `Error: ${e?.message ?? e}`;
+    saveStatus.className = "save-status error";
+  } finally {
+    testBtn.classList.remove("loading");
+    testBtn.disabled = false;
   }
 }
