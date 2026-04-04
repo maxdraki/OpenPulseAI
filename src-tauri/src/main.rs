@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod vault;
+mod config;
+mod skills;
 
 fn main() {
     tauri::Builder::default()
@@ -14,6 +16,9 @@ fn main() {
             vault::list_pending_updates,
             vault::approve_update,
             vault::reject_update,
+            config::get_llm_config,
+            config::save_llm_settings,
+            skills::get_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
