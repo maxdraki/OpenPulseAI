@@ -33,7 +33,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     {
       title: "Connect Claude Desktop",
       body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server. Restart Claude Desktop to pick up the change.`,
-      after: `If the automatic setup doesn't work, manually add this to ~/Library/Application Support/Claude/claude_desktop_config.json:`,
+      after: `If the automatic setup doesn't work, manually add this to the Claude Desktop config file:\n• macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\n• Windows: %APPDATA%\\Claude\\claude_desktop_config.json\n• Linux: ~/.config/Claude/claude_desktop_config.json`,
       code: JSON.stringify({
         mcpServers: {
           openpulse: {
