@@ -540,6 +540,62 @@ app.get("/api/project-path", (_req, res) => {
   res.json({ path: join(process.cwd(), "..", "..") });
 });
 
+// --- Claude Desktop MCP integration ---
+
+const CLAUDE_CONFIG_PATH = join(process.env.HOME ?? "", ".claude", "claude_desktop_config.json");
+const mcpServerPath = join(process.cwd(), "..", "mcp-server", "dist", "index.js");
+
+app.get("/api/claude-desktop-status", async (_req, res) => {
+  try {
+    const raw = await readFile(CLAUDE_CONFIG_PATH, "utf-8");
+    const config = JSON.parse(raw);
+    const connected = !!config?.mcpServers?.openpulse;
+    res.json({ installed: true, connected, configPath: CLAUDE_CONFIG_PATH });
+  } catch {
+    res.json({ installed: false, connected: false, configPath: CLAUDE_CONFIG_PATH });
+  }
+});
+
+app.post("/api/claude-desktop-connect", async (_req, res) => {
+  try {
+    // Read existing config or start fresh
+    let config: any = { mcpServers: {} };
+    try {
+      const raw = await readFile(CLAUDE_CONFIG_PATH, "utf-8");
+      config = JSON.parse(raw);
+      if (!config.mcpServers) config.mcpServers = {};
+    } catch { /* no existing config */ }
+
+    // Add or update the openpulse entry
+    config.mcpServers.openpulse = {
+      command: "node",
+      args: [mcpServerPath],
+    };
+
+    // Ensure directory exists
+    await mkdir(join(process.env.HOME ?? "", ".claude"), { recursive: true });
+    await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/claude-desktop-disconnect", async (_req, res) => {
+  try {
+    const raw = await readFile(CLAUDE_CONFIG_PATH, "utf-8");
+    const config = JSON.parse(raw);
+    if (config?.mcpServers?.openpulse) {
+      delete config.mcpServers.openpulse;
+      await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+    }
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);

@@ -1247,3 +1247,44 @@ body {
   font-size: 0.85rem;
   margin: 0;
 }
+
+/* ---- Connections ---- */
+
+.connection-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.connection-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.connection-status {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+
+.connection-status.connected {
+  color: var(--success);
+}
+
+.connection-status.connected::before {
+  content: "\25CF ";
+}
+
+.btn-sm {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.connection-hint {
+  width: 100%;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  margin-top: 0.25rem;
+}

@@ -123,6 +123,27 @@ export async function getProjectPath(): Promise<string> {
   return result.path;
 }
 
+export interface ClaudeDesktopStatus {
+  installed: boolean;
+  connected: boolean;
+  configPath: string;
+}
+
+export async function getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
+  if (isTauri) return tauriInvoke("get_claude_desktop_status");
+  return apiGet("/claude-desktop-status");
+}
+
+export async function connectClaudeDesktop(): Promise<void> {
+  if (isTauri) return tauriInvoke("connect_claude_desktop");
+  await apiPost("/claude-desktop-connect", {});
+}
+
+export async function disconnectClaudeDesktop(): Promise<void> {
+  if (isTauri) return tauriInvoke("disconnect_claude_desktop");
+  await apiPost("/claude-desktop-disconnect", {});
+}
+
 export interface HotEntry {
   timestamp: string;
   log: string;

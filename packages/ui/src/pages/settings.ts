@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 
@@ -120,12 +120,25 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   vaultCard.appendChild(vaultH3);
   vaultCard.appendChild(vaultPath);
 
+  // Connections card
+  const connectionsCard = document.createElement("div");
+  connectionsCard.className = "card";
+  const connectionsH3 = document.createElement("h3");
+  connectionsH3.textContent = "Connections";
+  connectionsCard.appendChild(connectionsH3);
+
+  const claudeRow = document.createElement("div");
+  claudeRow.className = "connection-row";
+  claudeRow.id = "claude-desktop-row";
+  connectionsCard.appendChild(claudeRow);
+
   // Mount everything
   container.textContent = "";
   container.appendChild(pageHeader);
   container.appendChild(providerCardEl);
   container.appendChild(credentialsCard);
   container.appendChild(modelCard);
+  container.appendChild(connectionsCard);
   container.appendChild(vaultCard);
 
   // Load vault path
@@ -133,6 +146,9 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     const vaultPathStr = await getVaultPath();
     vaultPath.textContent = vaultPathStr;
   } catch { /* ignore */ }
+
+  // Load Claude Desktop connection status
+  await renderClaudeDesktopConnection();
 
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
@@ -360,5 +376,70 @@ async function handleTest(provider: string, model: string, apiKey?: string, base
   } finally {
     testBtn.classList.remove("loading");
     testBtn.disabled = false;
+  }
+}
+
+async function renderClaudeDesktopConnection(): Promise<void> {
+  const row = document.getElementById("claude-desktop-row")!;
+  row.textContent = "";
+
+  let status;
+  try {
+    status = await getClaudeDesktopStatus();
+  } catch {
+    status = { installed: false, connected: false, configPath: "" };
+  }
+
+  const label = document.createElement("div");
+  label.className = "connection-info";
+
+  const name = document.createElement("strong");
+  name.textContent = "Claude Desktop";
+  label.appendChild(name);
+
+  const statusText = document.createElement("span");
+  statusText.className = status.connected ? "connection-status connected" : "connection-status";
+  statusText.textContent = status.connected ? "Connected" : "Not connected";
+  label.appendChild(statusText);
+
+  row.appendChild(label);
+
+  const btn = document.createElement("button");
+  if (status.connected) {
+    btn.className = "btn btn-danger btn-sm";
+    btn.textContent = "Disconnect";
+    btn.addEventListener("click", async () => {
+      btn.classList.add("loading");
+      btn.disabled = true;
+      try {
+        await disconnectClaudeDesktop();
+        log("info", "Disconnected from Claude Desktop");
+        await renderClaudeDesktopConnection();
+      } catch (e: any) {
+        log("error", "Failed to disconnect from Claude Desktop", String(e));
+      }
+    });
+  } else {
+    btn.className = "btn btn-primary btn-sm";
+    btn.textContent = "Connect";
+    btn.addEventListener("click", async () => {
+      btn.classList.add("loading");
+      btn.disabled = true;
+      try {
+        await connectClaudeDesktop();
+        log("info", "Connected to Claude Desktop");
+        await renderClaudeDesktopConnection();
+      } catch (e: any) {
+        log("error", "Failed to connect to Claude Desktop", String(e));
+      }
+    });
+  }
+  row.appendChild(btn);
+
+  if (status.connected) {
+    const hint = document.createElement("p");
+    hint.className = "connection-hint";
+    hint.textContent = "Restart Claude Desktop to pick up the new config.";
+    row.appendChild(hint);
   }
 }
