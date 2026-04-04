@@ -1,91 +1,203 @@
 import { listPendingUpdates, approveUpdate, rejectUpdate, type PendingUpdate } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { log } from "../lib/logger.js";
+
+// Note: renderMarkdown uses the `marked` library which handles HTML escaping.
+// The vault content rendered here is from our own dream pipeline, not arbitrary user input.
 
 export async function renderReview(container: HTMLElement): Promise<void> {
-  container.innerHTML = `
-    <div class="page-header">
-      <h2 class="page-title">Review</h2>
-      <p class="page-subtitle">Approve, edit, or reject pending warm layer updates</p>
-    </div>
-    <div id="pending-list"></div>
-  `;
-  await refreshPending();
+  const pageHeader = document.createElement("div");
+  pageHeader.className = "page-header";
+  const h2 = document.createElement("h2");
+  h2.className = "page-title";
+  h2.textContent = "Review";
+  const subtitle = document.createElement("p");
+  subtitle.className = "page-subtitle";
+  subtitle.textContent = "Approve, edit, or reject proposed theme updates";
+  pageHeader.appendChild(h2);
+  pageHeader.appendChild(subtitle);
+
+  const listEl = document.createElement("div");
+  listEl.id = "pending-list";
+
+  container.textContent = "";
+  container.appendChild(pageHeader);
+  container.appendChild(listEl);
+
+  await loadPending(listEl);
 }
 
-async function refreshPending() {
-  const list = document.getElementById("pending-list")!;
+async function loadPending(listEl: HTMLElement): Promise<void> {
+  listEl.textContent = "";
+
   try {
     const updates = await listPendingUpdates();
+
     if (updates.length === 0) {
-      list.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-state-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-          </div>
-          <p>All clear. Run the Dream Pipeline to generate new proposals from your hot logs.</p>
-        </div>
-      `;
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      const icon = document.createElement("div");
+      icon.className = "empty-state-icon";
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", "22");
+      svg.setAttribute("height", "22");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      polyline.setAttribute("points", "20 6 9 17 4 12");
+      svg.appendChild(polyline);
+      icon.appendChild(svg);
+      const msg = document.createElement("p");
+      msg.textContent = "All clear. Run the Dream Pipeline from the Dashboard to generate new proposals.";
+      empty.appendChild(icon);
+      empty.appendChild(msg);
+      listEl.appendChild(empty);
       return;
     }
-    list.innerHTML = updates.map(renderUpdateCard).join("");
-    updates.forEach(bindCardEvents);
+
+    for (const update of updates) {
+      listEl.appendChild(buildCard(update, listEl));
+    }
   } catch (e: any) {
-    list.innerHTML = `<div class="card" style="color: var(--danger);">Error loading pending updates: ${e}</div>`;
+    const errDiv = document.createElement("div");
+    errDiv.className = "card";
+    errDiv.style.color = "var(--danger)";
+    errDiv.textContent = `Error loading pending updates: ${e}`;
+    listEl.appendChild(errDiv);
   }
 }
 
-function renderUpdateCard(update: PendingUpdate): string {
-  const date = new Date(update.createdAt).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
+function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "pending-card";
+
+  // Header: theme badge + date
+  const header = document.createElement("div");
+  header.className = "pending-header";
+  const badge = document.createElement("span");
+  badge.className = "pending-theme-badge";
+  badge.textContent = update.theme;
+  const date = document.createElement("span");
+  date.className = "pending-date";
+  date.textContent = new Date(update.createdAt).toLocaleDateString("en-GB", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+  header.appendChild(badge);
+  header.appendChild(date);
+
+  // Proposed content label
+  const label = document.createElement("div");
+  label.className = "pending-section-label";
+  label.textContent = "Proposed Update";
+
+  // Rendered markdown preview (vault content rendered via marked library)
+  const contentPreview = document.createElement("div");
+  contentPreview.className = "pending-preview md-content";
+  const rendered = renderMarkdown(update.proposedContent);
+  contentPreview.innerHTML = rendered; // safe: marked escapes HTML, content is from our own pipeline
+
+  // Hidden textarea for editing
+  const textarea = document.createElement("textarea");
+  textarea.className = "pending-textarea";
+  textarea.style.display = "none";
+  textarea.value = update.proposedContent;
+
+  // Actions row
+  const actions = document.createElement("div");
+  actions.className = "pending-actions";
+
+  const approveBtn = document.createElement("button");
+  approveBtn.className = "btn btn-success";
+  approveBtn.textContent = " Approve";
+  const approveSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  approveSvg.setAttribute("width", "14");
+  approveSvg.setAttribute("height", "14");
+  approveSvg.setAttribute("viewBox", "0 0 24 24");
+  approveSvg.setAttribute("fill", "none");
+  approveSvg.setAttribute("stroke", "currentColor");
+  approveSvg.setAttribute("stroke-width", "2");
+  const checkPoly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  checkPoly.setAttribute("points", "20 6 9 17 4 12");
+  approveSvg.appendChild(checkPoly);
+  approveBtn.prepend(approveSvg);
+
+  const editBtn = document.createElement("button");
+  editBtn.className = "btn btn-secondary";
+  editBtn.textContent = "Edit";
+
+  const rejectBtn = document.createElement("button");
+  rejectBtn.className = "btn btn-danger";
+  rejectBtn.textContent = " Reject";
+  const rejectSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  rejectSvg.setAttribute("width", "14");
+  rejectSvg.setAttribute("height", "14");
+  rejectSvg.setAttribute("viewBox", "0 0 24 24");
+  rejectSvg.setAttribute("fill", "none");
+  rejectSvg.setAttribute("stroke", "currentColor");
+  rejectSvg.setAttribute("stroke-width", "2");
+  const x1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  x1.setAttribute("x1", "18"); x1.setAttribute("y1", "6"); x1.setAttribute("x2", "6"); x1.setAttribute("y2", "18");
+  const x2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  x2.setAttribute("x1", "6"); x2.setAttribute("y1", "6"); x2.setAttribute("x2", "18"); x2.setAttribute("y2", "18");
+  rejectSvg.appendChild(x1);
+  rejectSvg.appendChild(x2);
+  rejectBtn.prepend(rejectSvg);
+
+  actions.appendChild(approveBtn);
+  actions.appendChild(editBtn);
+  actions.appendChild(rejectBtn);
+
+  card.appendChild(header);
+  card.appendChild(label);
+  card.appendChild(contentPreview);
+  card.appendChild(textarea);
+  card.appendChild(actions);
+
+  // Edit toggle
+  let editing = false;
+  editBtn.addEventListener("click", () => {
+    editing = !editing;
+    if (editing) {
+      contentPreview.style.display = "none";
+      textarea.style.display = "";
+      editBtn.textContent = "Preview";
+    } else {
+      textarea.style.display = "none";
+      contentPreview.innerHTML = renderMarkdown(textarea.value); // safe: same rationale as above
+      contentPreview.style.display = "";
+      editBtn.textContent = "Edit";
+    }
   });
 
-  return `
-    <div class="pending-card" data-id="${update.id}">
-      <div class="pending-header">
-        <span class="pending-theme-badge">${escapeHtml(update.theme)}</span>
-        <span class="pending-date">${date}</span>
-      </div>
-      ${update.previousContent ? `
-        <div class="pending-section-label">Previous</div>
-        <div class="previous-content md-content">${renderMarkdown(update.previousContent)}</div>
-      ` : ""}
-      <div class="pending-section-label">Proposed Update</div>
-      <textarea class="pending-textarea" id="content-${update.id}">${escapeHtml(update.proposedContent)}</textarea>
-      <div class="pending-actions">
-        <button class="btn btn-success" id="approve-${update.id}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          Approve
-        </button>
-        <button class="btn btn-danger" id="reject-${update.id}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          Reject
-        </button>
-      </div>
-    </div>
-  `;
-}
-
-function bindCardEvents(update: PendingUpdate) {
-  document.getElementById(`approve-${update.id}`)?.addEventListener("click", async () => {
-    const textarea = document.getElementById(`content-${update.id}`) as HTMLTextAreaElement;
-    const edited = textarea.value !== update.proposedContent ? textarea.value : undefined;
-    await approveUpdate(update.id, edited);
-    await refreshPending();
-    // Update the badge in the sidebar
-    updateReviewBadge();
+  // Approve
+  approveBtn.addEventListener("click", async () => {
+    approveBtn.classList.add("loading");
+    approveBtn.disabled = true;
+    try {
+      const edited = textarea.value !== update.proposedContent ? textarea.value : undefined;
+      await approveUpdate(update.id, edited);
+      log("info", `Approved update: ${update.theme}`, edited ? "with edits" : "as-is");
+      await loadPending(listEl);
+      updateReviewBadge();
+    } catch (e: any) {
+      log("error", `Failed to approve: ${update.theme}`, String(e));
+    }
   });
 
-  document.getElementById(`reject-${update.id}`)?.addEventListener("click", async () => {
+  // Reject
+  rejectBtn.addEventListener("click", async () => {
     await rejectUpdate(update.id);
-    await refreshPending();
+    log("info", `Rejected update: ${update.theme}`);
+    await loadPending(listEl);
     updateReviewBadge();
   });
+
+  return card;
 }
 
-async function updateReviewBadge() {
+async function updateReviewBadge(): Promise<void> {
   const badge = document.getElementById("review-badge");
   if (!badge) return;
   try {
@@ -99,8 +211,4 @@ async function updateReviewBadge() {
   } catch {
     badge.style.display = "none";
   }
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

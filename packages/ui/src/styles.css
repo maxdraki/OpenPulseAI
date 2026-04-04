@@ -546,15 +546,10 @@ body {
   margin-bottom: 0.4rem;
 }
 
-.previous-content {
-  background: var(--bg-base);
-  padding: 0.85rem 1rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  margin-bottom: 1rem;
-  font-size: 0.8rem;
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
+.pending-preview {
+  padding: 0.5rem 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
   white-space: pre-wrap;
   max-height: 160px;
   overflow-y: auto;
