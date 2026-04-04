@@ -7,7 +7,7 @@ export interface ActivityEntry {
 }
 
 /** LLM provider identifiers */
-export type LlmProviderName = "anthropic" | "openai" | "gemini";
+export type LlmProviderName = "anthropic" | "openai" | "gemini" | "ollama";
 
 /** Configuration for OpenPulseAI */
 export interface OpenPulseConfig {
@@ -17,6 +17,7 @@ export interface OpenPulseConfig {
     provider: LlmProviderName;
     model: string;
     apiKey?: string; // resolved from env or keychain if not set
+    baseUrl?: string; // Ollama base URL (default http://localhost:11434)
   };
 }
 
