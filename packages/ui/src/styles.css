@@ -35,8 +35,8 @@
   --danger: #f87171;
 
   /* Typography */
-  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --font-body: 'Google Sans', 'Google Sans Flex', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Google Sans Mono', 'Cascadia Code', 'Fira Code', monospace;
 
   /* Sizing */
   --sidebar-width: 220px;

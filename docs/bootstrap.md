@@ -9,7 +9,7 @@ I'm continuing development on OpenPulseAI. Read CLAUDE.md for full project conte
 - I prefer you use your judgment and move fast. Don't ask for permission on obvious things.
 - Use subagent-driven development for multi-task implementation (dispatch parallel agents where possible).
 - Use the superpowers skills (brainstorming, writing-plans, subagent-driven-development) for any non-trivial work.
-- For the UI: we use Shoelace web components, DM Sans + JetBrains Mono fonts, dark theme with color-coded vault layers (amber=hot, teal=warm, violet=pending). No React — vanilla TS only.
+- For the UI: we use Shoelace web components, Google Sans + Google Sans Mono fonts, dark theme with color-coded vault layers (amber=hot, teal=warm, violet=pending). No React — vanilla TS only.
 - For the logo: animated pulse-line SVG in the sidebar (see index.html).
 - Skills follow the AgentSkills.io standard (SKILL.md format). We support `npx skillsadd` from skills.sh registry.
 - BYO LLM — always keep the provider abstraction, never hardcode to one provider.

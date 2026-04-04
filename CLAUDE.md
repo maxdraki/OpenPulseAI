@@ -14,7 +14,7 @@ pnpm workspace monorepo with 5 packages:
 | `packages/mcp-server` | MCP server (stdio) with 5 tools: `record_activity`, `ingest_document`, `query_memory`, `chat_with_pulse`, `submit_update` |
 | `packages/dream` | Dream Pipeline CLI: classify hot entries → synthesize into pending → user approves → warm layer |
 | `packages/skills` | AgentSkills.io-compatible skill runner. Discovers SKILL.md files, checks eligibility, pre-executes shell commands, sends to LLM, writes output to hot |
-| `packages/ui` | Control Center web app (Vite + vanilla TS + Shoelace + DM Sans). Dev API server at `server.ts`. Pages: Dashboard, Review, Skills, Settings, Hot Log, Warm Themes |
+| `packages/ui` | Control Center web app (Vite + vanilla TS + Shoelace + Google Sans). Dev API server at `server.ts`. Pages: Dashboard, Review, Skills, Settings, Hot Log, Warm Themes |
 
 ## Key patterns
 
