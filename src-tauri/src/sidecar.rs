@@ -1,4 +1,3 @@
-use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 use crate::vault::AppState;
 
