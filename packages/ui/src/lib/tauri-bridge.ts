@@ -18,25 +18,25 @@ export interface PendingUpdate {
   status: string;
 }
 
-// Detect Tauri runtime
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+// Detect Tauri runtime — exported for use by logger.ts
+export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // Dev API server base URL
 const API_BASE = "http://localhost:3001/api";
 
-// --- Transport layer ---
+// --- Transport layer (exported for logger.ts) ---
 
-async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(cmd, args);
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
-async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+export async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

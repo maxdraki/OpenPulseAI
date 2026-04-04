@@ -1,5 +1,6 @@
 import { getHotEntries } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { escapeHtml } from "../lib/utils.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
 
@@ -56,6 +57,3 @@ export async function renderHotLog(container: HTMLElement): Promise<void> {
   }
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}

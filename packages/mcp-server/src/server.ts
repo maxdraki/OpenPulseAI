@@ -23,68 +23,49 @@ export async function createServer(vaultRoot: string, opts?: { provider?: LlmPro
 
   const server = new McpServer({ name: "openpulse", version: "0.1.0" });
 
+  // Wrap a tool handler with vault logging (info on call, error on failure)
+  function logged<T>(name: string, detailFn: (input: any) => string, handler: (input: any) => Promise<T>) {
+    return async (input: any): Promise<T> => {
+      await vaultLog("info", `MCP: ${name}`, detailFn(input));
+      try {
+        return await handler(input);
+      } catch (e: any) {
+        await vaultLog("error", `MCP: ${name} failed`, e.message);
+        throw e;
+      }
+    };
+  }
+
   server.tool(
     "record_activity",
     "Record development activity to the OpenPulse vault. Use this to log what you just did.",
     { log: z.string(), theme: z.string().optional() },
-    async (input) => {
-      await vaultLog("info", "MCP: record_activity", `theme: ${input.theme ?? "auto"}, ${input.log.slice(0, 100)}...`);
-      try {
-        const result = await handleRecordActivity(vault, input);
-        return result;
-      } catch (e: any) {
-        await vaultLog("error", "MCP: record_activity failed", e.message);
-        throw e;
-      }
-    }
+    logged("record_activity", (i) => `theme: ${i.theme ?? "auto"}, ${i.log.slice(0, 100)}...`,
+      (input) => handleRecordActivity(vault, input))
   );
 
   server.tool(
     "ingest_document",
     "Ingest a Markdown document into the OpenPulse vault for later thematic processing.",
     { filename: z.string(), content: z.string() },
-    async (input) => {
-      await vaultLog("info", "MCP: ingest_document", `file: ${input.filename} (${input.content.length} chars)`);
-      try {
-        const result = await handleIngestDocument(vault, input);
-        return result;
-      } catch (e: any) {
-        await vaultLog("error", "MCP: ingest_document failed", e.message);
-        throw e;
-      }
-    }
+    logged("ingest_document", (i) => `file: ${i.filename} (${i.content.length} chars)`,
+      (input) => handleIngestDocument(vault, input))
   );
 
   server.tool(
     "query_memory",
     "Query the OpenPulse vault for status information. Returns relevant thematic summaries.",
     { query: z.string() },
-    async (input) => {
-      await vaultLog("info", "MCP: query_memory", `query: ${input.query}`);
-      try {
-        const result = await handleQueryMemory(vault, input);
-        return result;
-      } catch (e: any) {
-        await vaultLog("error", "MCP: query_memory failed", e.message);
-        throw e;
-      }
-    }
+    logged("query_memory", (i) => `query: ${i.query}`,
+      (input) => handleQueryMemory(vault, input))
   );
 
   server.tool(
     "submit_update",
     "Push a Markdown status update into the OpenPulse hot layer.",
     { content: z.string(), source: z.string(), theme: z.string().optional() },
-    async (input) => {
-      await vaultLog("info", "MCP: submit_update", `source: ${input.source}, theme: ${input.theme ?? "auto"}`);
-      try {
-        const result = await handleSubmitUpdate(vault, input);
-        return result;
-      } catch (e: any) {
-        await vaultLog("error", "MCP: submit_update failed", e.message);
-        throw e;
-      }
-    }
+    logged("submit_update", (i) => `source: ${i.source}, theme: ${i.theme ?? "auto"}`,
+      (input) => handleSubmitUpdate(vault, input))
   );
 
   if (provider) {
@@ -92,16 +73,11 @@ export async function createServer(vaultRoot: string, opts?: { provider?: LlmPro
       "chat_with_pulse",
       "Have a multi-turn conversation about recorded activities and knowledge.",
       { message: z.string(), sessionId: z.string().optional() },
-      async (input) => {
-        await vaultLog("info", "MCP: chat_with_pulse", `session: ${input.sessionId ?? "new"}, msg: ${input.message.slice(0, 80)}...`);
-        try {
+      logged("chat_with_pulse", (i) => `session: ${i.sessionId ?? "new"}, msg: ${i.message.slice(0, 80)}...`,
+        async (input) => {
           const result = await handleChatWithPulse(vault, provider!, config.llm.model, input);
           return { content: result.content };
-        } catch (e: any) {
-          await vaultLog("error", "MCP: chat_with_pulse failed", e.message);
-          throw e;
-        }
-      }
+        })
     );
   }
 

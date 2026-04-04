@@ -6,10 +6,11 @@
  */
 import express from "express";
 import cors from "cors";
-import { readdir, readFile, writeFile, rm, stat, mkdir } from "node:fs/promises";
+import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { load as loadYaml } from "js-yaml";
 
 const execFileAsync = promisify(execFile);
 
@@ -297,11 +298,10 @@ app.get("/api/skills", async (_req, res) => {
     // Scan both directories
     for (const dir of [builtinDir, userDir]) {
       try {
-        const { readdir: rd, stat: st } = await import("node:fs/promises");
-        const dirStat = await st(dir).catch(() => null);
+        const dirStat = await stat(dir).catch(() => null);
         if (!dirStat || !dirStat.isDirectory()) continue;
 
-        const entries = await rd(dir, { withFileTypes: true });
+        const entries = await readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           const skillFile = join(dir, entry.name, "SKILL.md");
@@ -310,8 +310,7 @@ app.get("/api/skills", async (_req, res) => {
             const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?/);
             if (!fmMatch) continue;
 
-            const { load } = await import("js-yaml");
-            const parsed = load(fmMatch[1]) as any;
+            const parsed = loadYaml(fmMatch[1]) as any;
             if (!parsed?.name || !parsed?.description) continue;
 
             const requires = parsed.requires ?? {};
@@ -522,7 +521,6 @@ app.post("/api/logs", async (req, res) => {
   if (!entry?.message) return res.status(400).json({ error: "message is required" });
 
   try {
-    await mkdir(logsDir, { recursive: true });
     const date = new Date().toISOString().slice(0, 10);
     const logFile = join(logsDir, `${date}.jsonl`);
     const line = JSON.stringify({
@@ -531,7 +529,6 @@ app.post("/api/logs", async (req, res) => {
       message: entry.message,
       detail: entry.detail,
     }) + "\n";
-    const { appendFile } = await import("node:fs/promises");
     await appendFile(logFile, line, "utf-8");
     res.json({ ok: true });
   } catch (e: any) {
@@ -540,6 +537,8 @@ app.post("/api/logs", async (req, res) => {
 });
 
 // Clean logs older than 30 days on startup and daily
+// Ensure logs dir exists at startup, clean old logs daily
+mkdir(logsDir, { recursive: true }).catch(() => {});
 cleanOldLogs();
 setInterval(cleanOldLogs, 24 * 60 * 60 * 1000);
 

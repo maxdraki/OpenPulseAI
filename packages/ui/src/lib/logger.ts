@@ -1,10 +1,11 @@
 /**
  * Simple structured logger that writes to the dev server / Tauri backend.
  * Logs are appended to ~/OpenPulseAI/vault/logs/YYYY-MM-DD.jsonl
+ *
+ * LogLevel/LogEntry types intentionally duplicated from @openpulse/core
+ * (browser can't import Node packages). Keep in sync with core/src/logger.ts.
  */
-
-const API_BASE = "http://localhost:3001/api";
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+import { isTauri, tauriInvoke, apiPost, apiGet } from "./tauri-bridge.js";
 
 export type LogLevel = "info" | "warn" | "error";
 
@@ -25,17 +26,15 @@ export async function log(level: LogLevel, message: string, detail?: string): Pr
 
   try {
     if (isTauri) {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("append_log", { entry });
+      await tauriInvoke("append_log", { entry });
     } else {
-      await fetch(`${API_BASE}/logs`, {
+      await fetch(`http://localhost:3001/api/logs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(entry),
       });
     }
   } catch {
-    // Don't throw on log failure — logging should never break the app
     console.warn("[logger] Failed to write log:", message);
   }
 }
@@ -43,10 +42,9 @@ export async function log(level: LogLevel, message: string, detail?: string): Pr
 export async function getLogs(level?: LogLevel): Promise<LogEntry[]> {
   try {
     if (isTauri) {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("get_logs", { level: level ?? null });
+      return tauriInvoke("get_logs", { level: level ?? null });
     }
-    const url = level ? `${API_BASE}/logs?level=${level}` : `${API_BASE}/logs`;
+    const url = level ? `http://localhost:3001/api/logs?level=${level}` : `http://localhost:3001/api/logs`;
     const res = await fetch(url);
     if (!res.ok) return [];
     return res.json();
