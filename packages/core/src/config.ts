@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
-import type { OpenPulseConfig, LlmProviderName, SourceConfig } from "./types.js";
+import type { OpenPulseConfig, LlmProviderName } from "./types.js";
 
 const VALID_PROVIDERS: LlmProviderName[] = ["anthropic", "openai", "gemini"];
 
@@ -12,7 +12,6 @@ export const DEFAULT_CONFIG: OpenPulseConfig = {
     provider: "anthropic",
     model: "claude-sonnet-4-5-20250929",
   },
-  sources: [],
 };
 
 export async function loadConfig(rootDir: string): Promise<OpenPulseConfig> {
@@ -24,19 +23,6 @@ export async function loadConfig(rootDir: string): Promise<OpenPulseConfig> {
       ? parsed.llm.provider
       : "anthropic";
 
-    const sources: SourceConfig[] = (parsed?.sources ?? [])
-      .filter((s: any) => s?.name && s?.command)
-      .map((s: any) => ({
-        name: s.name,
-        command: s.command,
-        args: s.args ?? [],
-        schedule: s.schedule ?? "0 23 * * *",
-        lookback: s.lookback ?? "24h",
-        template: s.template ?? undefined,
-        enabled: s.enabled ?? true,
-        env: s.env ?? {},
-      }));
-
     return {
       vaultPath: rootDir,
       themes: parsed?.themes ?? [],
@@ -45,7 +31,6 @@ export async function loadConfig(rootDir: string): Promise<OpenPulseConfig> {
         model: parsed?.llm?.model ?? DEFAULT_CONFIG.llm.model,
         apiKey: parsed?.llm?.apiKey,
       },
-      sources,
     };
   } catch {
     return { ...DEFAULT_CONFIG, vaultPath: rootDir };

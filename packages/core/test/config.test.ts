@@ -57,43 +57,4 @@ describe("Config", () => {
     expect(config.llm.model).toBe("gemini-2.0-flash");
   });
 
-  it("parses sources from config.yaml", async () => {
-    await writeFile(
-      join(tempDir, "config.yaml"),
-      `sources:\n  - name: gmail\n    command: npx\n    args: ["-y", "gmail-mcp"]\n    schedule: "0 23 * * *"\n    lookback: 24h\n    template: gmail\n`,
-      "utf-8"
-    );
-    const config = await loadConfig(tempDir);
-    expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("gmail");
-    expect(config.sources[0].enabled).toBe(true);
-  });
-
-  it("defaults enabled to true and args to empty", async () => {
-    await writeFile(
-      join(tempDir, "config.yaml"),
-      `sources:\n  - name: test\n    command: node\n`,
-      "utf-8"
-    );
-    const config = await loadConfig(tempDir);
-    expect(config.sources[0].enabled).toBe(true);
-    expect(config.sources[0].args).toEqual([]);
-  });
-
-  it("skips invalid source entries missing name", async () => {
-    await writeFile(
-      join(tempDir, "config.yaml"),
-      `sources:\n  - command: node\n  - name: valid\n    command: node\n`,
-      "utf-8"
-    );
-    const config = await loadConfig(tempDir);
-    expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("valid");
-  });
-
-  it("returns empty sources when section missing", async () => {
-    await writeFile(join(tempDir, "config.yaml"), `llm:\n  provider: anthropic\n`, "utf-8");
-    const config = await loadConfig(tempDir);
-    expect(config.sources).toEqual([]);
-  });
 });

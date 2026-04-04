@@ -1,14 +1,20 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { SourceConfig } from "@openpulse/core";
+
+interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
 
 export class SourceMcpClient {
   private client: Client;
-  private config: SourceConfig;
+  private config: McpServerConfig;
   private connected = false;
 
-  constructor(config: SourceConfig) {
+  constructor(config: McpServerConfig) {
     this.config = config;
     this.client = new Client({ name: `openpulse-collector-${config.name}`, version: "1.0.0" });
   }

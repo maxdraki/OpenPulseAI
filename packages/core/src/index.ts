@@ -5,7 +5,6 @@ export type {
   ClassificationResult,
   ThemeDocument,
   PendingUpdate,
-  SourceConfig,
   CollectorState,
   SkillDefinition,
   ChatSession,
