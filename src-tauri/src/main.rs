@@ -4,6 +4,7 @@ mod vault;
 mod config;
 mod skills;
 mod sidecar;
+mod discovery;
 
 fn main() {
     tauri::Builder::default()
@@ -24,6 +25,7 @@ fn main() {
             sidecar::run_skill,
             sidecar::install_skill,
             sidecar::remove_skill,
+            discovery::validate_and_list_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
