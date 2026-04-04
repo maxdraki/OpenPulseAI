@@ -147,7 +147,10 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     // Hide model card when switching providers
     modelCard.style.display = "none";
 
-    renderCredentials(providerId, "", "");
+    // If switching back to the saved provider, restore saved model/baseUrl
+    const savedModel = providerId === currentProvider ? currentModel : "";
+    const savedBaseUrl = providerId === currentProvider ? currentBaseUrl : "";
+    renderCredentials(providerId, savedModel, savedBaseUrl);
   });
 }
 
