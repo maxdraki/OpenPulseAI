@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 // Types matching the core package
 export interface VaultHealth {
   hotCount: number;
@@ -16,8 +18,8 @@ export interface PendingUpdate {
   status: string;
 }
 
-// Detect Tauri runtime (window.__TAURI__ is injected by the Tauri webview)
-const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+// Detect Tauri runtime
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // Dev API server base URL
 const API_BASE = "http://localhost:3001/api";
@@ -25,8 +27,7 @@ const API_BASE = "http://localhost:3001/api";
 // --- Transport layer ---
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const invoke = (window as any).__TAURI__.core.invoke;
-  return invoke(cmd, args);
+  return invoke<T>(cmd, args);
 }
 
 async function apiGet<T>(path: string): Promise<T> {
