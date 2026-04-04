@@ -824,14 +824,9 @@ body {
 .warm-card-content {
   font-size: 0.85rem;
   color: var(--text-secondary);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  font-family: var(--font-mono);
-  background: var(--bg-base);
-  padding: 0.85rem 1rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  max-height: 300px;
+  line-height: 1.4;
+  padding: 0.5rem 0;
+  max-height: 400px;
   overflow-y: auto;
 }
 
