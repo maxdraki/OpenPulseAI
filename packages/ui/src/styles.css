@@ -208,22 +208,35 @@ body {
   gap: 0.5rem;
 }
 
-.theme-toggle {
+.theme-switcher {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-family: var(--font-body);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: color 0.15s;
+  gap: 2px;
+  background: var(--border-subtle);
+  border-radius: 6px;
+  padding: 2px;
 }
 
-.theme-toggle:hover {
+.theme-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.theme-btn:hover {
   color: var(--text-primary);
+}
+
+.theme-btn.active {
+  background: var(--bg-raised);
+  color: var(--accent);
 }
 
 .status-indicator {

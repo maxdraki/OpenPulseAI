@@ -73,42 +73,30 @@ async function updateBadge() {
   }
 }
 
-// SVG path constants for theme icons (static, no user input)
-const MOON_SVG = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
-const SUN_SVG = '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
-
-// Theme toggle: light → dark → system
-const THEME_CYCLE = ["light", "dark", "system"] as const;
-const SYSTEM_SVG = '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>';
-
+// Theme switcher: 3 mutually exclusive buttons
 function initTheme() {
   const saved = localStorage.getItem("openpulse-theme") ?? "system";
   applyTheme(saved);
 
   // Listen for OS theme changes when in system mode
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    const current = localStorage.getItem("openpulse-theme") ?? "system";
-    if (current === "system") applyTheme("system");
+    if ((localStorage.getItem("openpulse-theme") ?? "system") === "system") applyTheme("system");
   });
 
-  document.getElementById("theme-toggle")?.addEventListener("click", () => {
-    const current = localStorage.getItem("openpulse-theme") ?? "system";
-    const idx = THEME_CYCLE.indexOf(current as any);
-    const next = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
-    applyTheme(next);
-    localStorage.setItem("openpulse-theme", next);
+  document.getElementById("theme-switcher")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-theme]");
+    if (!btn) return;
+    const pref = btn.dataset.theme!;
+    applyTheme(pref);
+    localStorage.setItem("openpulse-theme", pref);
   });
-}
-
-function resolveTheme(pref: string): "light" | "dark" {
-  if (pref === "system") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-  return pref as "light" | "dark";
 }
 
 function applyTheme(pref: string) {
-  const effective = resolveTheme(pref);
+  const effective = pref === "system"
+    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : pref;
+
   document.documentElement.dataset.theme = effective;
 
   // Swap Shoelace theme stylesheet
@@ -120,13 +108,10 @@ function applyTheme(pref: string) {
     shoelaceLink.href = newHref;
   }
 
-  // Update toggle label and icon (static SVG content, safe to set)
-  const label = document.getElementById("theme-label");
-  const icon = document.getElementById("theme-icon");
-  const labels: Record<string, string> = { light: "Dark mode", dark: "System", system: "Light mode" };
-  const icons: Record<string, string> = { light: SUN_SVG, dark: SYSTEM_SVG, system: MOON_SVG };
-  if (label) label.textContent = labels[pref] ?? "Light mode";
-  if (icon) icon.innerHTML = icons[pref] ?? MOON_SVG;
+  // Highlight active button
+  document.querySelectorAll(".theme-btn").forEach((btn) => {
+    btn.classList.toggle("active", (btn as HTMLElement).dataset.theme === pref);
+  });
 }
 
 // Initial render from URL hash or default to dashboard
