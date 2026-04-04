@@ -31,23 +31,8 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
       body: `OpenPulse is your Digital Twin proxy. AI agents report activity into your vault, skills pull data from external sources on schedules, and an LLM synthesizes everything into curated summaries. Stakeholders can query your proxy without interrupting you.`,
     },
     {
-      title: "Connect Claude Desktop (Easiest)",
-      body: `Start the OpenPulse MCP server in HTTP mode, then add it as a custom connector:`,
-      code: `# Start the MCP server (keep running in background)\ncd ${projectPath}\nnode packages/mcp-server/dist/http.js`,
-      after: `Then in Claude Desktop: Settings → Integrations → "Add custom connector" → paste https://localhost:3002/mcp as the Remote MCP server URL. On first run, a self-signed certificate is generated — you may need to trust it in your OS keychain (the server prints instructions).`,
-    },
-    {
-      title: "Connect Claude Desktop (Config File)",
-      body: `Alternatively, add this to your Claude Desktop MCP config (~/Library/Application Support/Claude/claude_desktop_config.json):`,
-      code: JSON.stringify({
-        mcpServers: {
-          openpulse: {
-            command: "node",
-            args: [`${projectPath}/packages/mcp-server/dist/index.js`],
-          },
-        },
-      }, null, 2),
-      after: `This uses the stdio transport — no HTTP server needed, but requires restarting Claude Desktop after config changes.`,
+      title: "Connect Claude Desktop",
+      body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server to Claude Desktop's config. Restart Claude Desktop to pick up the change. Once connected, Claude can use tools like "record what I just did" or "what have I been working on?".`,
     },
     {
       title: "Connect Claude Code",
