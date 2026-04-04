@@ -74,7 +74,7 @@ export async function triggerDream(): Promise<string> {
   return result.output;
 }
 
-export async function getLlmConfig(): Promise<{ provider: string; model: string; baseUrl?: string }> {
+export async function getLlmConfig(): Promise<{ provider: string; model: string; apiKey?: string; baseUrl?: string }> {
   if (isTauri) return tauriInvoke("get_llm_config");
   return apiGet("/llm-config");
 }

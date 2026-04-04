@@ -12,12 +12,14 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Load current config first
   let currentProvider = "anthropic";
   let currentModel = "";
+  let currentApiKey = "";
   let currentBaseUrl = "";
 
   try {
     const config = await getLlmConfig();
     currentProvider = config.provider;
     currentModel = config.model;
+    currentApiKey = config.apiKey ?? "";
     currentBaseUrl = config.baseUrl ?? "";
   } catch { /* use defaults */ }
 
@@ -132,7 +134,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   } catch { /* ignore */ }
 
   // Render credentials for initial provider
-  renderCredentials(currentProvider, currentModel, currentBaseUrl);
+  renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
   // Provider grid click handler
   providerGrid.addEventListener("click", (e) => {
@@ -147,14 +149,15 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     // Hide model card when switching providers
     modelCard.style.display = "none";
 
-    // If switching back to the saved provider, restore saved model/baseUrl
+    // If switching back to the saved provider, restore saved values
     const savedModel = providerId === currentProvider ? currentModel : "";
+    const savedApiKey = providerId === currentProvider ? currentApiKey : "";
     const savedBaseUrl = providerId === currentProvider ? currentBaseUrl : "";
-    renderCredentials(providerId, savedModel, savedBaseUrl);
+    renderCredentials(providerId, savedModel, savedApiKey, savedBaseUrl);
   });
 }
 
-function renderCredentials(provider: string, currentModel: string, currentBaseUrl: string): void {
+function renderCredentials(provider: string, currentModel: string, currentApiKey: string, currentBaseUrl: string): void {
   const providerData = PROVIDERS.find(p => p.id === provider)!;
   const card = document.getElementById("credentials-card")!;
 
@@ -181,6 +184,7 @@ function renderCredentials(provider: string, currentModel: string, currentBaseUr
     input.type = "password";
     input.id = "apikey-input";
     input.placeholder = "Enter your API key";
+    if (currentApiKey) input.value = currentApiKey;
     const help = document.createElement("p");
     help.className = "form-help";
     help.textContent = "Stored securely via Tauri Stronghold when running as desktop app.";

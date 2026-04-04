@@ -123,10 +123,12 @@ app.get("/api/llm-config", async (_req, res) => {
     const raw = await readFile(configPath, "utf-8");
     const providerMatch = raw.match(/provider:\s*(\w+)/);
     const modelMatch = raw.match(/model:\s*(.+)/);
+    const apiKeyMatch = raw.match(/apiKey:\s*(.+)/);
     const baseUrlMatch = raw.match(/baseUrl:\s*(.+)/);
     res.json({
       provider: providerMatch?.[1] ?? "anthropic",
       model: modelMatch?.[1]?.trim() ?? "claude-sonnet-4-5-20250929",
+      apiKey: apiKeyMatch?.[1]?.trim(),
       baseUrl: baseUrlMatch?.[1]?.trim(),
     });
   } catch {
@@ -155,6 +157,9 @@ app.post("/api/save-llm-settings", async (req, res) => {
       yaml += `themes:\n${themes.map((t) => `  - ${t}`).join("\n")}\n`;
     }
     yaml += `llm:\n  provider: ${provider}\n  model: ${model}\n`;
+    if (apiKey) {
+      yaml += `  apiKey: ${apiKey}\n`;
+    }
     if (baseUrl) {
       yaml += `  baseUrl: ${baseUrl}\n`;
     }
