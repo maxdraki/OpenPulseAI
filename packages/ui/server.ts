@@ -216,6 +216,24 @@ app.get("/api/hot-entries", async (_req, res) => {
       }
     }
 
+    // Also scan vault/hot/ingest/ for ingested documents
+    const ingestDir = join(hotDir, "ingest");
+    try {
+      const ingestFiles = await readdir(ingestDir);
+      for (const file of ingestFiles) {
+        if (!file.endsWith(".md")) continue;
+        const filePath = join(ingestDir, file);
+        const content = await readFile(filePath, "utf-8");
+        const fileStat = await stat(filePath);
+        entries.push({
+          timestamp: fileStat.mtime.toISOString(),
+          log: content,
+          theme: "ingested",
+          source: file.replace(/\.md$/, ""),
+        });
+      }
+    } catch { /* ingest dir may not exist */ }
+
     entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     res.json(entries);
   } catch {
