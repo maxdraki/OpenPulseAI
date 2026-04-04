@@ -19,17 +19,20 @@ describe("archiveProcessedHotFiles", () => {
     await rm(tempDir, { recursive: true });
   });
 
-  it("archives hot files older than today", async () => {
+  it("archives all hot files including today", async () => {
     await writeFile(vault.dailyLogPath("2026-04-02"), "# Old log", "utf-8");
     const today = new Date().toISOString().slice(0, 10);
     await writeFile(vault.dailyLogPath(today), "# Today log", "utf-8");
 
     await archiveProcessedHotFiles(vault);
 
+    // Both files should be archived
     await expect(stat(vault.dailyLogPath("2026-04-02"))).rejects.toThrow();
+    await expect(stat(vault.dailyLogPath(today))).rejects.toThrow();
     const archived = await readFile(join(vault.coldDir, "2026-04", "2026-04-02.md"), "utf-8");
     expect(archived).toBe("# Old log");
-    const todayContent = await readFile(vault.dailyLogPath(today), "utf-8");
-    expect(todayContent).toBe("# Today log");
+    const todayMonth = today.slice(0, 7);
+    const archivedToday = await readFile(join(vault.coldDir, todayMonth, `${today}.md`), "utf-8");
+    expect(archivedToday).toBe("# Today log");
   });
 });
