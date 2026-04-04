@@ -1077,3 +1077,57 @@ body {
   padding: 2rem;
   text-align: center;
 }
+
+/* ---- Help page ---- */
+
+.help-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.help-section h3 {
+  margin-bottom: 0.75rem;
+}
+
+.help-text {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+
+.help-code {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.help-code code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.help-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.help-list dt {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.help-list dd {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0;
+}

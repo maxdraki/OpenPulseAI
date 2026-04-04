@@ -1,0 +1,132 @@
+export async function renderHelp(container: HTMLElement): Promise<void> {
+  const pageHeader = document.createElement("div");
+  pageHeader.className = "page-header";
+  const h2 = document.createElement("h2");
+  h2.className = "page-title";
+  h2.textContent = "Help";
+  const subtitle = document.createElement("p");
+  subtitle.className = "page-subtitle";
+  subtitle.textContent = "Getting started with OpenPulse";
+  pageHeader.appendChild(h2);
+  pageHeader.appendChild(subtitle);
+
+  const content = document.createElement("div");
+  content.className = "help-content";
+
+  const sections = [
+    {
+      title: "What is OpenPulse?",
+      body: `OpenPulse is your Digital Twin proxy. AI agents report activity into your vault, skills pull data from external sources on schedules, and an LLM synthesizes everything into curated summaries. Stakeholders can query your proxy without interrupting you.`,
+    },
+    {
+      title: "Connect Claude Desktop",
+      body: `Add this to your Claude Desktop MCP config (~/.claude/claude_desktop_config.json):`,
+      code: `{
+  "mcpServers": {
+    "openpulse": {
+      "command": "node",
+      "args": ["${getProjectPath()}/packages/mcp-server/dist/index.js"]
+    }
+  }
+}`,
+      after: `After restarting Claude Desktop, you can use commands like "record what I just did" or "what have I been working on?" and Claude will use OpenPulse's MCP tools.`,
+    },
+    {
+      title: "Connect Claude Code",
+      body: `Add to your .claude/settings.json or project CLAUDE.md:`,
+      code: `{
+  "mcpServers": {
+    "openpulse": {
+      "command": "node",
+      "args": ["${getProjectPath()}/packages/mcp-server/dist/index.js"]
+    }
+  }
+}`,
+    },
+    {
+      title: "MCP Tools Available",
+      items: [
+        ["record_activity", "Log what you just did. Accepts a log message and optional theme."],
+        ["ingest_document", "Ingest a markdown document for thematic processing."],
+        ["query_memory", "Query your vault for status summaries."],
+        ["submit_update", "Push a status update into the hot layer."],
+        ["chat_with_pulse", "Have a conversation about your recorded activities. Requires an LLM provider configured in Settings."],
+      ],
+    },
+    {
+      title: "Vault Structure",
+      items: [
+        ["Hot (vault/hot/)", "Raw activity logs. One file per day."],
+        ["Warm (vault/warm/)", "Curated thematic summaries, approved by you."],
+        ["Pending (vault/warm/_pending/)", "AI-generated summaries awaiting your review."],
+        ["Cold (vault/cold/)", "Monthly archives."],
+        ["Logs (vault/logs/)", "Application logs for debugging."],
+      ],
+    },
+    {
+      title: "Skills",
+      body: `Skills are SKILL.md files that pull data from external sources on a schedule. Three are bundled: Google Daily Digest, GitHub Activity, and Weekly Rollup. Install more from the Skills page or create your own.`,
+    },
+    {
+      title: "Dream Pipeline",
+      body: `The Dream Pipeline reads your hot entries, classifies them by theme, and synthesizes curated summaries. Run it from the Dashboard page. Proposed summaries appear on the Review page for your approval before entering the warm layer.`,
+    },
+  ];
+
+  for (const section of sections) {
+    const card = document.createElement("div");
+    card.className = "card help-section";
+
+    const h3 = document.createElement("h3");
+    h3.textContent = section.title;
+    card.appendChild(h3);
+
+    if (section.body) {
+      const p = document.createElement("p");
+      p.className = "help-text";
+      p.textContent = section.body;
+      card.appendChild(p);
+    }
+
+    if (section.code) {
+      const pre = document.createElement("pre");
+      pre.className = "help-code";
+      const code = document.createElement("code");
+      code.textContent = section.code;
+      pre.appendChild(code);
+      card.appendChild(pre);
+    }
+
+    if (section.after) {
+      const p = document.createElement("p");
+      p.className = "help-text";
+      p.textContent = section.after;
+      card.appendChild(p);
+    }
+
+    if (section.items) {
+      const dl = document.createElement("dl");
+      dl.className = "help-list";
+      for (const [term, desc] of section.items) {
+        const dt = document.createElement("dt");
+        dt.textContent = term;
+        const dd = document.createElement("dd");
+        dd.textContent = desc;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      }
+      card.appendChild(dl);
+    }
+
+    content.appendChild(card);
+  }
+
+  container.textContent = "";
+  container.appendChild(pageHeader);
+  container.appendChild(content);
+}
+
+function getProjectPath(): string {
+  // Best guess for dev — in Tauri this would be resolved differently
+  return "/path/to/OpenPulseAI";
+}
