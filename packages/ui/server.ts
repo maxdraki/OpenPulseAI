@@ -542,7 +542,7 @@ app.get("/api/project-path", (_req, res) => {
 
 // --- Claude Desktop MCP integration ---
 
-const CLAUDE_CONFIG_PATH = join(process.env.HOME ?? "", ".claude", "claude_desktop_config.json");
+const CLAUDE_CONFIG_PATH = join(process.env.HOME ?? "", "Library", "Application Support", "Claude", "claude_desktop_config.json");
 const mcpServerPath = join(process.cwd(), "..", "mcp-server", "dist", "index.js");
 
 app.get("/api/claude-desktop-status", async (_req, res) => {
@@ -573,7 +573,7 @@ app.post("/api/claude-desktop-connect", async (_req, res) => {
     };
 
     // Ensure directory exists
-    await mkdir(join(process.env.HOME ?? "", ".claude"), { recursive: true });
+    await mkdir(join(process.env.HOME ?? "", "Library", "Application Support", "Claude"), { recursive: true });
     await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
 
     res.json({ ok: true });

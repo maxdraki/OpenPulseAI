@@ -38,7 +38,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     },
     {
       title: "Connect Claude Desktop (Config File)",
-      body: `Alternatively, add this to your Claude Desktop MCP config (~/.claude/claude_desktop_config.json):`,
+      body: `Alternatively, add this to your Claude Desktop MCP config (~/Library/Application Support/Claude/claude_desktop_config.json):`,
       code: JSON.stringify({
         mcpServers: {
           openpulse: {
