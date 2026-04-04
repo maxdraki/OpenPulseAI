@@ -74,14 +74,30 @@ export async function triggerDream(): Promise<string> {
   return result.output;
 }
 
-export async function getLlmConfig(): Promise<{ provider: string; model: string }> {
+export async function getLlmConfig(): Promise<{ provider: string; model: string; baseUrl?: string }> {
   if (isTauri) return tauriInvoke("get_llm_config");
   return apiGet("/llm-config");
 }
 
-export async function saveLlmSettings(provider: string, model: string, apiKey?: string): Promise<void> {
-  if (isTauri) return tauriInvoke("save_llm_settings", { provider, model, apiKey: apiKey ?? null });
-  await apiPost("/save-llm-settings", { provider, model, apiKey: apiKey ?? null });
+export async function saveLlmSettings(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<void> {
+  if (isTauri) return tauriInvoke("save_llm_settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  await apiPost("/save-llm-settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+}
+
+export interface ValidateModelsResult {
+  valid: boolean;
+  error?: string;
+  models: ModelInfo[];
+}
+
+export async function validateAndListModels(provider: string, apiKey?: string, baseUrl?: string): Promise<ValidateModelsResult> {
+  if (isTauri) return tauriInvoke("validate_and_list_models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  return apiPost("/validate-models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
 export async function getVaultPath(): Promise<string> {
