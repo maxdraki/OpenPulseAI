@@ -1,8 +1,8 @@
 import { renderDashboard } from "./pages/dashboard.js";
 import { renderReview } from "./pages/review.js";
 import { renderSettings } from "./pages/settings.js";
-import { renderHotLog } from "./pages/hot-log.js";
-import { renderWarmThemes } from "./pages/warm-themes.js";
+import { renderJournals } from "./pages/journals.js";
+import { renderThemes } from "./pages/themes.js";
 import { renderSkills } from "./pages/skills.js";
 import { renderLogs } from "./pages/logs.js";
 import { renderHelp } from "./pages/help.js";
@@ -15,8 +15,8 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   dashboard: renderDashboard,
   review: renderReview,
   settings: renderSettings,
-  "hot-log": renderHotLog,
-  "warm-themes": renderWarmThemes,
+  journals: renderJournals,
+  themes: renderThemes,
   skills: renderSkills,
   logs: renderLogs,
   help: renderHelp,
@@ -33,7 +33,7 @@ export function navigate(page: string) {
 
 function renderPage(page: string) {
   // Highlight sidebar nav — detail pages highlight their parent
-  const navPage = page === "hot-log" || page === "warm-themes" ? "dashboard" : page;
+  const navPage = page === "journals" || page === "themes" ? "dashboard" : page;
   navItems.forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.page === navPage);
   });

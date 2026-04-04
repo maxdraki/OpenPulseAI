@@ -67,17 +67,17 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
         ["record_activity", "Log what you just did. Accepts a log message and optional theme."],
         ["ingest_document", "Ingest a markdown document for thematic processing."],
         ["query_memory", "Query your vault for status summaries."],
-        ["submit_update", "Push a status update into the hot layer."],
+        ["submit_update", "Push a status update into your journals."],
         ["chat_with_pulse", "Have a conversation about your recorded activities. Requires an LLM provider configured in Settings."],
       ],
     },
     {
       title: "Vault Structure",
       items: [
-        [`Hot (${vaultPath}/vault/hot/)`, "Raw activity logs. One file per day."],
-        [`Warm (${vaultPath}/vault/warm/)`, "Curated thematic summaries, approved by you."],
+        [`Journals (${vaultPath}/vault/hot/)`, "Daily activity entries. One file per day."],
+        [`Themes (${vaultPath}/vault/warm/)`, "Curated summaries by topic, approved by you."],
         [`Pending (${vaultPath}/vault/warm/_pending/)`, "AI-generated summaries awaiting your review."],
-        [`Cold (${vaultPath}/vault/cold/)`, "Monthly archives."],
+        [`Archive (${vaultPath}/vault/cold/)`, "Monthly archives of processed journals."],
         [`Logs (${vaultPath}/vault/logs/)`, "Application logs for debugging."],
       ],
     },
@@ -87,7 +87,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     },
     {
       title: "Dream Pipeline",
-      body: `The Dream Pipeline reads your hot entries, classifies them by theme, and synthesizes curated summaries. Run it from the Dashboard page. Proposed summaries appear on the Review page for your approval before entering the warm layer.`,
+      body: `The Dream Pipeline reads your journal entries, classifies them by theme, and synthesizes curated summaries. Run it from the Dashboard page. Proposed summaries appear on the Review page for your approval before becoming themes.`,
     },
   ];
 

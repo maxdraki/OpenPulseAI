@@ -736,8 +736,8 @@ body {
 
 .btn-back:hover { color: var(--accent); }
 
-/* ---- Hot Log entries ---- */
-.hot-entry {
+/* ---- Journal entries ---- */
+.journal-entry {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -746,22 +746,22 @@ body {
   transition: border-color 0.15s ease;
 }
 
-.hot-entry:hover { border-color: var(--border-default); }
+.journal-entry:hover { border-color: var(--border-default); }
 
-.hot-entry-header {
+.journal-entry-header {
   display: flex;
   align-items: center;
   gap: 0.65rem;
   margin-bottom: 0.5rem;
 }
 
-.hot-entry-time {
+.journal-entry-time {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--text-tertiary);
 }
 
-.hot-entry-theme {
+.journal-entry-theme {
   font-size: 0.72rem;
   font-weight: 500;
   padding: 0.1rem 0.5rem;
@@ -770,7 +770,7 @@ body {
   border-radius: 10px;
 }
 
-.hot-entry-source {
+.journal-entry-source {
   font-size: 0.72rem;
   font-weight: 500;
   padding: 0.1rem 0.5rem;
@@ -779,14 +779,14 @@ body {
   border-radius: 10px;
 }
 
-.hot-entry-body {
+.journal-entry-body {
   font-size: 0.85rem;
   color: var(--text-primary);
   line-height: 1.55;
 }
 
 /* ---- Warm theme cards ---- */
-.warm-card {
+.theme-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -795,28 +795,28 @@ body {
   transition: border-color 0.15s ease;
 }
 
-.warm-card:hover { border-color: var(--border-default); }
+.theme-card:hover { border-color: var(--border-default); }
 
-.warm-card-header {
+.theme-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.85rem;
 }
 
-.warm-card-name {
+.theme-card-name {
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--warm);
 }
 
-.warm-card-updated {
+.theme-card-updated {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--text-tertiary);
 }
 
-.warm-card-content {
+.theme-card-content {
   font-size: 0.85rem;
   color: var(--text-secondary);
   line-height: 1.4;

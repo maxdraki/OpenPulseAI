@@ -9,8 +9,8 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
       <p class="page-subtitle">Vault health and pipeline controls</p>
     </div>
     <div class="stat-grid" id="stats">
-      ${statCard("hot", "-", "Hot Entries")}
-      ${statCard("warm", "-", "Warm Themes")}
+      ${statCard("hot", "-", "Journals")}
+      ${statCard("warm", "-", "Themes")}
       ${statCard("pending", "-", "Pending Reviews")}
     </div>
     <div class="card">
@@ -56,7 +56,7 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
 }
 
 function statCard(type: string, value: string, label: string): string {
-  const navTarget = type === "hot" ? "hot-log" : type === "warm" ? "warm-themes" : "review";
+  const navTarget = type === "hot" ? "journals" : type === "warm" ? "themes" : "review";
   return `
     <div class="stat-card ${type} clickable" data-nav="${navTarget}">
       <div class="stat-icon">${iconForType(type)}</div>
@@ -81,8 +81,8 @@ async function refreshStats() {
   try {
     const h = await getVaultHealth();
     grid.innerHTML =
-      statCard("hot", String(h.hotCount), "Hot Entries") +
-      statCard("warm", String(h.warmCount), "Warm Themes") +
+      statCard("hot", String(h.hotCount), "Journals") +
+      statCard("warm", String(h.warmCount), "Themes") +
       statCard("pending", String(h.pendingCount), "Pending Reviews");
 
     // Re-bind click handlers after re-render
