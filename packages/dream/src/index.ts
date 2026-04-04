@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { Vault, loadConfig, listThemes, createProvider } from "@openpulse/core";
+import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog } from "@openpulse/core";
 import type { ActivityEntry } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
 import { synthesizeToPending } from "./synthesize.js";
@@ -13,8 +13,10 @@ async function main() {
   console.error("[dream] Starting Dream Pipeline...");
 
   const config = await loadConfig(VAULT_ROOT);
+  initLogger(VAULT_ROOT);
   const vault = new Vault(VAULT_ROOT);
   await vault.init();
+  await vaultLog("info", "Dream pipeline started");
 
   const provider = createProvider(config);
   const model = config.llm.model;
@@ -36,6 +38,7 @@ async function main() {
   console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
 
   await archiveProcessedHotFiles(vault);
+  await vaultLog("info", "Dream pipeline complete", `${classified.length} entries → ${pending.length} pending update(s)`);
   console.error("[dream] Hot files archived. Dream complete.");
 }
 
@@ -71,6 +74,24 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
       }
     }
   }
+
+  // Also read ingested documents
+  const ingestDir = join(vault.hotDir, "ingest");
+  try {
+    const ingestFiles = await readdir(ingestDir);
+    for (const file of ingestFiles) {
+      if (!file.endsWith(".md")) continue;
+      const filePath = join(ingestDir, file);
+      const content = await readFile(filePath, "utf-8");
+      const fileStat = await stat(filePath);
+      entries.push({
+        timestamp: fileStat.mtime.toISOString(),
+        log: content,
+        theme: "ingested",
+        source: file.replace(/\.md$/, ""),
+      });
+    }
+  } catch { /* ingest dir may not exist */ }
 
   return entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
