@@ -441,7 +441,7 @@ app.post("/api/test-model", async (req, res) => {
     const envVar = envMap[provider];
     if (apiKey && envVar) process.env[envVar] = apiKey;
 
-    const { createProvider } = await import("@openpulse/core");
+    const { createProvider } = await import("../core/dist/index.js");
     const llmProvider = createProvider({
       vaultPath: VAULT_ROOT,
       themes: [],
