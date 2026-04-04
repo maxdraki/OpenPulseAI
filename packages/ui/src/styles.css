@@ -1140,9 +1140,10 @@ body {
 }
 
 .md-content li {
-  margin-left: 1.2rem;
+  margin-left: 1.8rem;
   line-height: 1.5;
   list-style-type: disc;
+  padding-left: 0.3rem;
 }
 
 .md-content code {
