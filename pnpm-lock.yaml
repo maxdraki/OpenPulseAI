@@ -105,6 +105,9 @@ importers:
       '@shoelace-style/shoelace':
         specifier: ^2.20.0
         version: 2.20.1(@floating-ui/utils@0.2.11)(@types/react@19.2.14)
+      js-yaml:
+        specifier: ^4.1.1
+        version: 4.1.1
     devDependencies:
       '@tauri-apps/api':
         specifier: ^2.10.1
@@ -115,6 +118,9 @@ importers:
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17

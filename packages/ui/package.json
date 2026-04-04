@@ -11,12 +11,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@shoelace-style/shoelace": "^2.20.0"
+    "@shoelace-style/shoelace": "^2.20.0",
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.10.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
