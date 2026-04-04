@@ -465,6 +465,76 @@ app.post("/api/test-model", async (req, res) => {
   }
 });
 
+// --- Logging ---
+
+const logsDir = join(VAULT_ROOT, "vault", "logs");
+
+async function cleanOldLogs() {
+  try {
+    const files = await readdir(logsDir).catch(() => []);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    for (const file of files) {
+      if (file.endsWith(".jsonl") && file.slice(0, 10) < cutoffStr) {
+        await rm(join(logsDir, file)).catch(() => {});
+      }
+    }
+  } catch { /* ignore cleanup errors */ }
+}
+
+app.post("/api/logs", async (req, res) => {
+  const entry = req.body;
+  if (!entry?.message) return res.status(400).json({ error: "message is required" });
+
+  try {
+    await mkdir(logsDir, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const logFile = join(logsDir, `${date}.jsonl`);
+    const line = JSON.stringify({
+      timestamp: entry.timestamp ?? new Date().toISOString(),
+      level: entry.level ?? "info",
+      message: entry.message,
+      detail: entry.detail,
+    }) + "\n";
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(logFile, line, "utf-8");
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Clean logs older than 30 days on startup and daily
+cleanOldLogs();
+setInterval(cleanOldLogs, 24 * 60 * 60 * 1000);
+
+app.get("/api/logs", async (_req, res) => {
+  const level = _req.query.level as string | undefined;
+
+  try {
+    const files = await readdir(logsDir).catch(() => []);
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl")).sort().reverse();
+
+    const entries: any[] = [];
+    // Read last 7 days of logs
+    for (const file of jsonlFiles.slice(0, 7)) {
+      const raw = await readFile(join(logsDir, file), "utf-8");
+      for (const line of raw.split("\n").filter((l) => l.trim())) {
+        try {
+          const entry = JSON.parse(line);
+          if (!level || entry.level === level) entries.push(entry);
+        } catch { /* skip malformed lines */ }
+      }
+    }
+
+    entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    res.json(entries.slice(0, 500));
+  } catch {
+    res.json([]);
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);

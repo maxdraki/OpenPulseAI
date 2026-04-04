@@ -4,6 +4,7 @@ import { renderSettings } from "./pages/settings.js";
 import { renderHotLog } from "./pages/hot-log.js";
 import { renderWarmThemes } from "./pages/warm-themes.js";
 import { renderSkills } from "./pages/skills.js";
+import { renderLogs } from "./pages/logs.js";
 import { listPendingUpdates } from "./lib/tauri-bridge.js";
 
 const content = document.getElementById("content")!;
@@ -16,6 +17,7 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   "hot-log": renderHotLog,
   "warm-themes": renderWarmThemes,
   skills: renderSkills,
+  logs: renderLogs,
 };
 
 export function navigate(page: string) {

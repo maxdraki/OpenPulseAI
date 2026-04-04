@@ -1,5 +1,6 @@
 import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
+import { log } from "../lib/logger.js";
 
 const PROVIDERS = [
   { id: "anthropic", name: "Anthropic", desc: "Claude models", needsKey: true },
@@ -248,10 +249,14 @@ async function handleValidate(provider: string, currentModel: string): Promise<v
     const result = await validateAndListModels(provider, apiKey || undefined, baseUrl || undefined);
 
     if (!result.valid || result.models.length === 0) {
-      statusEl.textContent = result.error ?? "No models found";
+      const errMsg = result.error ?? "No models found";
+      statusEl.textContent = errMsg;
       statusEl.className = "validate-status error";
+      log("warn", `Validation failed for ${provider}`, errMsg);
       return;
     }
+
+    log("info", `Validated ${provider}`, `${result.models.length} models available`);
 
     statusEl.textContent = `\u2713 ${result.models.length} model${result.models.length === 1 ? "" : "s"} available`;
     statusEl.className = "validate-status success";
@@ -308,6 +313,7 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
 
   try {
     await saveLlmSettings(provider, model, apiKey || undefined, baseUrl || undefined);
+    log("info", `Settings saved`, `${provider} / ${model}`);
     saveStatus.textContent = "Saved";
     saveStatus.className = "save-status success";
 
@@ -318,6 +324,7 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
 
     setTimeout(() => { saveStatus.textContent = ""; }, 2500);
   } catch (e: any) {
+    log("error", `Failed to save settings`, e?.message ?? String(e));
     saveStatus.textContent = `Error: ${e?.message ?? e}`;
     saveStatus.className = "save-status error";
   } finally {
@@ -338,13 +345,16 @@ async function handleTest(provider: string, model: string, apiKey?: string, base
   try {
     const result = await testModel(provider, model, apiKey, baseUrl);
     if (result.success) {
+      log("info", `Model test passed`, `${provider}/${model}: "${result.response}"`);
       saveStatus.textContent = `\u2713 "${result.response}"`;
       saveStatus.className = "save-status success";
     } else {
+      log("error", `Model test failed`, `${provider}/${model}: ${result.error}`);
       saveStatus.textContent = result.error ?? "Test failed";
       saveStatus.className = "save-status error";
     }
   } catch (e: any) {
+    log("error", `Model test error`, e?.message ?? String(e));
     saveStatus.textContent = `Error: ${e?.message ?? e}`;
     saveStatus.className = "save-status error";
   } finally {
