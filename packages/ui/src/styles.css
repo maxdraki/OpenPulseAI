@@ -914,6 +914,49 @@ body {
   gap: 0.5rem;
 }
 
+.skill-missing-deps {
+  background: rgba(248, 113, 113, 0.05);
+  border: 1px solid rgba(248, 113, 113, 0.15);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.skill-missing-deps strong {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.skill-missing-deps ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.skill-missing-deps code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.skill-fix-hint {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.skill-last-error {
+  color: var(--danger);
+  font-size: 0.78rem;
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+}
+
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
