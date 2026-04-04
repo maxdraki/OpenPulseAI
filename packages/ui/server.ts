@@ -7,7 +7,7 @@
 import express from "express";
 import cors from "cors";
 import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { load as loadYaml } from "js-yaml";
@@ -575,7 +575,19 @@ app.get("/api/project-path", (_req, res) => {
 
 // --- Claude Desktop MCP integration ---
 
-const CLAUDE_CONFIG_PATH = join(process.env.HOME ?? "", "Library", "Application Support", "Claude", "claude_desktop_config.json");
+function getClaudeConfigPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  switch (process.platform) {
+    case "darwin":
+      return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    case "win32":
+      return join(process.env.APPDATA ?? join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+    default: // linux
+      return join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "Claude", "claude_desktop_config.json");
+  }
+}
+
+const CLAUDE_CONFIG_PATH = getClaudeConfigPath();
 const mcpServerPath = join(process.cwd(), "..", "mcp-server", "dist", "index.js");
 
 app.get("/api/claude-desktop-status", async (_req, res) => {
@@ -606,7 +618,7 @@ app.post("/api/claude-desktop-connect", async (_req, res) => {
     };
 
     // Ensure directory exists
-    await mkdir(join(process.env.HOME ?? "", "Library", "Application Support", "Claude"), { recursive: true });
+    await mkdir(dirname(CLAUDE_CONFIG_PATH), { recursive: true });
     await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
 
     res.json({ ok: true });
