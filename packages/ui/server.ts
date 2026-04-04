@@ -6,7 +6,7 @@
  */
 import express from "express";
 import cors from "cors";
-import { readdir, readFile, writeFile, rm, stat } from "node:fs/promises";
+import { readdir, readFile, writeFile, rm, stat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -138,6 +138,8 @@ app.post("/api/save-llm-settings", async (req, res) => {
   const { provider, model, apiKey, baseUrl } = req.body;
   const configPath = join(VAULT_ROOT, "config.yaml");
   try {
+    // Ensure vault root exists
+    await mkdir(VAULT_ROOT, { recursive: true });
     // Read existing config to preserve themes
     let themes: string[] = [];
     try {
