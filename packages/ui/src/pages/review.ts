@@ -1,4 +1,5 @@
 import { listPendingUpdates, approveUpdate, rejectUpdate, type PendingUpdate } from "../lib/tauri-bridge.js";
+import { renderMarkdown } from "../lib/markdown.js";
 
 export async function renderReview(container: HTMLElement): Promise<void> {
   container.innerHTML = `
@@ -49,7 +50,7 @@ function renderUpdateCard(update: PendingUpdate): string {
       </div>
       ${update.previousContent ? `
         <div class="pending-section-label">Previous</div>
-        <div class="previous-content">${escapeHtml(update.previousContent)}</div>
+        <div class="previous-content md-content">${renderMarkdown(update.previousContent)}</div>
       ` : ""}
       <div class="pending-section-label">Proposed Update</div>
       <textarea class="pending-textarea" id="content-${update.id}">${escapeHtml(update.proposedContent)}</textarea>
