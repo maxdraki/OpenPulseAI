@@ -1,4 +1,5 @@
 import { getHotEntries } from "../lib/tauri-bridge.js";
+import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
 
@@ -45,7 +46,7 @@ export async function renderHotLog(container: HTMLElement): Promise<void> {
             ${entry.theme ? `<span class="hot-entry-theme">${escapeHtml(entry.theme)}</span>` : ""}
             ${entry.source ? `<span class="hot-entry-source">${escapeHtml(entry.source)}</span>` : ""}
           </div>
-          <div class="hot-entry-body">${escapeHtml(entry.log)}</div>
+          <div class="hot-entry-body md-content">${renderMarkdown(entry.log)}</div>
         </div>
       `;
     }).join("");

@@ -1,4 +1,5 @@
 import { getWarmThemes } from "../lib/tauri-bridge.js";
+import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
 
@@ -44,7 +45,7 @@ export async function renderWarmThemes(container: HTMLElement): Promise<void> {
             <span class="warm-card-name">${escapeHtml(theme.theme)}</span>
             <span class="warm-card-updated">Updated ${updated}</span>
           </div>
-          <div class="warm-card-content">${escapeHtml(theme.content)}</div>
+          <div class="warm-card-content md-content">${renderMarkdown(theme.content)}</div>
         </div>
       `;
     }).join("");

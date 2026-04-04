@@ -1122,6 +1122,46 @@ body {
   text-align: center;
 }
 
+/* ---- Markdown content ---- */
+
+.md-content h3, .md-content h4, .md-content h5, .md-content h6 {
+  margin: 0.6rem 0 0.3rem;
+  color: var(--text-primary);
+}
+
+.md-content h3 { font-size: 1rem; }
+.md-content h4 { font-size: 0.95rem; }
+.md-content h5 { font-size: 0.9rem; }
+.md-content h6 { font-size: 0.85rem; }
+
+.md-content p {
+  margin: 0.2rem 0;
+  line-height: 1.5;
+}
+
+.md-content li {
+  margin-left: 1.2rem;
+  line-height: 1.5;
+  list-style-type: disc;
+}
+
+.md-content code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--bg-base);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.md-content strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.md-content em {
+  font-style: italic;
+}
+
 /* ---- Help page ---- */
 
 .help-content {
