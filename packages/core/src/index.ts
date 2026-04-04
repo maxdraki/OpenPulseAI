@@ -17,3 +17,5 @@ export { loadConfig, DEFAULT_CONFIG } from "./config.js";
 export type { LlmProvider, CompletionParams } from "./llm/provider.js";
 export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";
+export { initLogger, vaultLog } from "./logger.js";
+export type { LogLevel, LogEntry } from "./logger.js";
