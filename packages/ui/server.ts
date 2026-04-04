@@ -239,120 +239,125 @@ app.get("/api/warm-themes", async (_req, res) => {
   }
 });
 
-app.get("/api/sources", async (_req, res) => {
-  const configPath = join(VAULT_ROOT, "config.yaml");
+app.get("/api/skills", async (_req, res) => {
   try {
-    const { parse } = await import("yaml");
-    const raw = await readFile(configPath, "utf-8");
-    const parsed = parse(raw);
-    const sources = (parsed?.sources ?? []).map((s: any) => ({
-      name: s.name,
-      command: s.command,
-      args: s.args ?? [],
-      schedule: s.schedule ?? "0 23 * * *",
-      lookback: s.lookback ?? "24h",
-      template: s.template ?? null,
-      enabled: s.enabled ?? true,
-    }));
+    // Discover skills from builtin + user dirs
+    const builtinDir = join(process.cwd(), "..", "skills", "builtin");
+    const userDir = join(VAULT_ROOT, "skills");
 
-    // Merge collector state
-    const stateDir = join(VAULT_ROOT, "vault", "collector-state");
-    for (const source of sources) {
+    const skills: any[] = [];
+
+    // Scan both directories
+    for (const dir of [builtinDir, userDir]) {
       try {
-        const stateRaw = await readFile(join(stateDir, `${source.name}.json`), "utf-8");
-        const state = JSON.parse(stateRaw);
-        source.lastRunAt = state.lastRunAt;
-        source.lastStatus = state.lastStatus;
-        source.entriesCollected = state.entriesCollected;
-        source.lastError = state.lastError;
-      } catch {
-        source.lastRunAt = null;
-        source.lastStatus = "never";
-        source.entriesCollected = 0;
-      }
+        const { readdir: rd, stat: st } = await import("node:fs/promises");
+        const dirStat = await st(dir).catch(() => null);
+        if (!dirStat || !dirStat.isDirectory()) continue;
+
+        const entries = await rd(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillFile = join(dir, entry.name, "SKILL.md");
+          try {
+            const content = await readFile(skillFile, "utf-8");
+            const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?/);
+            if (!fmMatch) continue;
+
+            const { load } = await import("js-yaml");
+            const parsed = load(fmMatch[1]) as any;
+            if (!parsed?.name || !parsed?.description) continue;
+
+            const requires = parsed.requires ?? {};
+            const skill: any = {
+              name: parsed.name,
+              description: parsed.description,
+              schedule: parsed.schedule ?? null,
+              lookback: parsed.lookback ?? "24h",
+              requires: {
+                bins: requires.bins ?? [],
+                env: requires.env ?? [],
+              },
+              isBuiltin: dir === builtinDir,
+              eligible: true,
+              missing: [] as string[],
+              lastRunAt: null,
+              lastStatus: "never",
+              entriesCollected: 0,
+            };
+
+            // Check eligibility
+            for (const bin of skill.requires.bins) {
+              try {
+                await execFileAsync("which", [bin], { timeout: 3000 });
+              } catch {
+                skill.eligible = false;
+                skill.missing.push(`bin: ${bin}`);
+              }
+            }
+            for (const env of skill.requires.env) {
+              if (!process.env[env]) {
+                skill.eligible = false;
+                skill.missing.push(`env: ${env}`);
+              }
+            }
+
+            // Merge collector state
+            try {
+              const stateRaw = await readFile(join(VAULT_ROOT, "vault", "collector-state", `${skill.name}.json`), "utf-8");
+              const state = JSON.parse(stateRaw);
+              skill.lastRunAt = state.lastRunAt;
+              skill.lastStatus = state.lastStatus;
+              skill.entriesCollected = state.entriesCollected;
+              skill.lastError = state.lastError;
+            } catch { /* no state yet */ }
+
+            skills.push(skill);
+          } catch { /* skip invalid skills */ }
+        }
+      } catch { /* dir doesn't exist */ }
     }
 
-    res.json(sources);
-  } catch {
+    // Deduplicate by name (user overrides builtin)
+    const skillMap = new Map(skills.map(s => [s.name, s]));
+    res.json(Array.from(skillMap.values()));
+  } catch (e: any) {
     res.json([]);
   }
 });
 
-app.post("/api/sources", async (req, res) => {
-  const configPath = join(VAULT_ROOT, "config.yaml");
+app.post("/api/skills/install", async (req, res) => {
+  const { repo } = req.body;
+  if (!repo) return res.status(400).json({ error: "repo is required" });
   try {
-    const { parse, stringify } = await import("yaml");
-    let config: any = {};
-    try {
-      config = parse(await readFile(configPath, "utf-8")) ?? {};
-    } catch { /* new config */ }
-
-    if (!config.sources) config.sources = [];
-    config.sources.push(req.body);
-    await writeFile(configPath, stringify(config), "utf-8");
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.put("/api/sources/:name", async (req, res) => {
-  const configPath = join(VAULT_ROOT, "config.yaml");
-  try {
-    const { parse, stringify } = await import("yaml");
-    const config = parse(await readFile(configPath, "utf-8")) ?? {};
-    if (!config.sources) return res.status(404).json({ error: "No sources configured" });
-    const idx = config.sources.findIndex((s: any) => s.name === req.params.name);
-    if (idx === -1) return res.status(404).json({ error: "Source not found" });
-    config.sources[idx] = req.body;
-    await writeFile(configPath, stringify(config), "utf-8");
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.delete("/api/sources/:name", async (req, res) => {
-  const configPath = join(VAULT_ROOT, "config.yaml");
-  try {
-    const { parse, stringify } = await import("yaml");
-    const config = parse(await readFile(configPath, "utf-8")) ?? {};
-    if (!config.sources) return res.status(404).json({ error: "No sources configured" });
-    config.sources = config.sources.filter((s: any) => s.name !== req.params.name);
-    await writeFile(configPath, stringify(config), "utf-8");
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/sources/:name/test", async (req, res) => {
-  const configPath = join(VAULT_ROOT, "config.yaml");
-  try {
-    const { parse } = await import("yaml");
-    const config = parse(await readFile(configPath, "utf-8"));
-    const source = (config?.sources ?? []).find((s: any) => s.name === req.params.name);
-    if (!source) return res.status(404).json({ error: "Source not found" });
-
-    try {
-      await execFileAsync("which", [source.command], { timeout: 5000 });
-      res.json({ ok: true, message: `Command '${source.command}' found` });
-    } catch {
-      res.json({ ok: false, error: `Command '${source.command}' not found on PATH` });
-    }
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/sources/:name/collect", async (req, res) => {
-  try {
-    const collectorBin = join(process.cwd(), "..", "collector", "dist", "index.js");
-    const { stderr } = await execFileAsync("node", [collectorBin, "--force", req.params.name], {
-      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+    const { stderr, stdout } = await execFileAsync("npx", ["skillsadd", repo], {
+      cwd: VAULT_ROOT,
       timeout: 60000,
+      env: process.env,
     });
-    res.json({ output: stderr || "Collection completed." });
+    res.json({ output: stdout || stderr || "Skill installed." });
+  } catch (e: any) {
+    res.json({ output: e.stderr || e.stdout || e.message });
+  }
+});
+
+app.delete("/api/skills/:name", async (req, res) => {
+  const skillDir = join(VAULT_ROOT, "skills", req.params.name);
+  try {
+    await rm(skillDir, { recursive: true });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/skills/:name/run", async (req, res) => {
+  try {
+    const skillsBin = join(process.cwd(), "..", "skills", "dist", "index.js");
+    const { stderr } = await execFileAsync("node", [skillsBin, "--run", req.params.name], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 120000,
+    });
+    res.json({ output: stderr || "Skill completed." });
   } catch (e: any) {
     res.json({ output: e.stderr || e.message });
   }

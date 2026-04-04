@@ -775,8 +775,8 @@ body {
   overflow-y: auto;
 }
 
-/* ---- Source cards ---- */
-.source-card {
+/* ---- Skill cards ---- */
+.skill-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -785,44 +785,56 @@ body {
   transition: border-color 0.15s ease;
 }
 
-.source-card:hover { border-color: var(--border-default); }
+.skill-card:hover { border-color: var(--border-default); }
 
-.source-card-header {
+.skill-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.65rem;
 }
 
-.source-card-name {
+.skill-card-name {
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--accent);
 }
 
-.source-card-template {
-  font-size: 0.72rem;
+.skill-card-badge {
+  font-size: 0.68rem;
   font-weight: 500;
-  padding: 0.1rem 0.5rem;
+  padding: 0.1rem 0.45rem;
   background: rgba(96, 165, 250, 0.1);
   color: var(--accent);
   border-radius: 10px;
-  margin-left: 0.5rem;
+  margin-left: 0.4rem;
 }
 
-.source-card-status {
+.skill-card-badge-user {
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--success);
+}
+
+.skill-card-status {
   display: flex;
   align-items: center;
   gap: 0.35rem;
 }
 
-.source-status-dot {
+.skill-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
 }
 
-.source-card-meta {
+.skill-card-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.65rem;
+  line-height: 1.4;
+}
+
+.skill-card-meta {
   display: flex;
   gap: 1.25rem;
   flex-wrap: wrap;
@@ -831,27 +843,18 @@ body {
   margin-bottom: 0.5rem;
 }
 
-.source-card-meta code {
+.skill-card-meta code {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 0.75rem;
 }
 
-.source-card-command {
-  padding: 0.4rem 0.65rem;
-  background: var(--bg-base);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  margin-bottom: 0.65rem;
-}
-
-.source-card-command code {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-
-.source-card-actions {
+.skill-card-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
