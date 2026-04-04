@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import type { OpenPulseConfig, LlmProviderName } from "./types.js";
 
-const VALID_PROVIDERS: LlmProviderName[] = ["anthropic", "openai", "gemini"];
+const VALID_PROVIDERS: LlmProviderName[] = ["anthropic", "openai", "gemini", "ollama"];
 
 export const DEFAULT_CONFIG: OpenPulseConfig = {
   vaultPath: "",
@@ -30,6 +30,7 @@ export async function loadConfig(rootDir: string): Promise<OpenPulseConfig> {
         provider,
         model: parsed?.llm?.model ?? DEFAULT_CONFIG.llm.model,
         apiKey: parsed?.llm?.apiKey,
+        baseUrl: parsed?.llm?.baseUrl,
       },
     };
   } catch {

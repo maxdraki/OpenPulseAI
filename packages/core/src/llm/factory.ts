@@ -3,6 +3,7 @@ import type { OpenPulseConfig } from "../types.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { OpenAIProvider } from "./openai.js";
 import { GeminiProvider } from "./gemini.js";
+import { OllamaProvider } from "./ollama.js";
 
 export function createProvider(config: OpenPulseConfig): LlmProvider {
   const apiKey = config.llm.apiKey ?? getEnvKey(config.llm.provider);
@@ -15,6 +16,8 @@ export function createProvider(config: OpenPulseConfig): LlmProvider {
     case "gemini":
       if (!apiKey) throw new Error("Gemini requires an API key (set GEMINI_API_KEY or configure in settings)");
       return new GeminiProvider(apiKey);
+    case "ollama":
+      return new OllamaProvider(config.llm.baseUrl);
     default:
       throw new Error(`Unknown LLM provider: ${config.llm.provider}`);
   }

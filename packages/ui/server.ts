@@ -6,7 +6,7 @@
  */
 import express from "express";
 import cors from "cors";
-import { readdir, readFile, writeFile, rm, stat } from "node:fs/promises";
+import { readdir, readFile, writeFile, rm, stat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -123,9 +123,11 @@ app.get("/api/llm-config", async (_req, res) => {
     const raw = await readFile(configPath, "utf-8");
     const providerMatch = raw.match(/provider:\s*(\w+)/);
     const modelMatch = raw.match(/model:\s*(.+)/);
+    const baseUrlMatch = raw.match(/baseUrl:\s*(.+)/);
     res.json({
       provider: providerMatch?.[1] ?? "anthropic",
       model: modelMatch?.[1]?.trim() ?? "claude-sonnet-4-5-20250929",
+      baseUrl: baseUrlMatch?.[1]?.trim(),
     });
   } catch {
     res.json({ provider: "anthropic", model: "claude-sonnet-4-5-20250929" });
@@ -133,9 +135,11 @@ app.get("/api/llm-config", async (_req, res) => {
 });
 
 app.post("/api/save-llm-settings", async (req, res) => {
-  const { provider, model, apiKey } = req.body;
+  const { provider, model, apiKey, baseUrl } = req.body;
   const configPath = join(VAULT_ROOT, "config.yaml");
   try {
+    // Ensure vault root exists
+    await mkdir(VAULT_ROOT, { recursive: true });
     // Read existing config to preserve themes
     let themes: string[] = [];
     try {
@@ -151,6 +155,9 @@ app.post("/api/save-llm-settings", async (req, res) => {
       yaml += `themes:\n${themes.map((t) => `  - ${t}`).join("\n")}\n`;
     }
     yaml += `llm:\n  provider: ${provider}\n  model: ${model}\n`;
+    if (baseUrl) {
+      yaml += `  baseUrl: ${baseUrl}\n`;
+    }
 
     await writeFile(configPath, yaml, "utf-8");
 
@@ -160,6 +167,7 @@ app.post("/api/save-llm-settings", async (req, res) => {
         anthropic: "ANTHROPIC_API_KEY",
         openai: "OPENAI_API_KEY",
         gemini: "GEMINI_API_KEY",
+        ollama: "",
       };
       console.log(`[server] API key for ${provider} received (${apiKey.slice(0, 6)}...). Set ${envMap[provider]} env var for the dream pipeline.`);
     }
@@ -360,6 +368,95 @@ app.post("/api/skills/:name/run", async (req, res) => {
     res.json({ output: stderr || "Skill completed." });
   } catch (e: any) {
     res.json({ output: e.stderr || e.message });
+  }
+});
+
+app.post("/api/validate-models", async (req, res) => {
+  const { provider, apiKey, baseUrl } = req.body;
+  if (!provider) return res.status(400).json({ valid: false, error: "provider is required", models: [] });
+
+  try {
+    let models: Array<{ id: string; name: string }> = [];
+
+    if (provider === "anthropic") {
+      if (!apiKey) return res.json({ valid: false, error: "API key is required", models: [] });
+      const resp = await fetch("https://api.anthropic.com/v1/models", {
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return res.json({ valid: false, error: resp.status === 401 ? "Invalid API key" : `API error: ${resp.status}`, models: [] });
+      const data = await resp.json();
+      models = (data.data ?? []).map((m: any) => ({ id: m.id, name: m.display_name ?? m.id }));
+    } else if (provider === "openai") {
+      if (!apiKey) return res.json({ valid: false, error: "API key is required", models: [] });
+      const resp = await fetch("https://api.openai.com/v1/models", {
+        headers: { "Authorization": `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return res.json({ valid: false, error: resp.status === 401 ? "Invalid API key" : `API error: ${resp.status}`, models: [] });
+      const data = await resp.json();
+      const chatPrefixes = ["gpt-", "o1-", "o3-", "o4-", "chatgpt-"];
+      models = (data.data ?? [])
+        .filter((m: any) => chatPrefixes.some((p) => m.id.startsWith(p)))
+        .map((m: any) => ({ id: m.id, name: m.id }));
+    } else if (provider === "gemini") {
+      if (!apiKey) return res.json({ valid: false, error: "API key is required", models: [] });
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return res.json({ valid: false, error: resp.status === 400 ? "Invalid API key" : `API error: ${resp.status}`, models: [] });
+      const data = await resp.json();
+      models = (data.models ?? [])
+        .filter((m: any) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
+        .map((m: any) => ({ id: (m.name ?? "").replace("models/", ""), name: m.displayName ?? m.name }));
+    } else if (provider === "ollama") {
+      const url = baseUrl || "http://localhost:11434";
+      const resp = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (!resp.ok) return res.json({ valid: false, error: `Cannot connect to Ollama at ${url}`, models: [] });
+      const data = await resp.json();
+      models = (data.models ?? []).map((m: any) => ({ id: m.name, name: m.name }));
+    } else {
+      return res.json({ valid: false, error: `Unknown provider: ${provider}`, models: [] });
+    }
+
+    models.sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ valid: true, models });
+  } catch (e: any) {
+    const msg = e.name === "TimeoutError" ? "Connection timed out" : `Cannot connect to ${provider}`;
+    res.json({ valid: false, error: msg, models: [] });
+  }
+});
+
+app.post("/api/test-model", async (req, res) => {
+  const { provider, model, apiKey, baseUrl } = req.body;
+  if (!provider || !model) return res.status(400).json({ success: false, error: "provider and model are required" });
+
+  try {
+    // Set API key in env so createProvider can find it
+    const envMap: Record<string, string> = {
+      anthropic: "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      gemini: "GEMINI_API_KEY",
+    };
+    const envVar = envMap[provider];
+    if (apiKey && envVar) process.env[envVar] = apiKey;
+
+    const { createProvider } = await import("../core/dist/index.js");
+    const llmProvider = createProvider({
+      vaultPath: VAULT_ROOT,
+      themes: [],
+      llm: { provider, model, apiKey, baseUrl },
+    } as any);
+
+    const response = await llmProvider.complete({
+      model,
+      prompt: "Say hello in exactly one word.",
+      maxTokens: 16,
+    });
+
+    res.json({ success: true, response: response.trim() });
+  } catch (e: any) {
+    res.json({ success: false, error: e.message ?? String(e) });
   }
 });
 

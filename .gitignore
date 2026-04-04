@@ -4,3 +4,5 @@ dist/
 .env
 target/
 .worktrees/
+src-tauri/target/
+src-tauri/sidecars/

@@ -8,7 +8,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:sea:mcp": "bash scripts/build-sea.sh mcp-server",
-    "build:sea:dream": "bash scripts/build-sea.sh dream"
+    "build:sea:dream": "bash scripts/build-sea.sh dream",
+    "build:sea:skills": "bash scripts/build-sea.sh skills",
+    "dev:desktop": "cargo tauri dev",
+    "build:desktop": "bash scripts/build-desktop.sh"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

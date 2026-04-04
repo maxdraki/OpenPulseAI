@@ -3,6 +3,7 @@ import { createProvider } from "../../src/llm/factory.js";
 import { AnthropicProvider } from "../../src/llm/anthropic.js";
 import { OpenAIProvider } from "../../src/llm/openai.js";
 import { GeminiProvider } from "../../src/llm/gemini.js";
+import { OllamaProvider } from "../../src/llm/ollama.js";
 import type { OpenPulseConfig } from "../../src/types.js";
 
 function makeConfig(provider: string, apiKey?: string): OpenPulseConfig {
@@ -39,5 +40,17 @@ describe("createProvider", () => {
 
   it("throws for unknown provider", () => {
     expect(() => createProvider(makeConfig("unknown"))).toThrow("Unknown LLM provider");
+  });
+
+  it("creates OllamaProvider for ollama config", () => {
+    const provider = createProvider(makeConfig("ollama"));
+    expect(provider).toBeInstanceOf(OllamaProvider);
+  });
+
+  it("creates OllamaProvider with custom baseUrl", () => {
+    const config = makeConfig("ollama");
+    config.llm.baseUrl = "http://192.168.1.100:11434";
+    const provider = createProvider(config);
+    expect(provider).toBeInstanceOf(OllamaProvider);
   });
 });

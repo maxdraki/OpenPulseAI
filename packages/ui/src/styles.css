@@ -858,3 +858,56 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ---- Settings: Provider Grid ---- */
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+}
+
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 2px solid var(--border-color, #2a3040);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.provider-card:hover {
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.provider-card.selected {
+  border-color: var(--accent-color, #3b82f6);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.provider-card strong {
+  font-size: 1rem;
+}
+
+.provider-card span {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+
+.validate-status {
+  font-size: 0.85rem;
+  margin-left: 0.5rem;
+}
+
+.validate-status.success {
+  color: #22c55e;
+}
+
+.validate-status.error {
+  color: #ef4444;
+}

@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 // Types matching the core package
 export interface VaultHealth {
   hotCount: number;
@@ -16,8 +18,8 @@ export interface PendingUpdate {
   status: string;
 }
 
-// Detect Tauri runtime (window.__TAURI__ is injected by the Tauri webview)
-const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+// Detect Tauri runtime
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // Dev API server base URL
 const API_BASE = "http://localhost:3001/api";
@@ -25,8 +27,7 @@ const API_BASE = "http://localhost:3001/api";
 // --- Transport layer ---
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const invoke = (window as any).__TAURI__.core.invoke;
-  return invoke(cmd, args);
+  return invoke<T>(cmd, args);
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -73,14 +74,41 @@ export async function triggerDream(): Promise<string> {
   return result.output;
 }
 
-export async function getLlmConfig(): Promise<{ provider: string; model: string }> {
+export async function getLlmConfig(): Promise<{ provider: string; model: string; baseUrl?: string }> {
   if (isTauri) return tauriInvoke("get_llm_config");
   return apiGet("/llm-config");
 }
 
-export async function saveLlmSettings(provider: string, model: string, apiKey?: string): Promise<void> {
-  if (isTauri) return tauriInvoke("save_llm_settings", { provider, model, apiKey: apiKey ?? null });
-  await apiPost("/save-llm-settings", { provider, model, apiKey: apiKey ?? null });
+export async function saveLlmSettings(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<void> {
+  if (isTauri) return tauriInvoke("save_llm_settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  await apiPost("/save-llm-settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+}
+
+export interface ValidateModelsResult {
+  valid: boolean;
+  error?: string;
+  models: ModelInfo[];
+}
+
+export async function validateAndListModels(provider: string, apiKey?: string, baseUrl?: string): Promise<ValidateModelsResult> {
+  if (isTauri) return tauriInvoke("validate_and_list_models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  return apiPost("/validate-models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+}
+
+export interface TestModelResult {
+  success: boolean;
+  response?: string;
+  error?: string;
+}
+
+export async function testModel(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<TestModelResult> {
+  if (isTauri) return tauriInvoke("test_model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+  return apiPost("/test-model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
 export async function getVaultPath(): Promise<string> {
