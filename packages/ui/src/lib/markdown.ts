@@ -1,6 +1,7 @@
 /**
  * Lightweight markdown-to-HTML renderer for vault content.
  * Handles: headings, bold, italic, code, lists, paragraphs.
+ * Groups consecutive list items into <ul> blocks.
  * Input is from our own vault files (trusted), not user input.
  */
 export function renderMarkdown(md: string): string {
@@ -9,28 +10,44 @@ export function renderMarkdown(md: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  return escaped
-    .split("\n")
-    .map((line) => {
-      // Headings
-      if (line.startsWith("#### ")) return `<h6>${line.slice(5)}</h6>`;
-      if (line.startsWith("### ")) return `<h5>${line.slice(4)}</h5>`;
-      if (line.startsWith("## ")) return `<h4>${line.slice(3)}</h4>`;
-      if (line.startsWith("# ")) return `<h3>${line.slice(2)}</h3>`;
+  const lines = escaped.split("\n");
+  const output: string[] = [];
+  let inList = false;
 
-      // List items
-      if (/^\s*[-*]\s/.test(line)) {
-        const content = line.replace(/^\s*[-*]\s+/, "");
-        return `<li>${inlineFormat(content)}</li>`;
-      }
+  for (const line of lines) {
+    const isListItem = /^\s*[-*]\s/.test(line);
 
-      // Empty lines become breaks
-      if (line.trim() === "") return "";
+    if (isListItem && !inList) {
+      output.push("<ul>");
+      inList = true;
+    } else if (!isListItem && inList) {
+      output.push("</ul>");
+      inList = false;
+    }
 
-      // Regular paragraph
-      return `<p>${inlineFormat(line)}</p>`;
-    })
-    .join("\n");
+    // Headings
+    if (line.startsWith("#### ")) { output.push(`<h6>${inlineFormat(line.slice(5))}</h6>`); continue; }
+    if (line.startsWith("### ")) { output.push(`<h5>${inlineFormat(line.slice(4))}</h5>`); continue; }
+    if (line.startsWith("## ")) { output.push(`<h4>${inlineFormat(line.slice(3))}</h4>`); continue; }
+    if (line.startsWith("# ")) { output.push(`<h3>${inlineFormat(line.slice(2))}</h3>`); continue; }
+
+    // List items
+    if (isListItem) {
+      const content = line.replace(/^\s*[-*]\s+/, "");
+      output.push(`<li>${inlineFormat(content)}</li>`);
+      continue;
+    }
+
+    // Empty lines
+    if (line.trim() === "") continue;
+
+    // Regular paragraph
+    output.push(`<p>${inlineFormat(line)}</p>`);
+  }
+
+  if (inList) output.push("</ul>");
+
+  return output.join("\n");
 }
 
 function inlineFormat(text: string): string {

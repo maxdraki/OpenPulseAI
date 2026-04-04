@@ -1125,7 +1125,7 @@ body {
 /* ---- Markdown content ---- */
 
 .md-content h3, .md-content h4, .md-content h5, .md-content h6 {
-  margin: 0.6rem 0 0.3rem;
+  margin: 0.5rem 0 0.15rem;
   color: var(--text-primary);
 }
 
@@ -1135,15 +1135,17 @@ body {
 .md-content h6 { font-size: 0.85rem; }
 
 .md-content p {
-  margin: 0.2rem 0;
-  line-height: 1.5;
+  margin: 0.1rem 0;
+  line-height: 1.45;
 }
 
 .md-content li {
   margin-left: 1.8rem;
-  line-height: 1.5;
+  line-height: 1.4;
   list-style-type: disc;
   padding-left: 0.3rem;
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .md-content code {
