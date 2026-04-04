@@ -49,7 +49,23 @@ async function dirExists(dir: string): Promise<boolean> {
 
 app.get("/api/vault-health", async (_req, res) => {
   const vaultExists = await dirExists(vaultDir);
-  const hotCount = await countFiles(hotDir, ".md");
+
+  // Count actual hot entries (blocks in daily files + ingested docs)
+  let hotCount = 0;
+  try {
+    const files = await readdir(hotDir);
+    for (const file of files) {
+      if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
+      const content = await readFile(join(hotDir, file), "utf-8");
+      hotCount += content.split(/\n---\n/).filter((b) => b.trim()).length;
+    }
+    // Count ingested documents
+    try {
+      const ingestFiles = await readdir(join(hotDir, "ingest"));
+      hotCount += ingestFiles.filter((f) => f.endsWith(".md")).length;
+    } catch { /* ingest dir may not exist */ }
+  } catch { /* hot dir may not exist */ }
+
   const warmCount = await countFiles(warmDir, ".md");
   const pendingCount = await countFiles(pendingDir, ".json");
   res.json({ hotCount, warmCount, pendingCount, vaultExists });
