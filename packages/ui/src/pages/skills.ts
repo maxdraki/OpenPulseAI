@@ -1,4 +1,5 @@
 import { getSkills, installSkill, removeSkill, runSkillNow, type SkillData } from "../lib/tauri-bridge.js";
+import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 
 // Human-readable cron descriptions for common patterns
@@ -184,8 +185,9 @@ function renderSkillCard(skill: SkillData): HTMLElement {
 
   const nameArea = document.createElement("div");
   const name = document.createElement("span");
-  name.className = "skill-card-name";
+  name.className = "skill-card-name clickable";
   name.textContent = skill.name;
+  name.title = "Click to view skill details";
   nameArea.appendChild(name);
 
   const typeBadge = document.createElement("span");
@@ -339,6 +341,24 @@ function renderSkillCard(skill: SkillData): HTMLElement {
   const output = document.createElement("div");
   output.className = "console-output";
   card.appendChild(output);
+
+  // Skill body panel (collapsed by default)
+  // Content is from SKILL.md files (our own vault), rendered via marked library
+  const bodyPanel = document.createElement("div");
+  bodyPanel.className = "skill-body-panel";
+  bodyPanel.style.display = "none";
+  if (skill.body) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "md-content";
+    wrapper.innerHTML = renderMarkdown(skill.body); // safe: trusted SKILL.md content via marked
+    bodyPanel.appendChild(wrapper);
+  }
+  card.appendChild(bodyPanel);
+
+  // Name click toggles body panel
+  name.addEventListener("click", () => {
+    bodyPanel.style.display = bodyPanel.style.display === "none" ? "" : "none";
+  });
 
   // Run handler
   runBtn.addEventListener("click", async () => {

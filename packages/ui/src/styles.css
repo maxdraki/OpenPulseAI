@@ -848,6 +848,28 @@ body {
   color: var(--accent);
 }
 
+.skill-card-name.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s;
+}
+
+.skill-card-name.clickable:hover {
+  text-decoration-color: var(--accent);
+}
+
+.skill-body-panel {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.85rem;
+  margin: 0.4rem 0;
+  font-size: 0.82rem;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .skill-card-badge {
   font-size: 0.68rem;
   font-weight: 500;

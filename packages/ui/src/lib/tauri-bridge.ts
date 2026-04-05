@@ -173,6 +173,7 @@ export interface SkillData {
   schedule: string | null;
   lookback: string;
   requires: { bins: string[]; env: string[] };
+  body: string;
   eligible: boolean;
   missing: string[];
   lastRunAt: string | null;

@@ -324,6 +324,7 @@ app.get("/api/skills", async (_req, res) => {
                 bins: requires.bins ?? [],
                 env: requires.env ?? [],
               },
+              body: (fmMatch[2] ?? "").trim(),
               isBuiltin: dir === builtinDir,
               eligible: true,
               missing: [] as string[],
