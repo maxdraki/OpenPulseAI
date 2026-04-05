@@ -494,8 +494,8 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 1.5rem;
-  margin-bottom: 1rem;
+  padding: 0.85rem 1.25rem;
+  margin-bottom: 0.5rem;
   transition: border-color 0.2s ease;
 }
 
@@ -507,7 +507,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1rem;
+  margin-bottom: 0.35rem;
 }
 
 .pending-theme-badge {
@@ -543,17 +543,15 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 500;
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.2rem;
 }
 
 .pending-preview {
-  padding: 0.5rem 0;
+  padding: 0.25rem 0;
   font-size: 0.85rem;
   color: var(--text-secondary);
-  white-space: pre-wrap;
-  max-height: 160px;
+  max-height: 400px;
   overflow-y: auto;
-  line-height: 1.6;
 }
 
 .pending-textarea {
