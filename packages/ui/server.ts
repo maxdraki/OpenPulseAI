@@ -11,6 +11,7 @@ import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { load as loadYaml } from "js-yaml";
+import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -635,6 +636,95 @@ app.post("/api/claude-desktop-disconnect", async (_req, res) => {
       delete config.mcpServers.openpulse;
       await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
     }
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Orchestrator ---
+
+const orchestratorCallbacks: OrchestratorCallbacks = {
+  async runCollector(skillName: string): Promise<void> {
+    const skillsBin = join(process.cwd(), "..", "skills", "dist", "index.js");
+    await execFileAsync("node", [skillsBin, "--run", skillName], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 120000,
+    });
+  },
+  async runDreamPipeline(): Promise<void> {
+    const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
+    await execFileAsync("node", [dreamBin], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 300000,
+    });
+  },
+  async getSkillNames(): Promise<string[]> {
+    const builtinDir = join(process.cwd(), "..", "skills", "builtin");
+    const userDir = join(VAULT_ROOT, "skills");
+    const names: string[] = [];
+
+    for (const dir of [builtinDir, userDir]) {
+      try {
+        const dirStat = await stat(dir).catch(() => null);
+        if (!dirStat?.isDirectory()) continue;
+        const entries = await readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillFile = join(dir, entry.name, "SKILL.md");
+          try {
+            await stat(skillFile);
+            names.push(entry.name);
+          } catch { /* no SKILL.md */ }
+        }
+      } catch { /* dir doesn't exist */ }
+    }
+
+    // Deduplicate (user overrides builtin by same directory name)
+    return [...new Set(names)];
+  },
+};
+
+const orchestrator = new Orchestrator(VAULT_ROOT, orchestratorCallbacks);
+orchestrator.start().catch((err) =>
+  console.error("[openpulse-ui] Orchestrator failed to start:", err)
+);
+
+app.get("/api/orchestrator-status", (_req, res) => {
+  res.json({ running: orchestrator.isRunning(), ...orchestrator.getStatus() });
+});
+
+app.post("/api/orchestrator-schedule", async (req, res) => {
+  const { skill, schedules, enabled } = req.body;
+  if (!skill || !Array.isArray(schedules) || typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "skill, schedules, and enabled are required" });
+  }
+  try {
+    await orchestrator.updateSchedule(skill, schedules, enabled);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/orchestrator-run", async (req, res) => {
+  const { target } = req.body;
+  if (!target) return res.status(400).json({ error: "target is required" });
+  try {
+    const message = await orchestrator.triggerRun(target);
+    res.json({ ok: true, message });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/orchestrator-toggle", async (req, res) => {
+  const { target, enabled } = req.body;
+  if (!target || typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "target and enabled are required" });
+  }
+  try {
+    await orchestrator.toggleSchedule(target, enabled);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
