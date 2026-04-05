@@ -204,3 +204,55 @@ export async function runSkillNow(name: string): Promise<string> {
   const result = await apiPost<{ output: string }>(`/skills/${name}/run`, {});
   return result.output;
 }
+
+// --- Orchestrator ---
+
+export interface OrchestratorSchedule {
+  time: string;
+  days: string[];
+}
+
+export interface OrchestratorCollector {
+  enabled: boolean;
+  schedules: OrchestratorSchedule[];
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError: string | null;
+  nextRun: string | null;
+}
+
+export interface OrchestratorDreamPipeline {
+  autoTrigger: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError: string | null;
+  collectorsCompletedToday: string[];
+}
+
+export interface OrchestratorStatus {
+  running: boolean;
+  lastHeartbeat: string;
+  collectors: Record<string, OrchestratorCollector>;
+  dreamPipeline: OrchestratorDreamPipeline;
+}
+
+export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {
+  if (isTauri) return tauriInvoke("get_orchestrator_status");
+  return apiGet("/orchestrator-status");
+}
+
+export async function updateSchedule(skill: string, schedules: OrchestratorSchedule[], enabled: boolean): Promise<void> {
+  if (isTauri) return tauriInvoke("update_schedule", { skill, schedules, enabled });
+  await apiPost("/orchestrator-schedule", { skill, schedules, enabled });
+}
+
+export async function triggerOrchestratorRun(target: string): Promise<string> {
+  if (isTauri) return tauriInvoke("trigger_orchestrator_run", { target });
+  const result = await apiPost<{ output: string }>("/orchestrator-run", { target });
+  return result.output;
+}
+
+export async function toggleOrchestratorSchedule(target: string, enabled: boolean): Promise<void> {
+  if (isTauri) return tauriInvoke("toggle_orchestrator_schedule", { target, enabled });
+  await apiPost("/orchestrator-toggle", { target, enabled });
+}
