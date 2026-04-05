@@ -52,7 +52,18 @@ Write an updated status document that:
 4. Is written in clear, concise Markdown
 5. Starts with a "## Current Status" heading
 
+Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries above. Remove anything you cannot trace back to a specific entry. If you are unsure whether something is real, leave it out.
+
 Return ONLY the Markdown content, no fences or explanations.`,
+      systemPrompt: `You are a precise factual summarizer. You MUST only include information that is explicitly present in the provided activity entries or existing content. NEVER invent, fabricate, or hallucinate any data including:
+- Repository names, project names, or organization names
+- PR numbers, issue numbers, or commit hashes
+- People's names, team names, or roles
+- Dates, metrics, or statistics
+- Actions taken or decisions made
+
+If the source data is sparse, write a short summary. An accurate 2-line summary is better than a detailed paragraph with invented details. When in doubt, quote the source entry directly rather than paraphrasing with added context.`,
+      maxTokens: 2048,
     });
 
     const update: PendingUpdate = {

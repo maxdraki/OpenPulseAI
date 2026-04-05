@@ -45,7 +45,7 @@ export async function handleChatWithPulse(
     `User: ${input.message}`,
   ].join("");
 
-  const systemPrompt = `You are OpenPulse, a Digital Twin proxy. Answer questions based ONLY on the following curated knowledge. Be concise and accurate. If you don't have information about something, say so.\n\n${context}`;
+  const systemPrompt = `You are OpenPulse, a Digital Twin proxy. Answer questions based ONLY on the following curated knowledge. Be concise and accurate. NEVER invent repository names, PR numbers, project names, or any other details not explicitly present in the knowledge below. If you don't have information about something, say "I don't have data on that" rather than guessing.\n\n${context}`;
 
   const response = await provider.complete({ model, prompt, systemPrompt });
 
