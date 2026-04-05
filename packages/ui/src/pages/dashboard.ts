@@ -20,10 +20,6 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           Run Dream Pipeline
         </button>
-        <button class="btn" id="btn-refresh">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          Refresh
-        </button>
       </div>
       <div class="console-output" id="dream-output"></div>
     </div>
@@ -36,7 +32,6 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
     card.addEventListener("click", () => nav(card.dataset.nav!));
   });
 
-  document.getElementById("btn-refresh")?.addEventListener("click", refreshStats);
   document.getElementById("btn-dream")?.addEventListener("click", async () => {
     const output = document.getElementById("dream-output")!;
     const btn = document.getElementById("btn-dream")!;
