@@ -119,6 +119,11 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
       const result = await installSkill(repo);
       log("info", `Skill installed: ${repo}`, result);
       installOutput.textContent = result;
+      const scheduleLink = document.createElement("a");
+      scheduleLink.href = "#schedule";
+      scheduleLink.textContent = "Set up a schedule \u2192";
+      scheduleLink.style.cssText = "display: block; margin-top: 0.5rem; color: var(--accent); font-size: 0.85rem;";
+      installOutput.appendChild(scheduleLink);
       installInput.value = "";
       await loadSkills();
     } catch (e: any) {

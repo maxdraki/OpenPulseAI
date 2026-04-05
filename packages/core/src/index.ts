@@ -19,3 +19,16 @@ export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";
 export { initLogger, vaultLog } from "./logger.js";
 export type { LogLevel, LogEntry } from "./logger.js";
+export {
+  Orchestrator,
+  type Schedule,
+  type CollectorState as OrchestratorCollectorState,
+  type DreamPipelineState,
+  type OrchestratorState,
+  type OrchestratorCallbacks,
+  defaultState,
+  loadState,
+  saveState,
+  scheduleToCron,
+  getLocalDate,
+} from "./orchestrator.js";
