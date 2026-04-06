@@ -11,7 +11,7 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Cron } from "croner";
-import { vaultLog } from "./logger.js";
+import { initLogger, vaultLog } from "./logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -185,6 +185,9 @@ export class Orchestrator {
   async start(): Promise<void> {
     if (this.running) return;
 
+    // Ensure vault logger is initialized
+    initLogger(this.vaultRoot);
+
     this.state = await loadState(this.vaultRoot);
     await vaultLog("info", "[orchestrator] Starting");
 
@@ -315,7 +318,7 @@ export class Orchestrator {
     for (const schedule of collector.schedules) {
       const cronExpr = scheduleToCron(schedule);
       try {
-        const job = new Cron(cronExpr, { timezone: "local" }, async () => {
+        const job = new Cron(cronExpr, {}, async () => {
           await this.runCollector(name);
         });
         cronList.push(job);
@@ -499,7 +502,7 @@ export class Orchestrator {
       for (const schedule of collector.schedules) {
         const cronExpr = scheduleToCron(schedule);
         try {
-          const job = new Cron(cronExpr, { timezone: "local" });
+          const job = new Cron(cronExpr, {});
           const prev = job.previousRun();
           job.stop();
 
