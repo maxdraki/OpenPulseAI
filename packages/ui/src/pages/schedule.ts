@@ -631,7 +631,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
     autoCheck.style.cursor = "pointer";
     autoCheck.addEventListener("change", async () => {
       try {
-        await toggleOrchestratorSchedule("dream", autoCheck.checked);
+        await toggleOrchestratorSchedule("dreamPipeline", autoCheck.checked);
         log("info", `Toggled dream auto-trigger: ${autoCheck.checked}`);
         refresh();
       } catch (e) {
@@ -704,7 +704,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
       dreamRunBtn.disabled = true;
       dreamRunBtn.textContent = "Running…";
       try {
-        await triggerOrchestratorRun("dream");
+        await triggerOrchestratorRun("dreamPipeline");
         log("info", "Triggered dream pipeline run");
         refresh();
       } catch (e) {
