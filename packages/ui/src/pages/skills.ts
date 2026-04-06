@@ -1,4 +1,4 @@
-import { getSkills, installSkill, removeSkill, runSkillNow, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 
@@ -28,17 +28,24 @@ function describeLookback(lb: string): string {
   return lb;
 }
 
-// Actionable fix suggestions for missing dependencies
-const FIX_HINTS: Record<string, string> = {
-  "bin: gh": "Install with: brew install gh && gh auth login",
-  "bin: gog": "Install gogcli: go install github.com/slashdevops/gog@latest",
-  "bin: git": "Install with: brew install git",
-  "bin: curl": "Install with: brew install curl",
+// Auto-fixable dependencies (can be installed via server endpoint)
+const AUTO_FIX: Record<string, { label: string; note?: string }> = {
+  "bin: gh":   { label: "Install GitHub CLI", note: "You'll need to run 'gh auth login' after installing." },
+  "bin: gog":  { label: "Install gogcli", note: "Requires Go to be installed." },
+  "bin: git":  { label: "Install git" },
+  "bin: curl": { label: "Install curl" },
+};
+
+// Manual-only fixes (instructions, not auto-runnable)
+const MANUAL_FIX: Record<string, string> = {
   "env: GITHUB_TOKEN": "Set with: export GITHUB_TOKEN=your_token",
   "env: ANTHROPIC_API_KEY": "Set in Settings page or: export ANTHROPIC_API_KEY=your_key",
   "env: OPENAI_API_KEY": "Set in Settings page or: export OPENAI_API_KEY=your_key",
   "env: GEMINI_API_KEY": "Set in Settings page or: export GEMINI_API_KEY=your_key",
 };
+
+// Module-level reference so renderSkillCard can trigger a reload
+let loadSkills: (() => Promise<void>) | null = null;
 
 export async function renderSkills(container: HTMLElement): Promise<void> {
   // Build page
@@ -126,7 +133,7 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
       scheduleLink.style.cssText = "display: block; margin-top: 0.5rem; color: var(--accent); font-size: 0.85rem;";
       installOutput.appendChild(scheduleLink);
       installInput.value = "";
-      await loadSkills();
+      await loadSkills?.();
     } catch (e: any) {
       log("error", `Skill install failed: ${repo}`, String(e));
       installOutput.textContent = `Error: ${e}`;
@@ -135,9 +142,7 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
     }
   });
 
-  await loadSkills();
-
-  async function loadSkills() {
+  loadSkills = async () => {
     try {
       const skills = await getSkills();
       renderSkillsList(skillsList, skills);
@@ -149,7 +154,9 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
       errCard.textContent = `Error loading skills: ${e}`;
       skillsList.appendChild(errCard);
     }
-  }
+  };
+
+  await loadSkills?.();
 }
 
 function renderSkillsList(container: HTMLElement, skills: SkillData[]): void {
@@ -262,7 +269,7 @@ function renderSkillCard(skill: SkillData): HTMLElement {
   card.appendChild(desc);
   card.appendChild(meta);
 
-  // Missing dependencies with fix hints
+  // Missing dependencies with fix buttons or hints
   if (!skill.eligible && skill.missing.length > 0) {
     const missingCard = document.createElement("div");
     missingCard.className = "skill-missing-deps";
@@ -274,16 +281,63 @@ function renderSkillCard(skill: SkillData): HTMLElement {
     const missingList = document.createElement("ul");
     for (const dep of skill.missing) {
       const li = document.createElement("li");
+      li.className = "skill-dep-row";
+
       const depName = document.createElement("code");
       depName.textContent = dep;
       li.appendChild(depName);
-      const hint = FIX_HINTS[dep];
-      if (hint) {
+
+      const autoFix = AUTO_FIX[dep];
+      const manualFix = MANUAL_FIX[dep];
+
+      if (autoFix) {
+        // Extract the binary name from "bin: gh" → "gh"
+        const binName = dep.replace("bin: ", "");
+        const fixBtn = document.createElement("button");
+        fixBtn.className = "btn btn-sm btn-primary";
+        fixBtn.textContent = autoFix.label;
+        fixBtn.addEventListener("click", async () => {
+          fixBtn.classList.add("loading");
+          fixBtn.disabled = true;
+          fixBtn.textContent = "Installing...";
+          try {
+            const result = await installDependency(binName);
+            log("info", `Dependency install: ${binName}`, result.output);
+            if (result.success) {
+              fixBtn.textContent = "\u2713 Installed";
+              fixBtn.className = "btn btn-sm";
+              fixBtn.style.color = "var(--success)";
+              if (autoFix.note) {
+                const note = document.createElement("span");
+                note.className = "skill-fix-hint";
+                note.textContent = " \u2014 " + autoFix.note;
+                li.appendChild(note);
+              }
+              // Reload skills to update eligibility
+              await loadSkills?.();
+            } else {
+              fixBtn.textContent = "Failed";
+              fixBtn.className = "btn btn-sm";
+              fixBtn.style.color = "var(--danger)";
+              const errSpan = document.createElement("span");
+              errSpan.className = "skill-fix-hint";
+              errSpan.textContent = " \u2014 " + result.output.slice(0, 100);
+              li.appendChild(errSpan);
+            }
+          } catch (e: any) {
+            log("error", `Dependency install failed: ${binName}`, String(e));
+            fixBtn.textContent = "Error";
+            fixBtn.disabled = false;
+          }
+        });
+        li.appendChild(fixBtn);
+      } else if (manualFix) {
         const hintSpan = document.createElement("span");
         hintSpan.className = "skill-fix-hint";
-        hintSpan.textContent = " \u2014 " + hint;
+        hintSpan.textContent = " \u2014 " + manualFix;
         li.appendChild(hintSpan);
       }
+
       missingList.appendChild(li);
     }
     missingCard.appendChild(missingList);

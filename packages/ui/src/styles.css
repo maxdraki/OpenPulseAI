@@ -961,6 +961,13 @@ body {
   font-size: 0.73rem;
 }
 
+.skill-dep-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .skill-last-error {
   color: var(--danger);
   font-size: 0.78rem;

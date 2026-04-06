@@ -643,6 +643,40 @@ app.post("/api/claude-desktop-disconnect", async (_req, res) => {
   }
 });
 
+// --- Dependency fix runner ---
+
+// Whitelisted install commands — only these can be executed
+const INSTALL_COMMANDS: Record<string, { cmd: string; args: string[] }> = {
+  "gh":   { cmd: "brew", args: ["install", "gh"] },
+  "gog":  { cmd: "go",   args: ["install", "github.com/slashdevops/gog@latest"] },
+  "git":  { cmd: "brew", args: ["install", "git"] },
+  "curl": { cmd: "brew", args: ["install", "curl"] },
+};
+
+app.post("/api/install-dependency", async (req, res) => {
+  const { dep } = req.body;
+  if (!dep || !INSTALL_COMMANDS[dep]) {
+    return res.status(400).json({ success: false, error: `Unknown or unsupported dependency: ${dep}. Supported: ${Object.keys(INSTALL_COMMANDS).join(", ")}` });
+  }
+
+  const { cmd, args } = INSTALL_COMMANDS[dep];
+  try {
+    const { stdout, stderr } = await execFileAsync(cmd, args, { timeout: 120000 });
+    const output = (stdout + "\n" + stderr).trim();
+
+    // Verify it actually installed
+    try {
+      await execFileAsync("which", [dep], { timeout: 3000 });
+      res.json({ success: true, output: output || `${dep} installed successfully.` });
+    } catch {
+      res.json({ success: false, output: output || `${dep} install completed but binary not found on PATH.` });
+    }
+  } catch (e: any) {
+    const output = (e.stdout ?? "") + "\n" + (e.stderr ?? "") + "\n" + (e.message ?? "");
+    res.json({ success: false, output: output.trim() });
+  }
+});
+
 // --- Orchestrator ---
 
 const orchestratorCallbacks: OrchestratorCallbacks = {

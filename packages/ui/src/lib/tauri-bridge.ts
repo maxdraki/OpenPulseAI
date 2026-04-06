@@ -188,6 +188,11 @@ export async function getSkills(): Promise<SkillData[]> {
   return apiGet("/skills");
 }
 
+export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
+  if (isTauri) return tauriInvoke("install_dependency", { dep });
+  return apiPost("/install-dependency", { dep });
+}
+
 export async function installSkill(repo: string): Promise<string> {
   if (isTauri) return tauriInvoke("install_skill", { repo });
   const result = await apiPost<{ output: string }>("/skills/install", { repo });
