@@ -1,6 +1,7 @@
 import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
+import { confirmDialog } from "../lib/dialog.js";
 
 // Human-readable cron descriptions for common patterns
 function describeCron(cron: string | null): string {
@@ -292,17 +293,105 @@ function renderSkillCard(skill: SkillData): HTMLElement {
         label.className = "form-label";
         label.style.fontSize = "0.78rem";
         label.textContent = field.label;
-
-        const input = document.createElement("input");
-        input.className = "form-input";
-        input.style.fontSize = "0.82rem";
-        input.type = "text";
-        input.placeholder = field.default ?? "";
-        input.value = savedConfig[field.key] ?? field.default ?? "";
-        input.dataset.configKey = field.key;
-
         row.appendChild(label);
-        row.appendChild(input);
+
+        if (field.type === "paths") {
+          // Multi-path list with add/remove
+          const pathList = document.createElement("div");
+          pathList.className = "skill-path-list";
+          pathList.dataset.configKey = field.key;
+
+          const rawValue = savedConfig[field.key] ?? field.default ?? "";
+          const paths = rawValue.split("\n").filter((p: string) => p.trim());
+          if (paths.length === 0) paths.push(field.default ?? "");
+
+          function renderPathItems() {
+            pathList.querySelectorAll(".skill-path-item").forEach((el) => el.remove());
+            const currentPaths = getPathValues();
+            for (let i = 0; i < currentPaths.length; i++) {
+              const item = document.createElement("div");
+              item.className = "skill-path-item";
+              const inp = document.createElement("input");
+              inp.className = "form-input";
+              inp.style.fontSize = "0.82rem";
+              inp.type = "text";
+              inp.value = currentPaths[i];
+              inp.placeholder = "/path/to/folder";
+              const removeBtn = document.createElement("button");
+              removeBtn.className = "skill-path-remove";
+              removeBtn.textContent = "\u00d7";
+              removeBtn.title = "Remove";
+              removeBtn.addEventListener("click", () => {
+                item.remove();
+              });
+              item.appendChild(inp);
+              if (currentPaths.length > 1) item.appendChild(removeBtn);
+              pathList.insertBefore(item, pathList.querySelector(".skill-path-add"));
+            }
+          }
+
+          function getPathValues(): string[] {
+            const items = pathList.querySelectorAll<HTMLInputElement>(".skill-path-item input");
+            if (items.length === 0) return paths;
+            return Array.from(items).map((inp) => inp.value).filter((v) => v.trim());
+          }
+
+          const addBtn = document.createElement("button");
+          addBtn.className = "skill-path-add btn btn-sm";
+          addBtn.textContent = "+ Add folder";
+          addBtn.addEventListener("click", () => {
+            const item = document.createElement("div");
+            item.className = "skill-path-item";
+            const inp = document.createElement("input");
+            inp.className = "form-input";
+            inp.style.fontSize = "0.82rem";
+            inp.type = "text";
+            inp.placeholder = "/path/to/folder";
+            const removeBtn = document.createElement("button");
+            removeBtn.className = "skill-path-remove";
+            removeBtn.textContent = "\u00d7";
+            removeBtn.title = "Remove";
+            removeBtn.addEventListener("click", () => item.remove());
+            item.appendChild(inp);
+            item.appendChild(removeBtn);
+            pathList.insertBefore(item, addBtn);
+            inp.focus();
+          });
+
+          pathList.appendChild(addBtn);
+          row.appendChild(pathList);
+
+          // Initial render
+          for (const p of paths) {
+            const item = document.createElement("div");
+            item.className = "skill-path-item";
+            const inp = document.createElement("input");
+            inp.className = "form-input";
+            inp.style.fontSize = "0.82rem";
+            inp.type = "text";
+            inp.value = p;
+            inp.placeholder = "/path/to/folder";
+            const rmBtn = document.createElement("button");
+            rmBtn.className = "skill-path-remove";
+            rmBtn.textContent = "\u00d7";
+            rmBtn.title = "Remove";
+            rmBtn.addEventListener("click", () => item.remove());
+            item.appendChild(inp);
+            if (paths.length > 1) item.appendChild(rmBtn);
+            pathList.insertBefore(item, addBtn);
+          }
+        } else {
+          // Single text/path input
+          const input = document.createElement("input");
+          input.className = "form-input";
+          input.style.fontSize = "0.82rem";
+          input.type = "text";
+          input.placeholder = field.default ?? "";
+          input.value = savedConfig[field.key] ?? field.default ?? "";
+          input.dataset.configKey = field.key;
+          row.appendChild(input);
+        }
+
         configFields.appendChild(row);
       }
 
@@ -311,8 +400,17 @@ function renderSkillCard(skill: SkillData): HTMLElement {
       saveBtn.textContent = "Save Config";
       saveBtn.addEventListener("click", async () => {
         const values: Record<string, string> = {};
+        // Single-value inputs
         configFields.querySelectorAll<HTMLInputElement>("input[data-config-key]").forEach((inp) => {
           if (inp.value) values[inp.dataset.configKey!] = inp.value;
+        });
+        // Multi-path lists
+        configFields.querySelectorAll<HTMLDivElement>(".skill-path-list[data-config-key]").forEach((list) => {
+          const key = list.dataset.configKey!;
+          const paths = Array.from(list.querySelectorAll<HTMLInputElement>(".skill-path-item input"))
+            .map((inp) => inp.value.trim())
+            .filter(Boolean);
+          if (paths.length > 0) values[key] = paths.join("\n");
         });
         try {
           await saveSkillConfig(skill.name, values);
@@ -443,18 +541,33 @@ function renderSkillCard(skill: SkillData): HTMLElement {
   runBtn.appendChild(document.createTextNode(" Run Now"));
   actions.appendChild(runBtn);
 
+  // Remove icon (non-builtin only) — bottom-right of card
   if (!skill.isBuiltin) {
     const removeBtn = document.createElement("button");
-    removeBtn.className = "btn btn-danger";
-    removeBtn.textContent = "Remove";
-    removeBtn.addEventListener("click", async () => {
-      if (confirm(`Remove skill "${skill.name}"? This deletes the skill files.`)) {
+    removeBtn.className = "skill-remove-btn";
+    removeBtn.title = "Remove skill";
+    const trashSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    trashSvg.setAttribute("width", "14");
+    trashSvg.setAttribute("height", "14");
+    trashSvg.setAttribute("viewBox", "0 0 24 24");
+    trashSvg.setAttribute("fill", "none");
+    trashSvg.setAttribute("stroke", "currentColor");
+    trashSvg.setAttribute("stroke-width", "2");
+    const path1 = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    path1.setAttribute("points", "3 6 5 6 21 6");
+    const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path2.setAttribute("d", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2");
+    trashSvg.appendChild(path1);
+    trashSvg.appendChild(path2);
+    removeBtn.appendChild(trashSvg);
+    removeBtn.addEventListener("click", () => {
+      confirmDialog(`Remove skill "${skill.name}"? This deletes the skill files.`, async () => {
         await removeSkill(skill.name);
         log("info", `Skill removed: ${skill.name}`);
         card.remove();
-      }
+      });
     });
-    actions.appendChild(removeBtn);
+    card.appendChild(removeBtn);
   }
 
   card.appendChild(actions);

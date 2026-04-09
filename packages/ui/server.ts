@@ -312,7 +312,7 @@ app.get("/api/skills", async (_req, res) => {
         },
         body: skill.body ?? "",
         config: Array.isArray(skill.config) ? skill.config : [],
-        isBuiltin: skill.isBuiltin ?? false,
+        isBuiltin: skill.location.includes("builtin-skills"),
         eligible,
         missing,
         lastRunAt: state?.lastRunAt ?? null,

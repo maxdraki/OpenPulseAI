@@ -5,6 +5,11 @@ schedule: "0 22 * * *"
 lookback: 24h
 requires:
   bins: [gog]
+  env: [GOG_ACCOUNT]
+config:
+  - key: gog_account
+    label: Google account email
+    type: text
 ---
 
 ## Context
