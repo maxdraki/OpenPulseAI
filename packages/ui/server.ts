@@ -20,6 +20,13 @@ const execFileAsync = promisify(execFile);
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = 3001;
 
+const PROVIDER_ENV_KEYS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  ollama: "",
+};
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -188,13 +195,7 @@ app.post("/api/save-llm-settings", async (req, res) => {
 
     // Set API key as env var hint (Stronghold when Tauri is available)
     if (apiKey) {
-      const envMap: Record<string, string> = {
-        anthropic: "ANTHROPIC_API_KEY",
-        openai: "OPENAI_API_KEY",
-        gemini: "GEMINI_API_KEY",
-        ollama: "",
-      };
-      console.log(`[server] API key for ${provider} received (${apiKey.slice(0, 6)}...). Set ${envMap[provider]} env var for the dream pipeline.`);
+      console.log(`[server] API key for ${provider} received (${apiKey.slice(0, 6)}...). Set ${PROVIDER_ENV_KEYS[provider]} env var for the dream pipeline.`);
     }
 
     res.json({ ok: true });
@@ -210,14 +211,15 @@ app.get("/api/vault-path", (_req, res) => {
 app.get("/api/hot-entries", async (_req, res) => {
   try {
     const files = await readdir(hotDir);
-    const entries: Array<{ timestamp: string; log: string; theme?: string; source?: string }> = [];
+    const entries: Array<{ id: string; timestamp: string; log: string; theme?: string; source?: string }> = [];
 
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
       const blocks = content.split(/\n---\n/).filter((b) => b.trim());
 
-      for (const block of blocks) {
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
         const tsMatch = block.match(/^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m);
         const themeMatch = block.match(/^\*\*Theme:\*\*\s*(.+)/m);
         const sourceMatch = block.match(/^\*\*Source:\*\*\s*(.+)/m);
@@ -227,6 +229,7 @@ app.get("/api/hot-entries", async (_req, res) => {
 
         if (tsMatch && logLines.length > 0) {
           entries.push({
+            id: `daily:${file}:${i}`,
             timestamp: tsMatch[1],
             log: logLines.join("\n").trim(),
             theme: themeMatch?.[1],
@@ -246,6 +249,7 @@ app.get("/api/hot-entries", async (_req, res) => {
         const content = await readFile(filePath, "utf-8");
         const fileStat = await stat(filePath);
         entries.push({
+          id: `ingest:${file}`,
           timestamp: fileStat.mtime.toISOString(),
           log: content,
           theme: "ingested",
@@ -258,6 +262,41 @@ app.get("/api/hot-entries", async (_req, res) => {
     res.json(entries);
   } catch {
     res.json([]);
+  }
+});
+
+app.delete("/api/hot-entries/:id", async (req, res) => {
+  const id = req.params.id;
+  try {
+    if (id.startsWith("ingest:")) {
+      // Delete ingested file
+      const filename = id.slice("ingest:".length);
+      if (filename.includes("/") || filename.includes("..")) return res.status(400).json({ error: "Invalid id" });
+      await rm(join(hotDir, "ingest", filename));
+      return res.json({ ok: true });
+    }
+
+    if (id.startsWith("daily:")) {
+      // Remove a block from a daily log file
+      const parts = id.split(":");
+      const file = parts[1];
+      const blockIndex = parseInt(parts[2]);
+      if (file.includes("/") || file.includes("..")) return res.status(400).json({ error: "Invalid id" });
+      const filePath = join(hotDir, file);
+      const content = await readFile(filePath, "utf-8");
+      const blocks = content.split(/\n---\n/).filter((b) => b.trim());
+      blocks.splice(blockIndex, 1);
+      if (blocks.length === 0) {
+        await rm(filePath);
+      } else {
+        await writeFile(filePath, blocks.join("\n\n---\n") + "\n\n---\n", "utf-8");
+      }
+      return res.json({ ok: true });
+    }
+
+    res.status(400).json({ error: "Unknown id format" });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -424,12 +463,7 @@ app.post("/api/test-model", async (req, res) => {
 
   try {
     // Set API key in env so createProvider can find it
-    const envMap: Record<string, string> = {
-      anthropic: "ANTHROPIC_API_KEY",
-      openai: "OPENAI_API_KEY",
-      gemini: "GEMINI_API_KEY",
-    };
-    const envVar = envMap[provider];
+    const envVar = PROVIDER_ENV_KEYS[provider];
     if (apiKey && envVar) process.env[envVar] = apiKey;
 
     const { createProvider } = await import("../core/dist/index.js");
@@ -591,6 +625,25 @@ app.post("/api/claude-desktop-disconnect", async (_req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Directory browser ---
+
+app.get("/api/browse-dirs", async (req, res) => {
+  let dir = (req.query.path as string) ?? process.env.HOME ?? "/";
+  // Expand ~ to home directory
+  if (dir.startsWith("~")) dir = dir.replace("~", process.env.HOME ?? "");
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name)
+      .sort()
+      .slice(0, 100);
+    res.json({ path: dir, dirs });
+  } catch {
+    res.json({ path: dir, dirs: [] });
   }
 });
 

@@ -23,7 +23,10 @@ export function extractShellCommands(body: string): string[] {
   while ((match = inlineRegex.exec(body)) !== null) {
     const cmd = match[1].trim();
     if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
-      if (!cmd.includes("(") && !cmd.includes("{") && !cmd.startsWith("//")) {
+      // Skip things that look like code references (function calls, object literals)
+      // but allow shell grouping like \( and ${ and escaped braces
+      const looksLikeCode = /\w+\(/.test(cmd) && !cmd.includes("\\(");
+      if (!looksLikeCode && !cmd.startsWith("//")) {
         commands.push(cmd);
       }
     }
@@ -68,11 +71,22 @@ function escapeForShell(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
+function expandHome(value: string): string {
+  if (value.startsWith("~/")) {
+    return (process.env.HOME ?? "") + value.slice(1);
+  }
+  return value;
+}
+
 function applyConfig(text: string, config: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = config[key];
     if (value === undefined) return `{{${key}}}`;
-    return escapeForShell(value);
+    // Expand ~ to home dir. For multi-line values (paths type),
+    // escape each path separately so find/ls get them as separate args
+    const lines = value.split("\n").filter((l) => l.trim());
+    const expanded = lines.map(expandHome);
+    return expanded.map(escapeForShell).join(" ");
   });
 }
 

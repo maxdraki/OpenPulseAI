@@ -145,10 +145,17 @@ export async function disconnectClaudeDesktop(): Promise<void> {
 }
 
 export interface HotEntry {
+  id: string;
   timestamp: string;
   log: string;
   theme?: string;
   source?: string;
+}
+
+export async function deleteHotEntry(id: string): Promise<void> {
+  if (isTauri) return tauriInvoke("delete_hot_entry", { id });
+  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 export interface WarmTheme {

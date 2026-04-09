@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog } from "../lib/dialog.js";
@@ -339,26 +339,41 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           const addBtn = document.createElement("button");
           addBtn.className = "skill-path-add btn btn-sm";
           addBtn.textContent = "+ Add folder";
-          addBtn.addEventListener("click", () => {
-            const item = document.createElement("div");
-            item.className = "skill-path-item";
-            const inp = document.createElement("input");
-            inp.className = "form-input";
-            inp.style.fontSize = "0.82rem";
-            inp.type = "text";
-            inp.placeholder = "/path/to/folder";
-            const removeBtn = document.createElement("button");
-            removeBtn.className = "skill-path-remove";
-            removeBtn.textContent = "\u00d7";
-            removeBtn.title = "Remove";
-            removeBtn.addEventListener("click", () => item.remove());
-            item.appendChild(inp);
-            item.appendChild(removeBtn);
-            pathList.insertBefore(item, addBtn);
-            inp.focus();
+
+          // Folder picker container (hidden until "Add folder" clicked)
+          const pickerContainer = document.createElement("div");
+          pickerContainer.className = "folder-picker";
+          pickerContainer.style.display = "none";
+
+          addBtn.addEventListener("click", async () => {
+            if (pickerContainer.style.display !== "none") {
+              pickerContainer.style.display = "none";
+              return;
+            }
+            pickerContainer.style.display = "";
+            await loadFolderPicker(pickerContainer, "~", (selectedPath) => {
+              pickerContainer.style.display = "none";
+              const item = document.createElement("div");
+              item.className = "skill-path-item";
+              const inp = document.createElement("input");
+              inp.className = "form-input";
+              inp.style.fontSize = "0.82rem";
+              inp.type = "text";
+              inp.value = selectedPath;
+              inp.readOnly = true;
+              const removeBtn = document.createElement("button");
+              removeBtn.className = "skill-path-remove";
+              removeBtn.textContent = "\u00d7";
+              removeBtn.title = "Remove";
+              removeBtn.addEventListener("click", () => item.remove());
+              item.appendChild(inp);
+              item.appendChild(removeBtn);
+              pathList.insertBefore(item, addBtn);
+            });
           });
 
           pathList.appendChild(addBtn);
+          pathList.appendChild(pickerContainer);
           row.appendChild(pathList);
 
           // Initial render
@@ -615,4 +630,69 @@ function renderSkillCard(skill: SkillData): HTMLElement {
   });
 
   return card;
+}
+
+async function loadFolderPicker(
+  container: HTMLElement,
+  initialPath: string,
+  onSelect: (path: string) => void
+): Promise<void> {
+  container.textContent = "";
+  let currentPath = initialPath;
+
+  async function render() {
+    container.textContent = "";
+
+    // Breadcrumb showing current path
+    const breadcrumb = document.createElement("div");
+    breadcrumb.className = "folder-picker-breadcrumb";
+    breadcrumb.textContent = currentPath;
+    container.appendChild(breadcrumb);
+
+    // Fetch directories
+    const data = await apiGet<{ path: string; dirs: string[] }>(`/browse-dirs?path=${encodeURIComponent(currentPath)}`);
+    currentPath = data.path; // resolved path
+
+    // Up button
+    if (currentPath !== "/") {
+      const upBtn = document.createElement("div");
+      upBtn.className = "folder-picker-item folder-picker-up";
+      upBtn.textContent = "\u2191 ..";
+      upBtn.addEventListener("click", () => {
+        currentPath = currentPath.replace(/\/[^/]+\/?$/, "") || "/";
+        render();
+      });
+      container.appendChild(upBtn);
+    }
+
+    // Directory list
+    const dirs: string[] = data.dirs ?? [];
+    if (dirs.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "folder-picker-empty";
+      empty.textContent = "No subdirectories";
+      container.appendChild(empty);
+    } else {
+      for (const dir of dirs.slice(0, 50)) {
+        const item = document.createElement("div");
+        item.className = "folder-picker-item";
+        item.textContent = dir;
+        item.addEventListener("click", () => {
+          currentPath = currentPath === "/" ? `/${dir}` : `${currentPath}/${dir}`;
+          render();
+        });
+        container.appendChild(item);
+      }
+    }
+
+    // Select this folder button
+    const selectBtn = document.createElement("button");
+    selectBtn.className = "btn btn-sm btn-primary";
+    selectBtn.textContent = `Select: ${currentPath}`;
+    selectBtn.style.marginTop = "0.4rem";
+    selectBtn.addEventListener("click", () => onSelect(currentPath));
+    container.appendChild(selectBtn);
+  }
+
+  await render();
 }

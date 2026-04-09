@@ -735,6 +735,22 @@ body {
 .btn-back:hover { color: var(--accent); }
 
 /* ---- Journal entries ---- */
+
+.journal-delete-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.8rem;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0.2rem;
+  transition: color 0.15s;
+}
+
+.journal-delete-btn:hover {
+  color: var(--danger);
+}
 .journal-entry {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -1072,6 +1088,54 @@ body {
 .skill-path-add {
   align-self: flex-start;
   margin-top: 0.2rem;
+}
+
+/* Folder picker */
+
+.folder-picker {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+  margin-top: 0.35rem;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.folder-picker-breadcrumb {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.3rem;
+  margin-bottom: 0.25rem;
+  background: var(--bg-surface);
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-item {
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 3px;
+  color: var(--text-primary);
+}
+
+.folder-picker-item:hover {
+  background: var(--border-subtle);
+}
+
+.folder-picker-up {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.folder-picker-empty {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  padding: 0.3rem 0.4rem;
 }
 
 .skill-dep-row {
