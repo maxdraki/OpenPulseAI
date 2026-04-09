@@ -1,35 +1,39 @@
 /**
- * Confirmation dialog using Shoelace's <sl-dialog>.
- * Always use this instead of window.confirm() or custom modals.
+ * Confirmation dialog using our own styling (consistent with the rest of the app).
+ * Always use this instead of window.confirm().
  */
 export function confirmDialog(message: string, onConfirm: () => void): void {
-  const dialog = document.createElement("sl-dialog") as any;
-  dialog.label = "Confirm";
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-overlay";
+
+  const box = document.createElement("div");
+  box.className = "confirm-box";
 
   const msg = document.createElement("p");
   msg.textContent = message;
-  msg.style.margin = "0";
-  dialog.appendChild(msg);
 
-  const cancelBtn = document.createElement("sl-button");
-  cancelBtn.setAttribute("slot", "footer");
-  cancelBtn.setAttribute("variant", "default");
+  const actions = document.createElement("div");
+  actions.className = "confirm-actions";
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "btn";
   cancelBtn.textContent = "Cancel";
 
-  const confirmBtn = document.createElement("sl-button");
-  confirmBtn.setAttribute("slot", "footer");
-  confirmBtn.setAttribute("variant", "danger");
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "btn btn-danger";
   confirmBtn.textContent = "Confirm";
 
-  cancelBtn.addEventListener("click", () => dialog.hide());
-  confirmBtn.addEventListener("click", () => {
-    dialog.hide();
-    onConfirm();
-  });
-  dialog.addEventListener("sl-after-hide", () => dialog.remove());
+  function close() { overlay.remove(); }
 
-  dialog.appendChild(cancelBtn);
-  dialog.appendChild(confirmBtn);
-  document.body.appendChild(dialog);
-  dialog.show();
+  cancelBtn.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  confirmBtn.addEventListener("click", () => { close(); onConfirm(); });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(confirmBtn);
+  box.appendChild(msg);
+  box.appendChild(actions);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  confirmBtn.focus();
 }
