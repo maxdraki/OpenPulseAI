@@ -7,6 +7,7 @@ import type { Vault } from "../vault.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillDefinition, CollectorState } from "../types.js";
 import { saveCollectorState } from "./scheduler.js";
+import { scanSkillForThreats } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,8 +63,30 @@ async function loadSkillConfig(
   return config;
 }
 
+function escapeForShell(value: string): string {
+  // Wrap in single quotes, escape internal single quotes
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
 function applyConfig(text: string, config: Record<string, string>): string {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => config[key] ?? `{{${key}}}`);
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const value = config[key];
+    if (value === undefined) return `{{${key}}}`;
+    return escapeForShell(value);
+  });
+}
+
+function filterEnv(skill: SkillDefinition): NodeJS.ProcessEnv {
+  const allowedEnvVars = new Set(skill.requires.env);
+  const sensitivePatterns = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
+  const safeEnv: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (allowedEnvVars.has(key) || !sensitivePatterns.test(key)) {
+      safeEnv[key] = value;
+    }
+  }
+  return safeEnv;
 }
 
 export async function runSkill(
@@ -78,6 +101,16 @@ export async function runSkill(
     const config = await loadSkillConfig(vault, skill);
     const body = applyConfig(skill.body, config);
 
+    const isBuiltin = skill.location.includes("builtin-skills");
+    const threats = scanSkillForThreats(body, isBuiltin);
+    if (!threats.clean && threats.findings.some(f => f.severity === "high")) {
+      const desc = threats.findings
+        .filter(f => f.severity === "high")
+        .map(f => f.description)
+        .join("; ");
+      throw new Error(`Skill "${skill.name}" blocked by security scanner: ${desc}`);
+    }
+
     const commands = extractShellCommands(body);
     const commandOutputs: Array<{ command: string; output: string; error?: string }> = [];
 
@@ -85,7 +118,7 @@ export async function runSkill(
       try {
         const { stdout, stderr } = await execFileAsync("bash", ["-c", cmd], {
           timeout: 30000,
-          env: process.env,
+          env: filterEnv(skill),
         });
         commandOutputs.push({
           command: cmd,
