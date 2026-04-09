@@ -1,0 +1,174 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { appendActivity } from "../hot.js";
+import type { Vault } from "../vault.js";
+import type { LlmProvider } from "../llm/provider.js";
+import type { SkillDefinition, CollectorState } from "../types.js";
+import { saveCollectorState } from "./scheduler.js";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Extract shell commands from a SKILL.md body.
+ * Looks for inline backtick commands and fenced code blocks.
+ */
+export function extractShellCommands(body: string): string[] {
+  const commands: string[] = [];
+
+  const inlineRegex = /`([^`]+)`/g;
+  let match;
+  while ((match = inlineRegex.exec(body)) !== null) {
+    const cmd = match[1].trim();
+    if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
+      if (!cmd.includes("(") && !cmd.includes("{") && !cmd.startsWith("//")) {
+        commands.push(cmd);
+      }
+    }
+  }
+
+  const fencedRegex = /```(?:bash|sh|shell)?\n([\s\S]*?)```/g;
+  while ((match = fencedRegex.exec(body)) !== null) {
+    const blockCommands = match[1]
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim() && !l.startsWith("#"));
+    commands.push(...blockCommands);
+  }
+
+  return commands;
+}
+
+async function loadSkillConfig(
+  vault: Vault,
+  skill: SkillDefinition
+): Promise<Record<string, string>> {
+  const config: Record<string, string> = {};
+
+  for (const field of skill.config ?? []) {
+    if (field.default) config[field.key] = field.default;
+  }
+
+  try {
+    const configPath = join(vault.root, "vault", "skill-config", `${skill.name}.json`);
+    const raw = await readFile(configPath, "utf-8");
+    const userConfig = JSON.parse(raw);
+    for (const [key, value] of Object.entries(userConfig)) {
+      if (typeof value === "string") config[key] = value;
+    }
+  } catch { /* no user config */ }
+
+  return config;
+}
+
+function applyConfig(text: string, config: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => config[key] ?? `{{${key}}}`);
+}
+
+export async function runSkill(
+  skill: SkillDefinition,
+  vault: Vault,
+  provider: LlmProvider,
+  model: string
+): Promise<CollectorState> {
+  const now = new Date();
+
+  try {
+    const config = await loadSkillConfig(vault, skill);
+    const body = applyConfig(skill.body, config);
+
+    const commands = extractShellCommands(body);
+    const commandOutputs: Array<{ command: string; output: string; error?: string }> = [];
+
+    for (const cmd of commands) {
+      try {
+        const { stdout, stderr } = await execFileAsync("bash", ["-c", cmd], {
+          timeout: 30000,
+          env: process.env,
+        });
+        commandOutputs.push({
+          command: cmd,
+          output: stdout.trim() || stderr.trim() || "(no output)",
+        });
+      } catch (e: any) {
+        commandOutputs.push({
+          command: cmd,
+          output: e.stdout?.trim() || "",
+          error: e.stderr?.trim() || e.message,
+        });
+      }
+    }
+
+    const commandContext = commandOutputs.length > 0
+      ? commandOutputs
+          .map((c) =>
+            `### Command: \`${c.command}\`\n${c.error ? `**Error:** ${c.error}\n` : ""}**Output:**\n${c.output}`
+          )
+          .join("\n\n")
+      : "(No shell commands were executed)";
+
+    const lookbackMs = parseLookback(skill.lookback);
+    const since = new Date(now.getTime() - lookbackMs);
+
+    const systemPrompt = [
+      `You are OpenPulse executing the skill "${skill.name}".`,
+      `Today's date: ${now.toISOString().slice(0, 10)}`,
+      `Lookback period: ${skill.lookback} (since ${since.toISOString().slice(0, 10)})`,
+      "",
+      "Follow the skill instructions below. The shell commands referenced in the instructions",
+      "have already been executed and their outputs are provided. Synthesize these outputs into",
+      "a clear, concise Markdown summary. Focus on what's actionable or status-relevant.",
+    ].join("\n");
+
+    const prompt = [
+      "## Skill Instructions\n",
+      body,
+      "\n\n## Command Outputs\n",
+      commandContext,
+    ].join("\n");
+
+    const response = await provider.complete({ model, prompt, systemPrompt });
+
+    if (response.trim()) {
+      await appendActivity(vault, {
+        timestamp: now.toISOString(),
+        log: response.trim(),
+        theme: "auto",
+        source: skill.name,
+      });
+    }
+
+    const state: CollectorState = {
+      skillName: skill.name,
+      lastRunAt: now.toISOString(),
+      lastStatus: "success",
+      entriesCollected: response.trim() ? 1 : 0,
+    };
+    await saveCollectorState(vault, state);
+    return state;
+  } catch (e: any) {
+    const state: CollectorState = {
+      skillName: skill.name,
+      lastRunAt: now.toISOString(),
+      lastStatus: "error",
+      lastError: e.message,
+      entriesCollected: 0,
+    };
+    await saveCollectorState(vault, state);
+    return state;
+  }
+}
+
+function parseLookback(lookback: string): number {
+  const match = lookback.match(/^(\d+)(h|d|w)$/);
+  if (!match) return 24 * 60 * 60 * 1000;
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  switch (unit) {
+    case "h": return value * 60 * 60 * 1000;
+    case "d": return value * 24 * 60 * 60 * 1000;
+    case "w": return value * 7 * 24 * 60 * 60 * 1000;
+    default: return 24 * 60 * 60 * 1000;
+  }
+}
