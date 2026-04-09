@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { checkEligibility } from "../src/eligibility.js";
-import type { SkillDefinition } from "@openpulse/core";
+import { checkEligibility } from "../../src/skills/eligibility.js";
+import type { SkillDefinition } from "../../src/index.js";
 
 function makeSkill(overrides: Partial<SkillDefinition> = {}): SkillDefinition {
   return {

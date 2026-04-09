@@ -10,8 +10,10 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { load as loadYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
+import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
+import { runSkillByName } from "../core/dist/skills/run.js";
+import { Vault } from "../core/dist/vault.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -290,85 +292,37 @@ app.get("/api/warm-themes", async (_req, res) => {
 
 app.get("/api/skills", async (_req, res) => {
   try {
-    // Discover skills from builtin + user dirs
-    const builtinDir = join(process.cwd(), "..", "skills", "builtin");
+    const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
     const userDir = join(VAULT_ROOT, "skills");
+    const discovered = await discoverSkills([builtinDir, userDir]);
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
 
-    const skills: any[] = [];
+    const skills = await Promise.all(discovered.map(async (skill) => {
+      const { eligible, missing } = await checkEligibility(skill);
+      const state = await loadSkillState(VAULT_ROOT, skill.name);
+      return {
+        name: skill.name,
+        description: skill.description,
+        schedule: skill.schedule ?? null,
+        lookback: skill.lookback ?? "24h",
+        requires: {
+          bins: skill.requires?.bins ?? [],
+          env: skill.requires?.env ?? [],
+        },
+        body: skill.body ?? "",
+        config: Array.isArray(skill.config) ? skill.config : [],
+        isBuiltin: skill.isBuiltin ?? false,
+        eligible,
+        missing,
+        lastRunAt: state?.lastRunAt ?? null,
+        lastStatus: state?.lastStatus ?? "never",
+        entriesCollected: state?.entriesCollected ?? 0,
+        lastError: state?.lastError,
+      };
+    }));
 
-    // Scan both directories
-    for (const dir of [builtinDir, userDir]) {
-      try {
-        const dirStat = await stat(dir).catch(() => null);
-        if (!dirStat || !dirStat.isDirectory()) continue;
-
-        const entries = await readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const skillFile = join(dir, entry.name, "SKILL.md");
-          try {
-            const content = await readFile(skillFile, "utf-8");
-            const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?/);
-            if (!fmMatch) continue;
-
-            const parsed = loadYaml(fmMatch[1]) as any;
-            if (!parsed?.name || !parsed?.description) continue;
-
-            const requires = parsed.requires ?? {};
-            const skill: any = {
-              name: parsed.name,
-              description: parsed.description,
-              schedule: parsed.schedule ?? null,
-              lookback: parsed.lookback ?? "24h",
-              requires: {
-                bins: requires.bins ?? [],
-                env: requires.env ?? [],
-              },
-              body: (fmMatch[2] ?? "").trim(),
-              config: Array.isArray(parsed.config) ? parsed.config : [],
-              isBuiltin: dir === builtinDir,
-              eligible: true,
-              missing: [] as string[],
-              lastRunAt: null,
-              lastStatus: "never",
-              entriesCollected: 0,
-            };
-
-            // Check eligibility
-            for (const bin of skill.requires.bins) {
-              try {
-                await execFileAsync("which", [bin], { timeout: 3000 });
-              } catch {
-                skill.eligible = false;
-                skill.missing.push(`bin: ${bin}`);
-              }
-            }
-            for (const env of skill.requires.env) {
-              if (!process.env[env]) {
-                skill.eligible = false;
-                skill.missing.push(`env: ${env}`);
-              }
-            }
-
-            // Merge collector state
-            try {
-              const stateRaw = await readFile(join(VAULT_ROOT, "vault", "collector-state", `${skill.name}.json`), "utf-8");
-              const state = JSON.parse(stateRaw);
-              skill.lastRunAt = state.lastRunAt;
-              skill.lastStatus = state.lastStatus;
-              skill.entriesCollected = state.entriesCollected;
-              skill.lastError = state.lastError;
-            } catch { /* no state yet */ }
-
-            skills.push(skill);
-          } catch { /* skip invalid skills */ }
-        }
-      } catch { /* dir doesn't exist */ }
-    }
-
-    // Deduplicate by name (user overrides builtin)
-    const skillMap = new Map(skills.map(s => [s.name, s]));
-    res.json(Array.from(skillMap.values()));
+    res.json(skills);
   } catch (e: any) {
     res.json([]);
   }
@@ -401,14 +355,10 @@ app.delete("/api/skills/:name", async (req, res) => {
 
 app.post("/api/skills/:name/run", async (req, res) => {
   try {
-    const skillsBin = join(process.cwd(), "..", "skills", "dist", "index.js");
-    const { stderr } = await execFileAsync("node", [skillsBin, "--run", req.params.name], {
-      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
-      timeout: 120000,
-    });
-    res.json({ output: stderr || "Skill completed." });
+    await runSkillByName(req.params.name, VAULT_ROOT);
+    res.json({ output: "Skill completed." });
   } catch (e: any) {
-    res.json({ output: e.stderr || e.message });
+    res.json({ output: e.message });
   }
 });
 
@@ -709,11 +659,7 @@ app.post("/api/install-dependency", async (req, res) => {
 
 const orchestratorCallbacks: OrchestratorCallbacks = {
   async runCollector(skillName: string): Promise<void> {
-    const skillsBin = join(process.cwd(), "..", "skills", "dist", "index.js");
-    await execFileAsync("node", [skillsBin, "--run", skillName], {
-      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
-      timeout: 120000,
-    });
+    await runSkillByName(skillName, VAULT_ROOT);
   },
   async runDreamPipeline(): Promise<void> {
     const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
@@ -723,28 +669,10 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
     });
   },
   async getSkillNames(): Promise<string[]> {
-    const builtinDir = join(process.cwd(), "..", "skills", "builtin");
+    const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
     const userDir = join(VAULT_ROOT, "skills");
-    const names: string[] = [];
-
-    for (const dir of [builtinDir, userDir]) {
-      try {
-        const dirStat = await stat(dir).catch(() => null);
-        if (!dirStat?.isDirectory()) continue;
-        const entries = await readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const skillFile = join(dir, entry.name, "SKILL.md");
-          try {
-            await stat(skillFile);
-            names.push(entry.name);
-          } catch { /* no SKILL.md */ }
-        }
-      } catch { /* dir doesn't exist */ }
-    }
-
-    // Deduplicate (user overrides builtin by same directory name)
-    return [...new Set(names)];
+    const skills = await discoverSkills([builtinDir, userDir]);
+    return skills.map(s => s.name);
   },
 };
 

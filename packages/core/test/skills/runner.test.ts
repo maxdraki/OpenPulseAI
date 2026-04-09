@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault } from "@openpulse/core";
-import type { LlmProvider, SkillDefinition } from "@openpulse/core";
-import { runSkill, extractShellCommands } from "../src/runner.js";
+import { Vault } from "../../src/vault.js";
+import type { LlmProvider, SkillDefinition } from "../../src/index.js";
+import { runSkill, extractShellCommands } from "../../src/skills/runner.js";
 
 function mockProvider(response: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(response) };
@@ -73,11 +73,9 @@ describe("runSkill", () => {
     expect(state.lastStatus).toBe("success");
     expect(state.entriesCollected).toBe(1);
 
-    // Verify provider was called with command output
     const callArgs = (provider.complete as any).mock.calls[0][0];
     expect(callArgs.prompt).toContain("hello world");
 
-    // Verify hot layer has the entry
     const today = new Date().toISOString().slice(0, 10);
     const hotContent = await readFile(vault.dailyLogPath(today), "utf-8");
     expect(hotContent).toContain("test-skill");

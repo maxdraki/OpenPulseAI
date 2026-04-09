@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadSkillsFromDir, loadSkillFromFile, parseFrontmatter } from "../src/loader.js";
+import { loadSkillsFromDir, loadSkillFromFile, parseFrontmatter } from "../../src/skills/loader.js";
 
 describe("Skill Loader", () => {
   let tempDir: string;

@@ -7,7 +7,36 @@ pnpm build
 
 echo "==> Building SEA sidecars..."
 bash scripts/build-sea.sh dream
-bash scripts/build-sea.sh skills
+# Skills CLI is now in core — bundle it directly with esbuild into dist/skills
+npx esbuild packages/core/dist/skills/cli.js \
+  --bundle \
+  --platform=node \
+  --target=node20 \
+  --format=cjs \
+  --outfile=dist/skills.cjs
+mkdir -p dist
+# Try SEA injection for skills
+cat > dist/skills-sea-config.json << EOF
+{
+  "main": "dist/skills.cjs",
+  "output": "dist/skills-sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}
+EOF
+if node --experimental-sea-config dist/skills-sea-config.json 2>/dev/null; then
+  cp "$(which node)" dist/skills
+  if npx postject dist/skills NODE_SEA_BLOB dist/skills-sea-prep.blob \
+      --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 2>/dev/null; then
+    rm -f dist/skills.cjs dist/skills-sea-config.json dist/skills-sea-prep.blob
+    echo "==> Built SEA binary: dist/skills"
+  else
+    rm -f dist/skills dist/skills-sea-prep.blob dist/skills-sea-config.json
+    echo "==> Built standalone bundle: dist/skills.cjs (SEA injection failed)"
+  fi
+else
+  rm -f dist/skills-sea-config.json dist/skills-sea-prep.blob 2>/dev/null
+  echo "==> Built standalone bundle: dist/skills.cjs"
+fi
 
 echo "==> Copying sidecars to src-tauri/sidecars/..."
 mkdir -p src-tauri/sidecars

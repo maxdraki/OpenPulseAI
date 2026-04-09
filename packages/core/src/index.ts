@@ -33,3 +33,9 @@ export {
   scheduleToCron,
   getLocalDate,
 } from "./orchestrator.js";
+export { parseFrontmatter, loadSkillFromFile, loadSkillsFromDir, discoverSkills } from "./skills/loader.js";
+export { extractShellCommands, runSkill } from "./skills/runner.js";
+export { isDue, loadCollectorState, saveCollectorState } from "./skills/scheduler.js";
+export { checkEligibility, type EligibilityResult } from "./skills/eligibility.js";
+export { runSkillByName, runDueSkills } from "./skills/run.js";
+export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./skills/security.js";

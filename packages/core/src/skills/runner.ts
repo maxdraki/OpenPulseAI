@@ -2,14 +2,12 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import {
-  appendActivity,
-  type Vault,
-  type LlmProvider,
-  type SkillDefinition,
-  type CollectorState,
-} from "@openpulse/core";
+import { appendActivity } from "../hot.js";
+import type { Vault } from "../vault.js";
+import type { LlmProvider } from "../llm/provider.js";
+import type { SkillDefinition, CollectorState } from "../types.js";
 import { saveCollectorState } from "./scheduler.js";
+import { scanSkillForThreats } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,21 +18,17 @@ const execFileAsync = promisify(execFile);
 export function extractShellCommands(body: string): string[] {
   const commands: string[] = [];
 
-  // Match inline backtick commands that look like shell: `command args`
   const inlineRegex = /`([^`]+)`/g;
   let match;
   while ((match = inlineRegex.exec(body)) !== null) {
     const cmd = match[1].trim();
-    // Filter: must contain a space (command + args) or start with common command chars
     if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
-      // Skip things that look like code references, not commands
       if (!cmd.includes("(") && !cmd.includes("{") && !cmd.startsWith("//")) {
         commands.push(cmd);
       }
     }
   }
 
-  // Match fenced code blocks: ```bash\ncommand\n```
   const fencedRegex = /```(?:bash|sh|shell)?\n([\s\S]*?)```/g;
   while ((match = fencedRegex.exec(body)) !== null) {
     const blockCommands = match[1]
@@ -47,22 +41,16 @@ export function extractShellCommands(body: string): string[] {
   return commands;
 }
 
-/**
- * Load user-configured values for a skill from vault/skill-config/<name>.json.
- * Returns a map of key → value, with defaults filled in from the skill definition.
- */
 async function loadSkillConfig(
   vault: Vault,
   skill: SkillDefinition
 ): Promise<Record<string, string>> {
   const config: Record<string, string> = {};
 
-  // Fill defaults
   for (const field of skill.config ?? []) {
     if (field.default) config[field.key] = field.default;
   }
 
-  // Override with user values
   try {
     const configPath = join(vault.root, "vault", "skill-config", `${skill.name}.json`);
     const raw = await readFile(configPath, "utf-8");
@@ -75,16 +63,32 @@ async function loadSkillConfig(
   return config;
 }
 
-/**
- * Replace {{key}} placeholders in a string with config values.
- */
-function applyConfig(text: string, config: Record<string, string>): string {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => config[key] ?? `{{${key}}}`);
+function escapeForShell(value: string): string {
+  // Wrap in single quotes, escape internal single quotes
+  return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
-/**
- * Execute a skill: extract shell commands, pre-run them, send outputs to LLM, write result to hot.
- */
+function applyConfig(text: string, config: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const value = config[key];
+    if (value === undefined) return `{{${key}}}`;
+    return escapeForShell(value);
+  });
+}
+
+function filterEnv(skill: SkillDefinition): NodeJS.ProcessEnv {
+  const allowedEnvVars = new Set(skill.requires.env);
+  const sensitivePatterns = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
+  const safeEnv: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (allowedEnvVars.has(key) || !sensitivePatterns.test(key)) {
+      safeEnv[key] = value;
+    }
+  }
+  return safeEnv;
+}
+
 export async function runSkill(
   skill: SkillDefinition,
   vault: Vault,
@@ -94,11 +98,19 @@ export async function runSkill(
   const now = new Date();
 
   try {
-    // 0. Load config and apply to skill body
     const config = await loadSkillConfig(vault, skill);
     const body = applyConfig(skill.body, config);
 
-    // 1. Extract and pre-execute shell commands (from config-substituted body)
+    const isBuiltin = skill.location.includes("builtin-skills");
+    const threats = scanSkillForThreats(body, isBuiltin);
+    if (!threats.clean && threats.findings.some(f => f.severity === "high")) {
+      const desc = threats.findings
+        .filter(f => f.severity === "high")
+        .map(f => f.description)
+        .join("; ");
+      throw new Error(`Skill "${skill.name}" blocked by security scanner: ${desc}`);
+    }
+
     const commands = extractShellCommands(body);
     const commandOutputs: Array<{ command: string; output: string; error?: string }> = [];
 
@@ -106,7 +118,7 @@ export async function runSkill(
       try {
         const { stdout, stderr } = await execFileAsync("bash", ["-c", cmd], {
           timeout: 30000,
-          env: process.env,
+          env: filterEnv(skill),
         });
         commandOutputs.push({
           command: cmd,
@@ -121,7 +133,6 @@ export async function runSkill(
       }
     }
 
-    // 2. Build prompt with command outputs
     const commandContext = commandOutputs.length > 0
       ? commandOutputs
           .map((c) =>
@@ -150,10 +161,8 @@ export async function runSkill(
       commandContext,
     ].join("\n");
 
-    // 3. Send to LLM
     const response = await provider.complete({ model, prompt, systemPrompt });
 
-    // 4. Write to hot layer
     if (response.trim()) {
       await appendActivity(vault, {
         timestamp: now.toISOString(),
@@ -163,7 +172,6 @@ export async function runSkill(
       });
     }
 
-    // 5. Save state
     const state: CollectorState = {
       skillName: skill.name,
       lastRunAt: now.toISOString(),

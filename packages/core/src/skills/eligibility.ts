@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { SkillDefinition } from "@openpulse/core";
+import type { SkillDefinition } from "../types.js";
 
 const execFileAsync = promisify(execFile);
 

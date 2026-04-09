@@ -35,7 +35,7 @@
       "sidecars/openpulse-skills"
     ],
     "resources": {
-      "../packages/skills/builtin/**/*": "builtin-skills/"
+      "../packages/core/builtin-skills/**/*": "builtin-skills/"
     }
   },
   "plugins": {

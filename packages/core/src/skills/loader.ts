@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { load } from "js-yaml";
-import type { SkillDefinition, SkillConfigField } from "@openpulse/core";
+import { parse } from "yaml";
+import type { SkillDefinition, SkillConfigField } from "../types.js";
 
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?/;
 
@@ -9,7 +9,7 @@ export function parseFrontmatter(
   content: string
 ): Omit<SkillDefinition, "location" | "body"> | null {
   try {
-    const parsed = load(content) as Record<string, unknown>;
+    const parsed = parse(content) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object") return null;
 
     const name = parsed.name;

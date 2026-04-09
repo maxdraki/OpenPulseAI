@@ -1,14 +1,17 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { CronExpressionParser } from "cron-parser";
-import type { Vault, CollectorState } from "@openpulse/core";
+import { Cron } from "croner";
+import type { CollectorState } from "../types.js";
+import type { Vault } from "../vault.js";
 
 export function isDue(schedule: string, lastRunAt: string | null, now: Date): boolean {
   if (!lastRunAt) return true;
   try {
-    const interval = CronExpressionParser.parse(schedule, { currentDate: new Date(lastRunAt) });
-    const nextRun = interval.next().toDate();
-    return now >= nextRun;
+    const job = new Cron(schedule, { paused: true });
+    const next = job.nextRun(new Date(lastRunAt));
+    job.stop();
+    if (!next) return true;
+    return next <= now;
   } catch {
     return true;
   }
