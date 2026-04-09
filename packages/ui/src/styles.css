@@ -961,6 +961,32 @@ body {
   font-size: 0.73rem;
 }
 
+.skill-config-panel {
+  margin: 0.3rem 0;
+}
+
+.skill-config-toggle {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.skill-config-toggle:hover {
+  color: var(--accent);
+}
+
+.skill-config-fields {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.25rem;
+}
+
 .skill-dep-row {
   display: flex;
   align-items: center;

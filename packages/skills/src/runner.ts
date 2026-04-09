@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   appendActivity,
@@ -46,6 +48,41 @@ export function extractShellCommands(body: string): string[] {
 }
 
 /**
+ * Load user-configured values for a skill from vault/skill-config/<name>.json.
+ * Returns a map of key → value, with defaults filled in from the skill definition.
+ */
+async function loadSkillConfig(
+  vault: Vault,
+  skill: SkillDefinition
+): Promise<Record<string, string>> {
+  const config: Record<string, string> = {};
+
+  // Fill defaults
+  for (const field of skill.config ?? []) {
+    if (field.default) config[field.key] = field.default;
+  }
+
+  // Override with user values
+  try {
+    const configPath = join(vault.root, "vault", "skill-config", `${skill.name}.json`);
+    const raw = await readFile(configPath, "utf-8");
+    const userConfig = JSON.parse(raw);
+    for (const [key, value] of Object.entries(userConfig)) {
+      if (typeof value === "string") config[key] = value;
+    }
+  } catch { /* no user config */ }
+
+  return config;
+}
+
+/**
+ * Replace {{key}} placeholders in a string with config values.
+ */
+function applyConfig(text: string, config: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => config[key] ?? `{{${key}}}`);
+}
+
+/**
  * Execute a skill: extract shell commands, pre-run them, send outputs to LLM, write result to hot.
  */
 export async function runSkill(
@@ -57,8 +94,12 @@ export async function runSkill(
   const now = new Date();
 
   try {
-    // 1. Extract and pre-execute shell commands
-    const commands = extractShellCommands(skill.body);
+    // 0. Load config and apply to skill body
+    const config = await loadSkillConfig(vault, skill);
+    const body = applyConfig(skill.body, config);
+
+    // 1. Extract and pre-execute shell commands (from config-substituted body)
+    const commands = extractShellCommands(body);
     const commandOutputs: Array<{ command: string; output: string; error?: string }> = [];
 
     for (const cmd of commands) {
@@ -104,7 +145,7 @@ export async function runSkill(
 
     const prompt = [
       "## Skill Instructions\n",
-      skill.body,
+      body,
       "\n\n## Command Outputs\n",
       commandContext,
     ].join("\n");

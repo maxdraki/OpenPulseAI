@@ -3,6 +3,7 @@ export type {
   OpenPulseConfig,
   LlmProviderName,
   ClassificationResult,
+  SkillConfigField,
   ThemeDocument,
   PendingUpdate,
   CollectorState,

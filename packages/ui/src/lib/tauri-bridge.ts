@@ -174,6 +174,7 @@ export interface SkillData {
   lookback: string;
   requires: { bins: string[]; env: string[] };
   body: string;
+  config: Array<{ key: string; label: string; default?: string; type?: string }>;
   eligible: boolean;
   missing: string[];
   lastRunAt: string | null;
@@ -186,6 +187,16 @@ export interface SkillData {
 export async function getSkills(): Promise<SkillData[]> {
   if (isTauri) return tauriInvoke("get_skills");
   return apiGet("/skills");
+}
+
+export async function getSkillConfig(name: string): Promise<Record<string, string>> {
+  if (isTauri) return tauriInvoke("get_skill_config", { name });
+  return apiGet(`/skill-config/${name}`);
+}
+
+export async function saveSkillConfig(name: string, config: Record<string, string>): Promise<void> {
+  if (isTauri) return tauriInvoke("save_skill_config", { name, config });
+  await apiPost(`/skill-config/${name}`, config);
 }
 
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {

@@ -56,6 +56,14 @@ export interface CollectorState {
   entriesCollected: number;
 }
 
+/** Skill config field declared in SKILL.md frontmatter */
+export interface SkillConfigField {
+  key: string;
+  label: string;
+  default?: string;
+  type?: "text" | "path";
+}
+
 /** Parsed skill from a SKILL.md file */
 export interface SkillDefinition {
   name: string;
@@ -68,6 +76,7 @@ export interface SkillDefinition {
     bins: string[];
     env: string[];
   };
+  config?: SkillConfigField[];
 }
 
 /** Multi-turn chat session */

@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { load } from "js-yaml";
-import type { SkillDefinition } from "@openpulse/core";
+import type { SkillDefinition, SkillConfigField } from "@openpulse/core";
 
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?/;
 
@@ -18,6 +18,19 @@ export function parseFrontmatter(
 
     const requires = parsed.requires as Record<string, unknown> | undefined;
 
+    // Parse config fields
+    const rawConfig = parsed.config as Array<Record<string, unknown>> | undefined;
+    const config: SkillConfigField[] | undefined = Array.isArray(rawConfig)
+      ? rawConfig
+          .filter((c) => typeof c?.key === "string" && typeof c?.label === "string")
+          .map((c) => ({
+            key: c.key as string,
+            label: c.label as string,
+            default: typeof c.default === "string" ? c.default : undefined,
+            type: (c.type === "path" ? "path" : "text") as "text" | "path",
+          }))
+      : undefined;
+
     return {
       name: name.replace(/[:\\/<>*?"|]/g, "-"),
       description,
@@ -27,6 +40,7 @@ export function parseFrontmatter(
         bins: Array.isArray(requires?.bins) ? requires.bins.filter((b): b is string => typeof b === "string") : [],
         env: Array.isArray(requires?.env) ? requires.env.filter((e): e is string => typeof e === "string") : [],
       },
+      config,
     };
   } catch {
     return null;

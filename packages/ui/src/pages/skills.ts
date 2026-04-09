@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 
@@ -267,6 +267,74 @@ function renderSkillCard(skill: SkillData): HTMLElement {
 
   card.appendChild(header);
   card.appendChild(desc);
+
+  // Config panel (if skill has config fields)
+  if (skill.config && skill.config.length > 0) {
+    const configPanel = document.createElement("div");
+    configPanel.className = "skill-config-panel";
+
+    const configTitle = document.createElement("button");
+    configTitle.className = "skill-config-toggle";
+    configTitle.textContent = "\u2699 Configure";
+
+    const configFields = document.createElement("div");
+    configFields.className = "skill-config-fields";
+    configFields.style.display = "none";
+
+    // Load existing config then build fields
+    getSkillConfig(skill.name).then((savedConfig) => {
+      for (const field of skill.config) {
+        const row = document.createElement("div");
+        row.className = "form-group";
+        row.style.marginBottom = "0.4rem";
+
+        const label = document.createElement("label");
+        label.className = "form-label";
+        label.style.fontSize = "0.78rem";
+        label.textContent = field.label;
+
+        const input = document.createElement("input");
+        input.className = "form-input";
+        input.style.fontSize = "0.82rem";
+        input.type = "text";
+        input.placeholder = field.default ?? "";
+        input.value = savedConfig[field.key] ?? field.default ?? "";
+        input.dataset.configKey = field.key;
+
+        row.appendChild(label);
+        row.appendChild(input);
+        configFields.appendChild(row);
+      }
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn btn-sm btn-primary";
+      saveBtn.textContent = "Save Config";
+      saveBtn.addEventListener("click", async () => {
+        const values: Record<string, string> = {};
+        configFields.querySelectorAll<HTMLInputElement>("input[data-config-key]").forEach((inp) => {
+          if (inp.value) values[inp.dataset.configKey!] = inp.value;
+        });
+        try {
+          await saveSkillConfig(skill.name, values);
+          log("info", `Config saved: ${skill.name}`, JSON.stringify(values));
+          saveBtn.textContent = "\u2713 Saved";
+          setTimeout(() => { saveBtn.textContent = "Save Config"; }, 1500);
+        } catch (e: any) {
+          log("error", `Config save failed: ${skill.name}`, String(e));
+        }
+      });
+      configFields.appendChild(saveBtn);
+    });
+
+    configTitle.addEventListener("click", () => {
+      configFields.style.display = configFields.style.display === "none" ? "" : "none";
+    });
+
+    configPanel.appendChild(configTitle);
+    configPanel.appendChild(configFields);
+    card.appendChild(configPanel);
+  }
+
   card.appendChild(meta);
 
   // Missing dependencies with fix buttons or hints

@@ -325,6 +325,7 @@ app.get("/api/skills", async (_req, res) => {
                 env: requires.env ?? [],
               },
               body: (fmMatch[2] ?? "").trim(),
+              config: Array.isArray(parsed.config) ? parsed.config : [],
               isBuiltin: dir === builtinDir,
               eligible: true,
               missing: [] as string[],
@@ -637,6 +638,33 @@ app.post("/api/claude-desktop-disconnect", async (_req, res) => {
       delete config.mcpServers.openpulse;
       await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
     }
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Skill config ---
+
+const skillConfigDir = join(VAULT_ROOT, "vault", "skill-config");
+
+app.get("/api/skill-config/:name", async (req, res) => {
+  try {
+    const raw = await readFile(join(skillConfigDir, `${req.params.name}.json`), "utf-8");
+    res.json(JSON.parse(raw));
+  } catch {
+    res.json({});
+  }
+});
+
+app.post("/api/skill-config/:name", async (req, res) => {
+  try {
+    await mkdir(skillConfigDir, { recursive: true });
+    await writeFile(
+      join(skillConfigDir, `${req.params.name}.json`),
+      JSON.stringify(req.body, null, 2),
+      "utf-8"
+    );
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
