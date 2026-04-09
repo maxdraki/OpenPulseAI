@@ -173,8 +173,8 @@ pub fn get_skills(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> R
                 .parent()
                 .unwrap()
                 .join("packages")
-                .join("skills")
-                .join("builtin")
+                .join("core")
+                .join("builtin-skills")
         });
 
     let user_dir = state.vault_root.join("skills");
