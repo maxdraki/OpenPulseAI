@@ -4,6 +4,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "openpulse-skills": "dist/skills/cli.js"
+  },
   "scripts": {
     "build": "tsc"
   },

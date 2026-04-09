@@ -37,3 +37,4 @@ export { parseFrontmatter, loadSkillFromFile, loadSkillsFromDir, discoverSkills 
 export { extractShellCommands, runSkill } from "./skills/runner.js";
 export { isDue, loadCollectorState, saveCollectorState } from "./skills/scheduler.js";
 export { checkEligibility, type EligibilityResult } from "./skills/eligibility.js";
+export { runSkillByName, runDueSkills } from "./skills/run.js";
