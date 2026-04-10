@@ -310,6 +310,70 @@ body {
   margin-bottom: 1.75rem;
 }
 
+.stat-grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* ---- Dashboard themes ---- */
+
+.dashboard-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-empty {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+}
+
+.dashboard-theme-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.35rem;
+  overflow: hidden;
+}
+
+.dashboard-theme-card:hover {
+  border-color: var(--border-default);
+}
+
+.dashboard-theme-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+}
+
+.dashboard-theme-chevron {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  width: 12px;
+  transition: transform 0.15s;
+}
+
+.dashboard-theme-name {
+  font-weight: 500;
+  font-size: 0.88rem;
+  color: var(--warm);
+  flex: 1;
+}
+
+.dashboard-theme-updated {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.dashboard-theme-content {
+  padding: 0 0.85rem 0.6rem;
+  font-size: 0.82rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .stat-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

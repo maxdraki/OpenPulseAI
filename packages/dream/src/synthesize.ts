@@ -45,14 +45,27 @@ export async function synthesizeToPending(
 ${existingSection}New activity entries:
 ${newEntriesText}
 
-Write an updated status document that:
-1. Incorporates the new entries into the existing content
-2. Uses the latest timestamp as the source of truth when entries conflict
-3. Removes duplicate information
-4. Is written in clear, concise Markdown
-5. Starts with a "## Current Status" heading
+Write an updated status document following these rules:
 
-Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries above. Remove anything you cannot trace back to a specific entry. If you are unsure whether something is real, leave it out.
+1. Start with "## Current Status" — a brief summary of the LATEST state
+2. PRESERVE all existing activity log entries from the current content — do NOT remove historical entries
+3. ADD the new entries as new dated sections in the activity log (most recent first)
+4. If a new entry updates or supersedes an older one, update the Current Status but KEEP the old activity log entry for history
+5. Remove only exact duplicates (same date, same content)
+6. Use clear, concise Markdown
+
+The document structure should be:
+## Current Status
+(brief summary of latest state)
+
+## Activity Log
+### [Date] — [Title]
+(details)
+### [Earlier Date] — [Earlier Title]
+(details)
+...
+
+Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries and existing content above. Remove anything you cannot trace back to a specific source. If you are unsure whether something is real, leave it out.
 
 Return ONLY the Markdown content, no fences or explanations.`,
       systemPrompt: `You are a precise factual summarizer. You MUST only include information that is explicitly present in the provided activity entries or existing content. NEVER invent, fabricate, or hallucinate any data including:
