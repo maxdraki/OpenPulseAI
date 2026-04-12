@@ -159,13 +159,15 @@ export async function runSkill(
     const since = new Date(now.getTime() - lookbackMs);
 
     const systemPrompt = [
-      `You are OpenPulse executing the skill "${skill.name}".`,
+      `You are a data collector summarising output from the "${skill.name}" skill.`,
+      `Your goal: produce a factual journal entry that captures what actually happened,`,
+      `so the user can later look back and understand their work activity.`,
       `Today's date: ${now.toISOString().slice(0, 10)}`,
       `Lookback period: ${skill.lookback} (since ${since.toISOString().slice(0, 10)})`,
       "",
-      "Follow the skill instructions below. The shell commands referenced in the instructions",
-      "have already been executed and their outputs are provided. Synthesize these outputs into",
-      "a clear, concise Markdown summary. Focus on what's actionable or status-relevant.",
+      "The shell commands below have already been executed and their outputs are provided.",
+      "Summarise ONLY what the command output shows. If a command returned no output,",
+      "say so briefly. Never invent data that isn't in the command output.",
     ].join("\n");
 
     const prompt = [
