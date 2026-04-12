@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog } from "@openpulse/core";
 import type { ActivityEntry } from "@openpulse/core";
@@ -36,6 +36,10 @@ async function main() {
 
   const pending = await synthesizeToPending(vault, classified, provider, model);
   console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
+
+  await generateIndex(vault);
+  const themeNames = pending.map((p) => p.theme).join(", ");
+  await appendLog(vault, "dream", `${entries.length} entries → ${pending.length} updates (${themeNames})`);
 
   await archiveProcessedHotFiles(vault);
   await vaultLog("info", "Dream pipeline complete", `${classified.length} entries → ${pending.length} pending update(s)`);
@@ -94,6 +98,76 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
   } catch { /* ingest dir may not exist */ }
 
   return entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+async function generateIndex(vault: Vault): Promise<void> {
+  const files = await readdir(vault.warmDir);
+  const themeFiles = files.filter(
+    (f) => f.endsWith(".md") && f !== "index.md" && f !== "log.md" && !f.startsWith("_")
+  );
+
+  type ThemeEntry = { name: string; summary: string; lastUpdated: string };
+  const themes: ThemeEntry[] = [];
+
+  for (const file of themeFiles) {
+    const content = await readFile(join(vault.warmDir, file), "utf-8");
+    const lines = content.split("\n");
+
+    // Extract lastUpdated from frontmatter
+    let lastUpdated = "";
+    if (lines[0] === "---") {
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i] === "---") break;
+        const match = lines[i].match(/^lastUpdated:\s*(.+)/);
+        if (match) { lastUpdated = match[1].trim(); break; }
+      }
+    }
+
+    // Extract first non-empty line after "## Current Status"
+    let summary = "";
+    const statusIdx = lines.findIndex((l) => l.trim() === "## Current Status");
+    if (statusIdx !== -1) {
+      for (let i = statusIdx + 1; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (trimmed && !trimmed.startsWith("#")) {
+          summary = trimmed.length > 100 ? trimmed.slice(0, 100) : trimmed;
+          break;
+        }
+      }
+    }
+
+    const name = file.replace(/\.md$/, "");
+    themes.push({ name, summary, lastUpdated });
+  }
+
+  // Sort by lastUpdated descending
+  themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+
+  const formatDate = (iso: string): string => {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    } catch {
+      return iso;
+    }
+  };
+
+  const listLines = themes
+    .map((t) => `- [[${t.name}]] — ${t.summary}${t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : ""}`)
+    .join("\n");
+
+  const now = new Date().toISOString();
+  const indexContent = `# OpenPulse Knowledge Base\n\n${listLines}\n\nLast updated: ${now} | ${themes.length} themes\n`;
+
+  await writeFile(join(vault.warmDir, "index.md"), indexContent, "utf-8");
+}
+
+async function appendLog(vault: Vault, type: string, detail: string): Promise<void> {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const line = `## [${timestamp}] ${type} | ${detail}\n`;
+  await appendFile(join(vault.warmDir, "log.md"), line, "utf-8");
 }
 
 main().catch((error) => {
