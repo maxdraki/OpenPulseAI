@@ -57,4 +57,27 @@ describe("Config", () => {
     expect(config.llm.model).toBe("gemini-2.0-flash");
   });
 
+  it("supports mistral provider", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `llm:\n  provider: mistral\n  model: mistral-large-latest\n  apiKey: test-key\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.llm.provider).toBe("mistral");
+    expect(config.llm.model).toBe("mistral-large-latest");
+  });
+
+  it("falls back to anthropic for unknown provider", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `llm:\n  provider: invalid-provider\n  model: some-model\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.llm.provider).toBe("anthropic");
+  });
+
 });

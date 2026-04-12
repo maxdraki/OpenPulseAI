@@ -65,7 +65,7 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
   // Secondary tags: scan for existing theme name mentions (word boundary)
   for (const theme of existingThemes) {
     if (tags.includes(theme)) continue;
-    const escaped = theme.replace(/[-]/g, "[-]");
+    const escaped = theme.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`\\b${escaped}\\b`, "i");
     if (re.test(log)) {
       tags.push(theme);
@@ -135,14 +135,29 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1", "name2"]}]`,
         temperature: 0,
       });
 
-      const parsed = JSON.parse(responseText) as Array<{ index: number; themes: string[] }>;
+      // Strip markdown fences that LLMs sometimes add
+      let jsonText = responseText.trim();
+      if (jsonText.startsWith("```")) {
+        jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      }
+
+      const parsed = JSON.parse(jsonText) as Array<{ index: number; themes: string[] }>;
+      const returnedIndexes = new Set<number>();
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
           results.push({ entry: needsLlm[p.index], themes: p.themes.slice(0, 3), confidence: 0.7 });
+          returnedIndexes.add(p.index);
         }
       }
-    } catch {
-      // LLM failed — classify under source or "uncategorized"
+
+      // Handle entries the LLM omitted from its response
+      for (let i = 0; i < needsLlm.length; i++) {
+        if (!returnedIndexes.has(i)) {
+          results.push({ entry: needsLlm[i], themes: [needsLlm[i].source ?? "uncategorized"], confidence: 0.3 });
+        }
+      }
+    } catch (err) {
+      console.error("[classify] LLM classification failed:", err);
       for (const entry of needsLlm) {
         results.push({
           entry,

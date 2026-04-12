@@ -436,7 +436,9 @@ function buildCollectorCard(
   runBtn.appendChild(document.createTextNode(" Run Now"));
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
-    runBtn.textContent = "Running…";
+    // Clear children safely, set running text
+    while (runBtn.firstChild) runBtn.removeChild(runBtn.firstChild);
+    runBtn.appendChild(document.createTextNode("Running\u2026"));
     try {
       await triggerOrchestratorRun(skillName);
       log("info", `Triggered run for ${skillName}`);
@@ -445,7 +447,10 @@ function buildCollectorCard(
       log("error", `Error triggering run for ${skillName}`, String(e));
     } finally {
       runBtn.disabled = false;
-      runBtn.textContent = "Run Now";
+      // Restore icon + text
+      while (runBtn.firstChild) runBtn.removeChild(runBtn.firstChild);
+      runBtn.appendChild(playSvg);
+      runBtn.appendChild(document.createTextNode(" Run Now"));
     }
   });
   meta.appendChild(runBtn);
@@ -468,9 +473,11 @@ function buildCollectorCard(
 // ─── Main render ─────────────────────────────────────────────────────────────
 
 let _pollInterval: ReturnType<typeof setInterval> | null = null;
+let _stopPolling: (() => void) | null = null;
 
 export async function renderSchedule(container: HTMLElement): Promise<void> {
-  // Clear any previous poll
+  // Clean up previous render's poll and listeners
+  if (_stopPolling) _stopPolling();
   if (_pollInterval !== null) {
     clearInterval(_pollInterval);
     _pollInterval = null;
@@ -601,7 +608,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
           try {
             await updateSchedule(skillName, [], true);
             log("info", `Added ${skillName} to orchestrator`);
-            refresh();
+            await refresh();
           } catch (e) {
             log("error", `Error adding ${skillName}`, String(e));
           }
@@ -734,15 +741,16 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
   // Poll every 30 seconds
   _pollInterval = setInterval(refresh, 30_000);
 
-  // Clear poll on navigation
-  function stopPolling() {
+  // Clear poll on navigation — store ref so next render can clean up
+  _stopPolling = () => {
     if (_pollInterval !== null) {
       clearInterval(_pollInterval);
       _pollInterval = null;
     }
-    window.removeEventListener("hashchange", stopPolling);
-    window.removeEventListener("popstate", stopPolling);
-  }
-  window.addEventListener("hashchange", stopPolling);
-  window.addEventListener("popstate", stopPolling);
+    window.removeEventListener("hashchange", _stopPolling!);
+    window.removeEventListener("popstate", _stopPolling!);
+    _stopPolling = null;
+  };
+  window.addEventListener("hashchange", _stopPolling);
+  window.addEventListener("popstate", _stopPolling);
 }

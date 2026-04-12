@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
@@ -56,5 +56,20 @@ describe("chat_with_pulse tool", () => {
     });
     const callArgs = (provider.complete as any).mock.calls[0][0];
     expect(callArgs.systemPrompt).toContain("Login page refactored");
+  });
+
+  it("uses index.md to find relevant themes when available", async () => {
+    // Write a second theme and an index.md
+    await writeTheme(vault, "hiring", "Hiring pipeline is active. 5 candidates in review.");
+    const indexContent = `# OpenPulse Knowledge Base\n\n- [[project-auth]] — Login page refactored\n- [[hiring]] — Hiring pipeline active\n`;
+    await writeFile(join(vault.warmDir, "index.md"), indexContent, "utf-8");
+
+    const provider = mockProvider("Hiring update.");
+    await handleChatWithPulse(vault, provider, "test-model", {
+      message: "What's happening with hiring?",
+    });
+    const callArgs = (provider.complete as any).mock.calls[0][0];
+    // Should load hiring theme via index lookup, not auth
+    expect(callArgs.systemPrompt).toContain("Hiring pipeline");
   });
 });

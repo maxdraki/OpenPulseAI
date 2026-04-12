@@ -15,16 +15,18 @@ const TRUSTED_DOMAINS = /github\.com|google\.com|googleapis\.com|api\.trello\.co
 function checkNetworkExfiltration(body: string): ThreatFinding[] {
   const findings: ThreatFinding[] = [];
   const networkTools = [
-    { pattern: /\bcurl\b\s+\S*https?:\/\/(\S+)/g, tool: "curl" },
-    { pattern: /\bwget\b\s+\S*https?:\/\/(\S+)/g, tool: "wget" },
+    { pattern: /\bcurl\b\s+.*?["']?https?:\/\/(\S+)/g, tool: "curl" },
+    { pattern: /\bwget\b\s+.*?["']?https?:\/\/(\S+)/g, tool: "wget" },
   ];
 
   for (const { pattern, tool } of networkTools) {
     let match;
     const re = new RegExp(pattern.source, pattern.flags);
     while ((match = re.exec(body)) !== null) {
-      const url = match[0];
-      if (!TRUSTED_DOMAINS.test(url)) {
+      // Extract hostname from capture group — don't test full match (bypassed via query params)
+      const captured = match[1] ?? "";
+      const hostname = captured.replace(/["']/g, "").split(/[/?#]/)[0];
+      if (!TRUSTED_DOMAINS.test(hostname)) {
         findings.push({
           severity: "high",
           category: "network_exfiltration",

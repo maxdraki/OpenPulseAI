@@ -1,9 +1,9 @@
 import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
+import { logoUrl } from "../lib/utils.js";
 
-const LOGO_TOKEN = "pk_LAYYrrRiTb2tIjkY-KCbMw";
-const logo = (domain: string) => `https://img.logo.dev/${domain}?token=${LOGO_TOKEN}&size=32&format=png`;
+const logo = (domain: string) => logoUrl(domain, 32);
 
 const PROVIDERS = [
   { id: "anthropic", name: "Anthropic", desc: "Claude models", needsKey: true, logo: logo("anthropic.com") },
@@ -28,13 +28,11 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     currentBaseUrl = config.baseUrl ?? "";
   } catch { /* use defaults */ }
 
-  // Remember the saved provider so we can restore credentials when switching back
   const savedProvider = currentProvider;
   const savedApiKey = currentApiKey;
   const savedBaseUrl = currentBaseUrl;
   const savedModel = currentModel;
 
-  // Build provider buttons using DOM methods (safe)
   const pageHeader = document.createElement("div");
   pageHeader.className = "page-header";
   const h2 = document.createElement("h2");
@@ -203,47 +201,34 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
-  // Wire save button with current credentials
-  function wireSaveButton() {
-    const saveBtn = document.getElementById("btn-save");
-    if (saveBtn) {
-      saveBtn.onclick = async () => {
-        await handleSave(currentProvider, currentApiKey, currentBaseUrl);
+  // Show model card with the given models and wire the save button
+  function showModelCard(models: ModelInfo[], selectedModel: string) {
+    populateModelDropdown(models, selectedModel);
+    const mc = document.getElementById("model-card");
+    if (mc) mc.style.display = "";
+    const btn = document.getElementById("btn-save");
+    if (btn) {
+      btn.onclick = async () => {
+        await handleSave(currentProvider);
       };
     }
   }
 
-  // If we have a saved key, auto-validate to populate the full model list
-  if (currentApiKey && currentProvider !== "ollama") {
-    const mc = document.getElementById("model-card");
+  // Auto-validate on load to populate the full model list
+  if (currentApiKey || currentProvider === "ollama") {
     try {
-      const result = await validateAndListModels(currentProvider, currentApiKey, currentBaseUrl);
+      const key = currentProvider === "ollama" ? undefined : currentApiKey;
+      const result = await validateAndListModels(currentProvider, key, currentBaseUrl);
       if (result.valid && result.models.length > 0) {
-        populateModelDropdown(result.models, currentModel);
-        if (mc) mc.style.display = "";
-        wireSaveButton();
+        showModelCard(result.models, currentModel);
       } else if (currentModel) {
-        populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
-        if (mc) mc.style.display = "";
-        wireSaveButton();
+        showModelCard([{ id: currentModel, name: currentModel }], currentModel);
       }
     } catch {
       if (currentModel) {
-        populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
-        if (mc) mc.style.display = "";
-        wireSaveButton();
+        showModelCard([{ id: currentModel, name: currentModel }], currentModel);
       }
     }
-  } else if (currentProvider === "ollama") {
-    const mc = document.getElementById("model-card");
-    try {
-      const result = await validateAndListModels("ollama", undefined, currentBaseUrl);
-      if (result.valid && result.models.length > 0) {
-        populateModelDropdown(result.models, currentModel);
-        if (mc) mc.style.display = "";
-        wireSaveButton();
-      }
-    } catch { /* ignore */ }
   }
 }
 
@@ -357,7 +342,7 @@ async function handleValidate(provider: string, currentModel: string): Promise<v
     // Wire up save button
     const saveBtn = document.getElementById("btn-save")!;
     saveBtn.onclick = async () => {
-      await handleSave(provider, apiKey, baseUrl);
+      await handleSave(provider);
     };
   } catch (e: any) {
     statusEl.textContent = `Error: ${e?.message ?? e}`;
@@ -391,17 +376,28 @@ function populateModelDropdown(models: ModelInfo[], currentModel: string): void 
   }
 }
 
-async function handleSave(provider: string, apiKey?: string, baseUrl?: string): Promise<void> {
+/** Read current credentials from the DOM so we never save stale closure values */
+function readCredentialsFromDOM(): { apiKey?: string; baseUrl?: string } {
+  const keyEl = document.getElementById("apikey-input") as HTMLInputElement | null;
+  const urlEl = document.getElementById("baseurl-input") as HTMLInputElement | null;
+  return {
+    apiKey: keyEl?.value || undefined,
+    baseUrl: urlEl?.value || undefined,
+  };
+}
+
+async function handleSave(provider: string): Promise<void> {
   const saveBtn = document.getElementById("btn-save") as HTMLButtonElement;
   const saveStatus = document.getElementById("save-status")!;
   const select = document.getElementById("model-select") as HTMLSelectElement;
   const model = select.value;
+  const { apiKey, baseUrl } = readCredentialsFromDOM();
 
   saveBtn.classList.add("loading");
   saveBtn.disabled = true;
 
   try {
-    await saveLlmSettings(provider, model, apiKey || undefined, baseUrl || undefined);
+    await saveLlmSettings(provider, model, apiKey, baseUrl);
     log("info", `Settings saved`, `${provider} / ${model}`);
     saveStatus.textContent = "Saved";
     saveStatus.className = "save-status success";
@@ -409,7 +405,7 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
     // Show test button
     const testBtn = document.getElementById("btn-test") as HTMLButtonElement;
     testBtn.style.display = "";
-    testBtn.onclick = () => handleTest(provider, model, apiKey, baseUrl);
+    testBtn.onclick = () => handleTest(provider, model);
 
     setTimeout(() => { saveStatus.textContent = ""; }, 2500);
   } catch (e: any) {
@@ -422,7 +418,8 @@ async function handleSave(provider: string, apiKey?: string, baseUrl?: string): 
   }
 }
 
-async function handleTest(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<void> {
+async function handleTest(provider: string, model: string): Promise<void> {
+  const { apiKey, baseUrl } = readCredentialsFromDOM();
   const testBtn = document.getElementById("btn-test") as HTMLButtonElement;
   const saveStatus = document.getElementById("save-status")!;
 

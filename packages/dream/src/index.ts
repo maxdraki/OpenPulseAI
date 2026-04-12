@@ -34,7 +34,14 @@ async function main() {
   const classified = await classifyEntries(entries, allThemes, provider, model);
   console.error(`[dream] Classified ${classified.length} entries.`);
 
-  const pending = await synthesizeToPending(vault, classified, provider, model);
+  let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
+  try {
+    pending = await synthesizeToPending(vault, classified, provider, model);
+  } catch (err) {
+    console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
+    await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
+    throw err;
+  }
   console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
 
   await generateIndex(vault);
@@ -107,13 +114,11 @@ export async function generateIndex(vault: Vault): Promise<void> {
   );
 
   type ThemeEntry = { name: string; summary: string; lastUpdated: string };
-  const themes: ThemeEntry[] = [];
 
-  for (const file of themeFiles) {
+  const themes = await Promise.all(themeFiles.map(async (file) => {
     const content = await readFile(join(vault.warmDir, file), "utf-8");
     const lines = content.split("\n");
 
-    // Extract lastUpdated from frontmatter
     let lastUpdated = "";
     if (lines[0] === "---") {
       for (let i = 1; i < lines.length; i++) {
@@ -123,7 +128,6 @@ export async function generateIndex(vault: Vault): Promise<void> {
       }
     }
 
-    // Extract first non-empty line after "## Current Status"
     let summary = "";
     const statusIdx = lines.findIndex((l) => l.trim() === "## Current Status");
     if (statusIdx !== -1) {
@@ -137,8 +141,8 @@ export async function generateIndex(vault: Vault): Promise<void> {
     }
 
     const name = file.replace(/\.md$/, "");
-    themes.push({ name, summary, lastUpdated });
-  }
+    return { name, summary, lastUpdated } as ThemeEntry;
+  }));
 
   // Sort by lastUpdated descending
   themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));

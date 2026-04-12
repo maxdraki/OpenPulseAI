@@ -2,10 +2,9 @@ import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, g
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, type FormField } from "../lib/dialog.js";
+import { logoUrl } from "../lib/utils.js";
 
-// Logo.dev CDN for service logos
-const LOGO_TOKEN = "pk_LAYYrrRiTb2tIjkY-KCbMw";
-const logo = (domain: string) => `https://img.logo.dev/${domain}?token=${LOGO_TOKEN}&size=48&format=png`;
+const logo = (domain: string) => logoUrl(domain, 48);
 
 // Catalog of known data sources
 const DATA_SOURCES = [
@@ -27,7 +26,8 @@ function describeCron(cron: string | null): string {
   const [min, hour, , , dow] = parts;
 
   const h = parseInt(hour);
-  const timeStr = `${h > 12 ? h - 12 : h}:${min.padStart(2, "0")}${h >= 12 ? "pm" : "am"}`;
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  const timeStr = `${h12}:${min.padStart(2, "0")}${h >= 12 ? "pm" : "am"}`;
 
   if (dow === "*" && parts[2] === "*" && parts[3] === "*") return `Daily at ${timeStr}`;
   if (dow === "1-5") return `Weekdays at ${timeStr}`;
@@ -268,7 +268,6 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
             fields,
             "Save & Connect",
             async (values) => {
-              if (Object.keys(values).length === 0) return;
               try {
                 await saveSkillConfig(ds.id, values);
                 log("info", `Data source configured: ${ds.name}`);
@@ -319,29 +318,6 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
   }
 
   container.appendChild(yourSection);
-}
-
-function renderSkillsList(container: HTMLElement, skills: SkillData[]): void {
-  container.textContent = "";
-
-  if (skills.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    const icon = document.createElement("div");
-    icon.className = "empty-state-icon";
-    icon.style.cssText = "background: rgba(96, 165, 250, 0.08); color: var(--accent);";
-    icon.textContent = "?";
-    const msg = document.createElement("p");
-    msg.textContent = "No skills found. Install one from GitHub or add a SKILL.md file to ~/OpenPulseAI/skills/";
-    empty.appendChild(icon);
-    empty.appendChild(msg);
-    container.appendChild(empty);
-    return;
-  }
-
-  for (const skill of skills) {
-    container.appendChild(renderSkillCard(skill));
-  }
 }
 
 function renderSkillCard(skill: SkillData): HTMLElement {

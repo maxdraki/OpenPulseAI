@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import type { OpenPulseConfig, LlmProviderName } from "./types.js";
 
-const VALID_PROVIDERS: LlmProviderName[] = ["anthropic", "openai", "gemini", "ollama"];
+const VALID_PROVIDERS: LlmProviderName[] = ["anthropic", "openai", "gemini", "mistral", "ollama"];
 
 export const DEFAULT_CONFIG: OpenPulseConfig = {
   vaultPath: "",

@@ -12,7 +12,7 @@ export function createProvider(config: OpenPulseConfig): LlmProvider {
     case "anthropic":
       return new AnthropicProvider(apiKey);
     case "openai":
-      return new OpenAIProvider(apiKey);
+      return new OpenAIProvider(apiKey, config.llm.baseUrl);
     case "gemini":
       if (!apiKey) throw new Error("Gemini requires an API key (set GEMINI_API_KEY or configure in settings)");
       return new GeminiProvider(apiKey);

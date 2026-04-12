@@ -20,6 +20,9 @@ const execFileAsync = promisify(execFile);
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = 3001;
 
+/** Guard against path traversal in :name params */
+const SAFE_NAME = /^[\w-]+$/;
+
 const PROVIDER_ENV_KEYS: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
@@ -405,6 +408,7 @@ app.post("/api/skills/install", async (req, res) => {
 });
 
 app.delete("/api/skills/:name", async (req, res) => {
+  if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
   const skillDir = join(VAULT_ROOT, "skills", req.params.name);
   try {
     await rm(skillDir, { recursive: true });
@@ -415,6 +419,7 @@ app.delete("/api/skills/:name", async (req, res) => {
 });
 
 app.post("/api/skills/:name/run", async (req, res) => {
+  if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
   try {
     await runSkillByName(req.params.name, VAULT_ROOT);
     res.json({ output: "Skill completed." });
@@ -499,10 +504,6 @@ app.post("/api/test-model", async (req, res) => {
   if (!provider || !model) return res.status(400).json({ success: false, error: "provider and model are required" });
 
   try {
-    // Set API key in env so createProvider can find it
-    const envVar = PROVIDER_ENV_KEYS[provider];
-    if (apiKey && envVar) process.env[envVar] = apiKey;
-
     const { createProvider } = await import("../core/dist/index.js");
     const llmProvider = createProvider({
       vaultPath: VAULT_ROOT,
@@ -689,6 +690,7 @@ app.get("/api/browse-dirs", async (req, res) => {
 const skillConfigDir = join(VAULT_ROOT, "vault", "skill-config");
 
 app.get("/api/skill-config/:name", async (req, res) => {
+  if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
   try {
     const raw = await readFile(join(skillConfigDir, `${req.params.name}.json`), "utf-8");
     res.json(JSON.parse(raw));
@@ -698,6 +700,7 @@ app.get("/api/skill-config/:name", async (req, res) => {
 });
 
 app.post("/api/skill-config/:name", async (req, res) => {
+  if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
   try {
     await mkdir(skillConfigDir, { recursive: true });
     await writeFile(

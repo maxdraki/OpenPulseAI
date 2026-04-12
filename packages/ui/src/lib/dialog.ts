@@ -12,6 +12,26 @@ export interface FormField {
   value?: string;     // pre-filled value
 }
 
+/** Trap Tab/Shift-Tab within a container */
+function trapFocus(container: HTMLElement): (e: KeyboardEvent) => void {
+  return (e: KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const focusable = container.querySelectorAll<HTMLElement>(
+      'input, button, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+}
+
 export function formDialog(
   title: string,
   description: string,
@@ -39,6 +59,8 @@ export function formDialog(
 
   const form = document.createElement("div");
   form.className = "modal-form";
+
+  let errorEl: HTMLElement | null = null;
 
   for (const field of fields) {
     const group = document.createElement("div");
@@ -74,17 +96,42 @@ export function formDialog(
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = saveLabel;
 
-  function close() { overlay.remove(); }
+  function close() {
+    document.removeEventListener("keydown", focusTrap);
+    overlay.remove();
+  }
 
-  cancelBtn.addEventListener("click", close);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  saveBtn.addEventListener("click", () => {
+  function doSave() {
     const values: Record<string, string> = {};
     form.querySelectorAll<HTMLInputElement>("input[data-key]").forEach((inp) => {
       if (inp.value.trim()) values[inp.dataset.key!] = inp.value.trim();
     });
+    if (Object.keys(values).length === 0) {
+      // Show validation error instead of silently closing
+      if (!errorEl) {
+        errorEl = document.createElement("p");
+        errorEl.style.cssText = "color: var(--danger); font-size: 0.8rem; margin: 0.4rem 0 0;";
+        form.appendChild(errorEl);
+      }
+      errorEl.textContent = "Please fill in at least one field.";
+      return;
+    }
     close();
     onSave(values);
+  }
+
+  cancelBtn.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  saveBtn.addEventListener("click", doSave);
+
+  // Enter to submit from any input
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); doSave(); }
+  });
+
+  // Escape to close
+  overlay.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close();
   });
 
   actions.appendChild(cancelBtn);
@@ -92,6 +139,10 @@ export function formDialog(
   box.appendChild(actions);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
+
+  // Focus trap
+  const focusTrap = trapFocus(box);
+  document.addEventListener("keydown", focusTrap);
 
   // Focus first input
   const firstInput = form.querySelector("input") as HTMLInputElement | null;
@@ -123,10 +174,14 @@ export function confirmDialog(message: string, onConfirm: () => void): void {
   confirmBtn.className = "btn btn-danger";
   confirmBtn.textContent = "Confirm";
 
-  function close() { overlay.remove(); }
+  function close() {
+    document.removeEventListener("keydown", focusTrap);
+    overlay.remove();
+  }
 
   cancelBtn.addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
   confirmBtn.addEventListener("click", () => { close(); onConfirm(); });
 
   actions.appendChild(cancelBtn);
@@ -135,5 +190,10 @@ export function confirmDialog(message: string, onConfirm: () => void): void {
   box.appendChild(actions);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
+
+  // Focus trap
+  const focusTrap = trapFocus(box);
+  document.addEventListener("keydown", focusTrap);
+
   confirmBtn.focus();
 }

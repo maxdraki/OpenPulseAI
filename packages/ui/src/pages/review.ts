@@ -93,10 +93,10 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         approveAllBtn.addEventListener("click", async () => {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          for (const u of batchUpdates) {
-            await approveUpdate(u.id);
-          }
-          log("info", `Approved batch: ${batchKey}`);
+          const results = await Promise.allSettled(batchUpdates.map((u) => approveUpdate(u.id)));
+          const failed = results.filter((r) => r.status === "rejected").length;
+          if (failed) log("error", `Approved batch with ${failed} failure(s): ${batchKey}`);
+          else log("info", `Approved batch: ${batchKey}`);
           await loadPending(listEl);
           updateReviewBadge();
         });
@@ -104,10 +104,10 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         rejectAllBtn.addEventListener("click", async () => {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          for (const u of batchUpdates) {
-            await rejectUpdate(u.id);
-          }
-          log("info", `Rejected batch: ${batchKey}`);
+          const results = await Promise.allSettled(batchUpdates.map((u) => rejectUpdate(u.id)));
+          const failed = results.filter((r) => r.status === "rejected").length;
+          if (failed) log("error", `Rejected batch with ${failed} failure(s): ${batchKey}`);
+          else log("info", `Rejected batch: ${batchKey}`);
           await loadPending(listEl);
           updateReviewBadge();
         });
@@ -252,10 +252,14 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
 
   // Reject
   rejectBtn.addEventListener("click", async () => {
-    await rejectUpdate(update.id);
-    log("info", `Rejected update: ${update.theme}`);
-    await loadPending(listEl);
-    updateReviewBadge();
+    try {
+      await rejectUpdate(update.id);
+      log("info", `Rejected update: ${update.theme}`);
+      await loadPending(listEl);
+      updateReviewBadge();
+    } catch (e: any) {
+      log("error", `Failed to reject: ${update.theme}`, String(e));
+    }
   });
 
   return card;

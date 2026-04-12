@@ -48,11 +48,8 @@ export async function handleChatWithPulse(
     });
 
     if (relevant.length > 0) {
-      allThemes = [];
-      for (const name of relevant) {
-        const theme = await readTheme(vault, name);
-        if (theme) allThemes.push(theme);
-      }
+      const loaded = await Promise.all(relevant.map((name) => readTheme(vault, name)));
+      allThemes = loaded.filter((t): t is ThemeDocument => t !== null);
     }
   } catch { /* index.md doesn't exist yet */ }
 
