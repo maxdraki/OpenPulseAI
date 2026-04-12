@@ -198,11 +198,14 @@ export async function renderDataSources(container: HTMLElement): Promise<void> {
 function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
   container.textContent = "";
 
-  // A source is "Connected" only if it has been successfully run at least once
+  // Connected = eligible AND has run successfully
+  // Ready = eligible AND hasn't run yet (no config issues)
+  // Setup needed = NOT eligible (missing deps, config, or env)
   const connectedIds = new Set(
-    skills
-      .filter((s) => s.eligible && s.lastStatus === "success")
-      .map((s) => s.name)
+    skills.filter((s) => s.eligible && s.lastStatus === "success").map((s) => s.name)
+  );
+  const readyIds = new Set(
+    skills.filter((s) => s.eligible && s.lastStatus !== "success").map((s) => s.name)
   );
 
   // ── Catalog section ──
@@ -262,8 +265,8 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
         const target = document.getElementById(`skill-card-${ds.id}`);
         if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
-    } else if (matchedSkill && matchedSkill.eligible) {
-      // Eligible but not yet run
+    } else if (matchedSkill && readyIds.has(ds.id) && (!matchedSkill.config || matchedSkill.config.length === 0)) {
+      // Eligible, no config needed, just hasn't run yet
       const badge = document.createElement("span");
       badge.className = "ds-catalog-badge ds-catalog-badge--ready";
       badge.textContent = "Ready";
@@ -272,8 +275,8 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
         const target = document.getElementById(`skill-card-${ds.id}`);
         if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
-    } else if (matchedSkill && !matchedSkill.eligible) {
-      // Needs setup (missing deps or config)
+    } else if (matchedSkill) {
+      // Has config fields that need filling, or missing deps
       const badge = document.createElement("span");
       badge.className = "ds-catalog-badge ds-catalog-badge--setup";
       badge.textContent = "Setup needed";

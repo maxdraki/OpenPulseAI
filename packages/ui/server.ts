@@ -338,8 +338,29 @@ app.get("/api/skills", async (_req, res) => {
     await vault.init();
 
     const skills = await Promise.all(discovered.map(async (skill) => {
-      const { eligible, missing } = await checkEligibility(skill);
-      const state = await loadSkillState(VAULT_ROOT, skill.name);
+      let { eligible, missing } = await checkEligibility(skill);
+      const state = await loadSkillState(vault, skill.name);
+
+      // Check config: if skill has config fields WITHOUT defaults, verify they're saved
+      const configFields = Array.isArray(skill.config) ? skill.config : [];
+      const fieldsNeedingInput = configFields.filter((f: any) => !f.default);
+      if (eligible && fieldsNeedingInput.length > 0) {
+        let saved: Record<string, string> = {};
+        try {
+          const configPath = join(VAULT_ROOT, "vault", "skill-config", `${skill.name}.json`);
+          const raw = await readFile(configPath, "utf-8");
+          saved = JSON.parse(raw);
+        } catch { /* no saved config */ }
+
+        for (const f of fieldsNeedingInput) {
+          const key = (f as any).key;
+          if (!saved[key]) {
+            eligible = false;
+            missing.push(`config: ${key}`);
+          }
+        }
+      }
+
       return {
         name: skill.name,
         description: skill.description,
@@ -350,7 +371,7 @@ app.get("/api/skills", async (_req, res) => {
           env: skill.requires?.env ?? [],
         },
         body: skill.body ?? "",
-        config: Array.isArray(skill.config) ? skill.config : [],
+        config: configFields,
         isBuiltin: skill.location.includes("builtin-skills"),
         eligible,
         missing,
