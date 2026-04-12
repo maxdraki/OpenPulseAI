@@ -10,89 +10,98 @@
 <h1 align="center">OpenPulseAI</h1>
 
 <p align="center">
-  <strong>Your AI-powered Digital Twin. Local-first. MCP-native. Skill-driven.</strong>
+  <strong>Your AI-powered work journal and knowledge base. Local-first. MCP-native.</strong>
 </p>
 
 <p align="center">
-  <a href="#status">Status</a> &bull;
   <a href="#what-is-this">What is this?</a> &bull;
   <a href="#architecture">Architecture</a> &bull;
   <a href="#getting-started">Getting Started</a> &bull;
   <a href="#skills">Skills</a> &bull;
+  <a href="#inspiration">Inspiration</a> &bull;
   <a href="#license">License</a>
 </p>
 
 ---
 
-## Status
-
-> **Work in Progress / Experimental**
->
-> OpenPulse is under active development. APIs will change, features are incomplete, and things will break. Contributions and feedback welcome, but don't depend on this for anything critical yet.
-
 ## What is this?
 
-OpenPulse eliminates the **Developer Status Tax** — the constant drain of context-switching to tell people what you're working on.
+OpenPulse automatically tracks your work across projects and builds a persistent, curated knowledge base — a wiki that maintains itself.
 
 It works like this:
 
-1. **AI agents report to OpenPulse** as you work. Claude Code, Cursor, or any MCP-compatible tool calls `record_activity` to log what was done.
+1. **Collectors gather data on a schedule.** GitHub commits, file changes, and other sources feed into daily journal entries. You configure what to watch and when.
 
-2. **Skills pull from external sources** on a schedule. Gmail, Calendar, GitHub — any CLI tool or MCP server can feed data into OpenPulse via [AgentSkills.io](https://agentskills.io)-compatible SKILL.md files.
+2. **The Dream Pipeline synthesizes** journals into wiki-style theme pages using your choice of LLM. Each entry can update multiple themes with `[[cross-references]]` between them.
 
-3. **The Dream Pipeline synthesizes** raw activity into curated, thematic summaries using your choice of LLM (Anthropic, OpenAI, or Gemini).
+3. **You approve everything.** Batch review with Approve All / Reject All. Nothing enters the knowledge base without your sign-off.
 
-4. **You approve everything** before it becomes queryable. Nothing reaches your Digital Twin without your review.
-
-5. **Stakeholders query your proxy** — via Claude Desktop, a Slack bot, or any MCP client — and get accurate, grounded answers without interrupting you.
+4. **Query your knowledge base** — via Claude Desktop, Claude Code, or any MCP client — and get accurate, grounded answers about what you've been working on.
 
 ```
-AI Agents ──→ record_activity ──→ Hot Layer ──→ Dream Pipeline ──→ Warm Layer
-Skills    ──→ (scheduled)    ──→ Hot Layer      ↓                    ↓
-                                              _pending/        query_memory
-                                                ↓              chat_with_pulse
-                                           UI Approval              ↓
-                                                            "What's the status
-                                                             of the auth project?"
+Collectors ──→ Journals (hot) ──→ Dream Pipeline ──→ Theme Pages (warm)
+  GitHub         daily logs        classify (deterministic)    wiki-style
+  Files          raw activity      synthesize (LLM)           cross-referenced
+  (scheduled)                      index.md + log.md          queryable via MCP
+                                   batch review
 ```
+
+The key insight (from [Karpathy's LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)): the tedious part of maintaining a knowledge base isn't the reading or thinking — it's the bookkeeping. LLMs handle the cross-referencing, summarizing, and maintenance. You curate sources and ask questions.
 
 ## Architecture
 
 ```
 packages/
-├── core/           # Vault I/O, config, BYO LLM provider abstraction
-├── mcp-server/     # MCP tools: record_activity, query_memory, chat_with_pulse, submit_update
-├── dream/          # Dream Pipeline: classify → synthesize → approve → archive
-├── skills/         # Skill runner: discover SKILL.md files, execute on schedule
-└── ui/             # Tauri-ready Control Center (Vite + Shoelace + DM Sans)
+├── core/           # Vault I/O, LLM providers, skills system, orchestrator, security
+├── mcp-server/     # MCP tools: record_activity, query_memory, chat_with_pulse
+├── dream/          # Dream Pipeline: classify → synthesize → index → review
+├── ui/             # Control Center (Vite + vanilla TS) with dev API server
+└── src-tauri/      # Tauri v2 desktop wrapper (Rust backend)
 ```
 
 ### The Vault
 
-All data lives in human-readable Markdown files. No database.
+All data lives in human-readable Markdown files at `~/OpenPulseAI/vault/`. No database.
 
 | Layer | Path | Purpose |
 |-------|------|---------|
-| **Hot** | `vault/hot/` | Raw chronological logs — the write-ahead layer |
-| **Warm** | `vault/warm/` | Curated theme files — the source of truth |
-| **Pending** | `vault/warm/_pending/` | AI-proposed updates awaiting your approval |
-| **Cold** | `vault/cold/` | Monthly archives of processed hot entries |
+| **Journals** | `vault/hot/` | Daily activity logs from collectors |
+| **Themes** | `vault/warm/` | Curated wiki pages — the knowledge base |
+| **Index** | `vault/warm/index.md` | Auto-generated catalog of all themes |
+| **Log** | `vault/warm/log.md` | Append-only record of pipeline activity |
+| **Pending** | `vault/warm/_pending/` | AI-proposed updates awaiting review |
+| **Archive** | `vault/cold/` | Monthly archives of processed journals |
 
 ### BYO LLM
 
-OpenPulse doesn't lock you into a provider. Configure in `config.yaml`:
+Configure in Settings or `config.yaml`. Live API validation — enter your key, validate, pick a model:
 
-| Provider | Config | Env var |
-|----------|--------|---------|
-| Anthropic (Claude) | `provider: anthropic` | `ANTHROPIC_API_KEY` |
-| OpenAI (GPT) | `provider: openai` | `OPENAI_API_KEY` |
-| Google (Gemini) | `provider: gemini` | `GEMINI_API_KEY` |
+| Provider | Models |
+|----------|--------|
+| Anthropic (Claude) | API key validated, model list fetched live |
+| OpenAI (GPT) | API key validated, chat models filtered |
+| Google (Gemini) | API key validated, generateContent models |
+| Ollama (local) | No key needed, configurable base URL |
+
+### Dream Pipeline
+
+The pipeline follows a wiki-style incremental update pattern:
+
+1. **Pre-filter**: Strip "no activity" noise before the LLM sees it
+2. **Classify** (deterministic first): Extract projects from file paths, repo names, headings. LLM fallback only for ambiguous entries. Multi-tag: each entry can update 1-3 themes.
+3. **Synthesize**: One LLM call per affected theme. Receives existing content + new entries + all theme names for `[[cross-references]]`. Temperature 0.1 for factual output.
+4. **Generate**: `index.md` (deterministic catalog) and `log.md` (append-only record)
+5. **Review**: Batch pending updates with shared `batchId`. Approve All / Reject All.
+
+### Orchestrator
+
+Visual Schedule page with time pickers and day selectors. Barrier pattern: dream pipeline auto-triggers when all enabled collectors have run since the last dream. Missed-run detection on startup.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 20+ (22+ recommended for [SEA builds](#single-executable))
+- Node.js 20+ (22+ for SEA builds)
 - pnpm
 
 ### Install
@@ -104,78 +113,44 @@ pnpm install
 pnpm build
 ```
 
-### Initialize the vault
+### Run the Control Center
 
 ```bash
-mkdir -p ~/OpenPulseAI/vault/{hot/ingest,warm/_pending,cold,sessions}
-mkdir -p ~/OpenPulseAI/skills
-
-cat > ~/OpenPulseAI/config.yaml << 'EOF'
-themes:
-  - project-auth
-  - hiring
-  - infrastructure
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-5-20250929
-EOF
+cd packages/ui
+pnpm dev    # Starts API server on :3001 + Vite on :1420
 ```
 
-### Configure Claude Desktop / Claude Code
+Open `http://localhost:1420`. Go to **Settings** to configure your LLM provider, then **Skills** to see available collectors.
 
-Add to your MCP server config:
+### Connect Claude Desktop
+
+Go to **Settings → Connections** and click **Connect** next to Claude Desktop. Or manually add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "openpulse": {
       "command": "node",
-      "args": ["/path/to/OpenPulseAI/packages/mcp-server/dist/index.js"],
-      "env": { "OPENPULSE_VAULT": "/home/you/OpenPulseAI" }
+      "args": ["/path/to/OpenPulseAI/packages/mcp-server/dist/index.js"]
     }
   }
 }
 ```
 
-### Run the Control Center
-
-```bash
-cd packages/ui
-pnpm dev    # Starts API server + Vite at http://localhost:1420
-```
-
-### Run the Dream Pipeline
-
-```bash
-ANTHROPIC_API_KEY=sk-... node packages/dream/dist/index.js
-```
-
-### Run skills
-
-```bash
-node packages/skills/dist/index.js --list     # See installed skills
-node packages/skills/dist/index.js --run weekly-rollup   # Run a specific skill
-```
-
 ## Skills
 
-OpenPulse uses the [AgentSkills.io](https://agentskills.io) open standard. Skills are SKILL.md files — natural language instructions that the LLM executes using available CLI tools.
+Skills are [AgentSkills.io](https://agentskills.io)-compatible SKILL.md files. Natural language instructions that the LLM executes using CLI tools.
 
 ### Bundled skills
 
 | Skill | Requires | Schedule | Description |
 |-------|----------|----------|-------------|
-| `google-daily-digest` | [gogcli](https://gogcli.sh) | Daily 10pm | Gmail + Calendar summary |
-| `github-activity` | [gh](https://cli.github.com) | Weekdays 6pm | PRs, reviews, commits |
-| `weekly-rollup` | — | Manual | Synthesize warm themes into a weekly status |
+| `github-activity` | [gh](https://cli.github.com) | Configurable | Commits, PRs, reviews, issues, notifications |
+| `folder-watcher` | find | Configurable | Track file changes across project directories |
+| `google-daily-digest` | gogcli + auth | Configurable | Gmail + Calendar summary |
+| `weekly-rollup` | — | Manual | Synthesize themes into a weekly status |
 
-### Install from registry
-
-```bash
-cd ~/OpenPulseAI && npx skillsadd owner/repo
-```
-
-Or use the Skills page in the Control Center.
+Skills have configurable settings (watch paths, accounts) via the UI. Dependencies can be installed with one click.
 
 ### Write your own
 
@@ -185,56 +160,55 @@ Create `~/OpenPulseAI/skills/my-skill/SKILL.md`:
 ---
 name: my-skill
 description: What this skill does
-schedule: "0 22 * * *"    # optional — omit for manual-only
+schedule: "0 22 * * *"
 lookback: 24h
 requires:
   bins: [some-cli]
-  env: [SOME_API_KEY]
+config:
+  - key: target_url
+    label: URL to monitor
+    default: https://example.com
+    type: text
 ---
 
 ## Instructions
 
-1. Run `some-cli fetch --since yesterday --json` to get data
+1. Run `some-cli fetch --url {{target_url}} --since yesterday --json`
 2. Summarize the key findings
-3. Focus on what's actionable
-```
-
-OpenPulse discovers it automatically. The LLM executes the shell commands, synthesizes the output, and writes it to your hot layer for the Dream Pipeline to process.
-
-### Single executable
-
-Build self-contained binaries (requires Node.js from nodejs.org, not distro packages):
-
-```bash
-pnpm build
-pnpm build:sea:mcp      # → dist/mcp-server
-pnpm build:sea:dream     # → dist/dream
 ```
 
 ## MCP Tools
 
-| Tool | Direction | Description |
-|------|-----------|-------------|
-| `record_activity` | Inbound | Log what an AI agent just did |
-| `ingest_document` | Inbound | Save a Markdown doc for processing |
-| `submit_update` | Inbound | Push a status update from an external source |
-| `query_memory` | Outbound | Search warm layer for status information |
-| `chat_with_pulse` | Outbound | Multi-turn conversation with your Digital Twin |
+| Tool | Description |
+|------|-------------|
+| `record_activity` | Log what an AI agent just did |
+| `ingest_document` | Save a Markdown doc for processing |
+| `submit_update` | Push a status update from an external source |
+| `query_memory` | Search themes for status information |
+| `chat_with_pulse` | Conversation with your knowledge base (uses index.md for targeted loading) |
 
-## Project status
+## Inspiration
+
+OpenPulse draws from [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — the idea that LLMs should incrementally build and maintain a persistent wiki rather than rediscovering knowledge from scratch on every query. The wiki is a persistent, compounding artifact. The human curates sources and asks questions; the LLM does the bookkeeping.
+
+## Project Status
 
 - [x] Core vault (hot/warm/cold layers)
-- [x] MCP server (5 tools)
-- [x] Dream Pipeline (classify, synthesize, approve, archive)
-- [x] BYO LLM (Anthropic, OpenAI, Gemini)
-- [x] Control Center UI (Dashboard, Review, Skills, Settings)
-- [x] Skills system (AgentSkills.io compatible)
-- [x] SEA build scripts
-- [ ] Tauri desktop wrapper (frontend works, Rust backend pending)
-- [ ] Slack/Teams bot integration
-- [ ] Embedding-based search for query_memory
-- [ ] Skill-to-skill composition
-- [ ] End-to-end encryption
+- [x] MCP server (stdio + HTTPS transports, 5 tools)
+- [x] Wiki-style Dream Pipeline (multi-tag classify, cross-references, index.md, log.md)
+- [x] BYO LLM (Anthropic, OpenAI, Gemini, Ollama)
+- [x] Control Center UI (Dashboard, Review, Skills, Schedule, Logs, Settings, Help)
+- [x] Skills system with security scanner, config system, one-click dependency install
+- [x] Orchestrator with visual scheduler and barrier-based auto-triggering
+- [x] Tauri v2 desktop wrapper (Rust backend built, needs E2E testing)
+- [x] One-click Claude Desktop connection
+- [x] Light/dark/system theme toggle
+- [ ] Theme lint/health check
+- [ ] System tray (Tauri)
+- [ ] AI-guided skill setup
+- [ ] Notifications
+
+See [TODO.md](TODO.md) for full backlog.
 
 ## License
 

@@ -28,7 +28,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
   const sections = [
     {
       title: "What is OpenPulse?",
-      body: `OpenPulse is your Digital Twin proxy. AI agents report activity into your vault, skills pull data from external sources on schedules, and an LLM synthesizes everything into curated summaries. Stakeholders can query your proxy without interrupting you.`,
+      body: `OpenPulse automatically tracks your work across projects and builds a persistent, curated knowledge base. Collectors gather data from GitHub, file systems, and other sources on a schedule. The Dream Pipeline synthesizes journal entries into wiki-style theme pages with cross-references. You review and approve everything before it becomes queryable via MCP.`,
     },
     {
       title: "Connect Claude Desktop",
@@ -73,20 +73,22 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     {
       title: "Vault Structure",
       items: [
-        [`Journals (${vaultPath}/vault/hot/)`, "Daily activity entries. One file per day."],
-        [`Themes (${vaultPath}/vault/warm/)`, "Curated summaries by topic, approved by you."],
-        [`Pending (${vaultPath}/vault/warm/_pending/)`, "AI-generated summaries awaiting your review."],
+        [`Journals (${vaultPath}/vault/hot/)`, "Daily activity entries from collectors. One file per day."],
+        [`Themes (${vaultPath}/vault/warm/)`, "Wiki-style knowledge pages with [[cross-references]]."],
+        [`Index (${vaultPath}/vault/warm/index.md)`, "Auto-generated catalog of all themes."],
+        [`Log (${vaultPath}/vault/warm/log.md)`, "Append-only record of pipeline activity."],
+        [`Pending (${vaultPath}/vault/warm/_pending/)`, "AI-proposed updates awaiting batch review."],
         [`Archive (${vaultPath}/vault/cold/)`, "Monthly archives of processed journals."],
         [`Logs (${vaultPath}/vault/logs/)`, "Application logs for debugging."],
       ],
     },
     {
       title: "Skills",
-      body: `Skills are SKILL.md files that pull data from external sources on a schedule. Three are bundled: Google Daily Digest, GitHub Activity, and Weekly Rollup. Install more from the Skills page or create your own.`,
+      body: `Skills are SKILL.md files that pull data from external sources on a schedule. Four are bundled: GitHub Activity, Folder Watcher, Google Daily Digest, and Weekly Rollup. Configure schedules on the Schedule page. Install more from the Skills page or create your own with configurable settings.`,
     },
     {
       title: "Dream Pipeline",
-      body: `The Dream Pipeline reads your journal entries, classifies them by theme, and synthesizes curated summaries. Run it from the Dashboard page. Proposed summaries appear on the Review page for your approval before becoming themes.`,
+      body: `The Dream Pipeline classifies journal entries (deterministic first, LLM fallback) and synthesizes them into wiki-style theme pages with [[cross-references]]. Each entry can update 1-3 themes. An auto-generated index.md catalogs all themes. Updates go through batch review (Approve All / Reject All). The pipeline auto-triggers via the orchestrator when all scheduled collectors have run.`,
     },
   ];
 
