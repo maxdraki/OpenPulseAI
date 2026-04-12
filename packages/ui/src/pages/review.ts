@@ -57,8 +57,72 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
       return;
     }
 
+    // Group updates by batchId; ungrouped items use their own id as the key
+    const batches = new Map<string, PendingUpdate[]>();
     for (const update of updates) {
-      listEl.appendChild(buildCard(update, listEl));
+      const key = update.batchId ?? update.id;
+      const group = batches.get(key) ?? [];
+      group.push(update);
+      batches.set(key, group);
+    }
+
+    for (const [batchKey, batchUpdates] of batches) {
+      if (batchUpdates.length > 1) {
+        // Render batch header with Approve All / Reject All
+        const batchHeader = document.createElement("div");
+        batchHeader.className = "batch-header";
+
+        const batchLabel = document.createElement("span");
+        const batchDate = new Date(batchKey).toLocaleDateString("en-GB", {
+          day: "numeric", month: "short", year: "numeric",
+          hour: "2-digit", minute: "2-digit",
+        });
+        batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
+
+        const batchActions = document.createElement("div");
+        batchActions.className = "batch-actions";
+
+        const approveAllBtn = document.createElement("button");
+        approveAllBtn.className = "btn btn-success";
+        approveAllBtn.textContent = "Approve All";
+
+        const rejectAllBtn = document.createElement("button");
+        rejectAllBtn.className = "btn btn-danger";
+        rejectAllBtn.textContent = "Reject All";
+
+        approveAllBtn.addEventListener("click", async () => {
+          approveAllBtn.disabled = true;
+          rejectAllBtn.disabled = true;
+          for (const u of batchUpdates) {
+            await approveUpdate(u.id);
+          }
+          log("info", `Approved batch: ${batchKey}`);
+          await loadPending(listEl);
+          updateReviewBadge();
+        });
+
+        rejectAllBtn.addEventListener("click", async () => {
+          approveAllBtn.disabled = true;
+          rejectAllBtn.disabled = true;
+          for (const u of batchUpdates) {
+            await rejectUpdate(u.id);
+          }
+          log("info", `Rejected batch: ${batchKey}`);
+          await loadPending(listEl);
+          updateReviewBadge();
+        });
+
+        batchActions.appendChild(approveAllBtn);
+        batchActions.appendChild(rejectAllBtn);
+        batchHeader.appendChild(batchLabel);
+        batchHeader.appendChild(batchActions);
+        listEl.appendChild(batchHeader);
+      }
+
+      // Render individual cards for each update in this batch
+      for (const update of batchUpdates) {
+        listEl.appendChild(buildCard(update, listEl));
+      }
     }
   } catch (e: any) {
     const errDiv = document.createElement("div");
