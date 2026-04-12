@@ -3,7 +3,7 @@ import { renderReview } from "./pages/review.js";
 import { renderSettings } from "./pages/settings.js";
 import { renderJournals } from "./pages/journals.js";
 import { renderThemes } from "./pages/themes.js";
-import { renderSkills } from "./pages/skills.js";
+import { renderDataSources } from "./pages/data-sources.js";
 import { renderLogs } from "./pages/logs.js";
 import { renderHelp } from "./pages/help.js";
 import { renderSchedule } from "./pages/schedule.js";
@@ -18,7 +18,7 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   settings: renderSettings,
   journals: renderJournals,
   themes: renderThemes,
-  skills: renderSkills,
+  "data-sources": renderDataSources,
   logs: renderLogs,
   help: renderHelp,
   schedule: renderSchedule,
