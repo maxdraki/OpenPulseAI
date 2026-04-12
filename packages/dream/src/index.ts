@@ -100,7 +100,7 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
   return entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-async function generateIndex(vault: Vault): Promise<void> {
+export async function generateIndex(vault: Vault): Promise<void> {
   const files = await readdir(vault.warmDir);
   const themeFiles = files.filter(
     (f) => f.endsWith(".md") && f !== "index.md" && f !== "log.md" && !f.startsWith("_")
@@ -162,7 +162,7 @@ async function generateIndex(vault: Vault): Promise<void> {
   await writeFile(join(vault.warmDir, "index.md"), indexContent, "utf-8");
 }
 
-async function appendLog(vault: Vault, type: string, detail: string): Promise<void> {
+export async function appendLog(vault: Vault, type: string, detail: string): Promise<void> {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
