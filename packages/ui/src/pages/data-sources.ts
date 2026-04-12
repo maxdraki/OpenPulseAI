@@ -3,6 +3,17 @@ import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog } from "../lib/dialog.js";
 
+// Catalog of known data sources
+const DATA_SOURCES = [
+  { id: "github-activity", name: "GitHub", description: "Commits, PRs, reviews, issues and notifications", icon: "\u{1F4BB}" },
+  { id: "folder-watcher", name: "File Changes", description: "Track modified files across project directories", icon: "\u{1F4C1}" },
+  { id: "google-daily-digest", name: "Google Workspace", description: "Gmail and Calendar activity digest", icon: "\u{1F4E7}" },
+  { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: "\u{1F4CB}" },
+  { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: "\u{1F41B}" },
+  { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: "\u{1F4AC}" },
+  { id: "weekly-rollup", name: "Weekly Rollup", description: "Synthesise themes into a weekly status", icon: "\u{1F4CA}" },
+];
+
 // Human-readable cron descriptions for common patterns
 function describeCron(cron: string | null): string {
   if (!cron) return "Manual only";
@@ -48,7 +59,7 @@ const MANUAL_FIX: Record<string, string> = {
 // Module-level reference so renderSkillCard can trigger a reload
 let loadSkills: (() => Promise<void>) | null = null;
 
-export async function renderSkills(container: HTMLElement): Promise<void> {
+export async function renderDataSources(container: HTMLElement): Promise<void> {
   // Build page
   container.textContent = "";
 
@@ -56,10 +67,10 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
   pageHeader.className = "page-header";
   const h2 = document.createElement("h2");
   h2.className = "page-title";
-  h2.textContent = "Skills";
+  h2.textContent = "Data Sources";
   const subtitle = document.createElement("p");
   subtitle.className = "page-subtitle";
-  subtitle.textContent = "Automated data collectors that feed activity into your vault";
+  subtitle.textContent = "Connect your tools and services";
   pageHeader.appendChild(h2);
   pageHeader.appendChild(subtitle);
 
@@ -68,14 +79,27 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
   introCard.className = "card help-section";
   const introText = document.createElement("p");
   introText.className = "help-text";
-  introText.textContent = "Skills are small scripts that pull data from external sources (GitHub, Google, etc.) on a schedule and write summaries into your vault. Bundled skills come pre-installed. You can also install community skills from GitHub repos or create your own.";
+  introText.textContent = "Data sources are collectors that pull activity from external tools (GitHub, Google, files, etc.) on a schedule and write summaries into your vault. Bundled sources come pre-installed. Connect the ones you use, then set their schedules on the Schedule page.";
   introCard.appendChild(introText);
 
-  // Install section
+  // Skills list (installed data sources)
+  const skillsList = document.createElement("div");
+  skillsList.id = "skills-list";
+
+  // Advanced section (collapsed)
+  const advancedSection = document.createElement("div");
+
+  const advancedToggle = document.createElement("button");
+  advancedToggle.className = "advanced-toggle";
+  advancedToggle.textContent = "\u25B6 Advanced: Install from GitHub";
+
+  const advancedContent = document.createElement("div");
+  advancedContent.style.display = "none";
+
   const installCard = document.createElement("div");
   installCard.className = "card";
   const installH3 = document.createElement("h3");
-  installH3.textContent = "Install a Skill";
+  installH3.textContent = "Install from GitHub";
   installCard.appendChild(installH3);
 
   const installHelp = document.createElement("p");
@@ -108,14 +132,20 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
   installOutput.id = "install-output";
   installCard.appendChild(installOutput);
 
-  // Skills list
-  const skillsList = document.createElement("div");
-  skillsList.id = "skills-list";
+  advancedContent.appendChild(installCard);
+  advancedSection.appendChild(advancedToggle);
+  advancedSection.appendChild(advancedContent);
+
+  advancedToggle.addEventListener("click", () => {
+    const visible = advancedContent.style.display !== "none";
+    advancedContent.style.display = visible ? "none" : "";
+    advancedToggle.textContent = (visible ? "\u25B6" : "\u25BC") + " Advanced: Install from GitHub";
+  });
 
   container.appendChild(pageHeader);
   container.appendChild(introCard);
-  container.appendChild(installCard);
   container.appendChild(skillsList);
+  container.appendChild(advancedSection);
 
   // Install handler
   installBtn.addEventListener("click", async () => {
@@ -126,7 +156,7 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
     installOutput.classList.add("visible");
     try {
       const result = await installSkill(repo);
-      log("info", `Skill installed: ${repo}`, result);
+      log("info", `Data source installed: ${repo}`, result);
       installOutput.textContent = result;
       const scheduleLink = document.createElement("a");
       scheduleLink.href = "#schedule";
@@ -136,7 +166,7 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
       installInput.value = "";
       await loadSkills?.();
     } catch (e: any) {
-      log("error", `Skill install failed: ${repo}`, String(e));
+      log("error", `Data source install failed: ${repo}`, String(e));
       installOutput.textContent = `Error: ${e}`;
     } finally {
       installBtn.classList.remove("loading");
@@ -146,18 +176,124 @@ export async function renderSkills(container: HTMLElement): Promise<void> {
   loadSkills = async () => {
     try {
       const skills = await getSkills();
-      renderSkillsList(skillsList, skills);
+      renderDataSourcesContent(skillsList, skills);
     } catch (e: any) {
       skillsList.textContent = "";
       const errCard = document.createElement("div");
       errCard.className = "card";
       errCard.style.color = "var(--danger)";
-      errCard.textContent = `Error loading skills: ${e}`;
+      errCard.textContent = `Error loading data sources: ${e}`;
       skillsList.appendChild(errCard);
     }
   };
 
   await loadSkills?.();
+}
+
+// Render catalog + installed sections
+function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
+  container.textContent = "";
+
+  const installedIds = new Set(skills.map((s) => s.name));
+
+  // ── Catalog section ──
+  const catalogSection = document.createElement("div");
+  catalogSection.className = "card";
+
+  const catalogH3 = document.createElement("h3");
+  catalogH3.textContent = "Add a Data Source";
+  catalogSection.appendChild(catalogH3);
+
+  const catalogGrid = document.createElement("div");
+  catalogGrid.className = "data-source-catalog";
+
+  for (const ds of DATA_SOURCES) {
+    const card = document.createElement("div");
+    card.className = "ds-catalog-card";
+
+    const iconEl = document.createElement("div");
+    iconEl.className = "ds-catalog-icon";
+    iconEl.textContent = ds.icon;
+
+    const infoEl = document.createElement("div");
+    infoEl.className = "ds-catalog-info";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "ds-catalog-name";
+    nameEl.textContent = ds.name;
+
+    const descEl = document.createElement("div");
+    descEl.className = "ds-catalog-desc";
+    descEl.textContent = ds.description;
+
+    infoEl.appendChild(nameEl);
+    infoEl.appendChild(descEl);
+    card.appendChild(iconEl);
+    card.appendChild(infoEl);
+
+    if (installedIds.has(ds.id)) {
+      const badge = document.createElement("span");
+      badge.className = "ds-catalog-badge";
+      badge.textContent = "\u2713 Connected";
+      card.appendChild(badge);
+
+      // Clicking scrolls to the installed skill card
+      card.addEventListener("click", () => {
+        const target = document.getElementById(`skill-card-${ds.id}`);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    } else {
+      const addBtn = document.createElement("button");
+      addBtn.className = "btn btn-sm ds-catalog-add";
+      addBtn.textContent = "Add";
+      // For uninstalled builtin IDs: clicking scrolls down if somehow present; otherwise no-op for now
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Future: open config panel. For now scroll to advanced section.
+        const adv = document.querySelector(".advanced-toggle") as HTMLButtonElement | null;
+        if (adv) {
+          adv.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      });
+      card.appendChild(addBtn);
+    }
+
+    catalogGrid.appendChild(card);
+  }
+
+  catalogSection.appendChild(catalogGrid);
+  container.appendChild(catalogSection);
+
+  // ── Installed section ──
+  const installedSection = document.createElement("div");
+  installedSection.id = "installed-data-sources";
+
+  const installedH3 = document.createElement("h3");
+  installedH3.style.cssText = "font-size: 0.8rem; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 1.25rem 0 0.5rem;";
+  installedH3.textContent = "Your Data Sources";
+  installedSection.appendChild(installedH3);
+
+  if (skills.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    const icon = document.createElement("div");
+    icon.className = "empty-state-icon";
+    icon.style.cssText = "background: rgba(96, 165, 250, 0.08); color: var(--accent);";
+    icon.textContent = "?";
+    const msg = document.createElement("p");
+    msg.textContent = "No data sources found. Add one from the catalog above or install a SKILL.md file to ~/OpenPulseAI/skills/";
+    empty.appendChild(icon);
+    empty.appendChild(msg);
+    installedSection.appendChild(empty);
+  } else {
+    for (const skill of skills) {
+      const card = renderSkillCard(skill);
+      card.id = `skill-card-${skill.name}`;
+      installedSection.appendChild(card);
+    }
+  }
+
+  container.appendChild(installedSection);
 }
 
 function renderSkillsList(container: HTMLElement, skills: SkillData[]): void {

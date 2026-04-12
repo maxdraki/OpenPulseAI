@@ -83,8 +83,8 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
       ],
     },
     {
-      title: "Skills",
-      body: `Skills are SKILL.md files that pull data from external sources on a schedule. Four are bundled: GitHub Activity, Folder Watcher, Google Daily Digest, and Weekly Rollup. Configure schedules on the Schedule page. Install more from the Skills page or create your own with configurable settings.`,
+      title: "Data Sources",
+      body: `Data sources are SKILL.md collectors that pull activity from external tools on a schedule. Four are bundled: GitHub Activity, Folder Watcher, Google Daily Digest, and Weekly Rollup. Connect them from the Data Sources page and configure schedules on the Schedule page. Install more from GitHub or create your own with configurable settings.`,
     },
     {
       title: "Dream Pipeline",

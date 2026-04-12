@@ -476,7 +476,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
   h2.textContent = "Schedule";
   const subtitle = document.createElement("p");
   subtitle.className = "page-subtitle";
-  subtitle.textContent = "Manage skill schedules and the orchestrator";
+  subtitle.textContent = "Manage data source schedules and the orchestrator";
   pageHeader.appendChild(h2);
   pageHeader.appendChild(subtitle);
   container.appendChild(pageHeader);
