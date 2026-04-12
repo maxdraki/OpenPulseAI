@@ -458,8 +458,14 @@ app.post("/api/validate-models", async (req, res) => {
       });
       if (!resp.ok) return res.json({ valid: false, error: resp.status === 400 ? "Invalid API key" : `API error: ${resp.status}`, models: [] });
       const data = await resp.json();
+      // Filter to text generation models only — exclude TTS, embedding, vision-only, robotics
+      const excludePatterns = /tts|embed|vision|image|clip|robotics|lyria|nano|gemma|imagen/i;
       models = (data.models ?? [])
-        .filter((m: any) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
+        .filter((m: any) => {
+          const methods = m.supportedGenerationMethods ?? [];
+          const name = m.displayName ?? m.name ?? "";
+          return methods.includes("generateContent") && !excludePatterns.test(name);
+        })
         .map((m: any) => ({ id: (m.name ?? "").replace("models/", ""), name: m.displayName ?? m.name }));
     } else if (provider === "mistral") {
       if (!apiKey) return res.json({ valid: false, error: "API key is required", models: [] });
