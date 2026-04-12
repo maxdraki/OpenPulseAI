@@ -24,7 +24,7 @@ export interface OpenPulseConfig {
 /** Result of classifying a hot entry into a theme */
 export interface ClassificationResult {
   entry: ActivityEntry;
-  theme: string; // matched or new theme name
+  themes: string[]; // 1-3 theme tags
   confidence: number; // 0-1
 }
 
@@ -45,6 +45,7 @@ export interface PendingUpdate {
   entries: ActivityEntry[]; // source entries that led to this update
   createdAt: string; // ISO 8601
   status: "pending" | "approved" | "rejected" | "edited";
+  batchId?: string; // groups updates from same dream run
 }
 
 /** Collector runtime state per source */

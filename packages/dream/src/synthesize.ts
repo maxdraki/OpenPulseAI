@@ -7,6 +7,7 @@ import {
   type LlmProvider,
   type PendingUpdate,
   readTheme,
+  listThemes,
 } from "@openpulse/core";
 
 export async function synthesizeToPending(
@@ -15,12 +16,23 @@ export async function synthesizeToPending(
   provider: LlmProvider,
   model: string
 ): Promise<PendingUpdate[]> {
+  const batchId = new Date().toISOString();
+
+  // Group by themes — an entry with multiple themes appears in each group
   const byTheme = new Map<string, ClassificationResult[]>();
   for (const item of classified) {
-    const group = byTheme.get(item.theme) ?? [];
-    group.push(item);
-    byTheme.set(item.theme, group);
+    for (const theme of item.themes) {
+      const group = byTheme.get(theme) ?? [];
+      group.push(item);
+      byTheme.set(theme, group);
+    }
   }
+
+  // Collect all theme names for cross-referencing
+  const allThemeNames = [...new Set([
+    ...byTheme.keys(),
+    ...(await listThemes(vault)),
+  ])];
 
   const pending: PendingUpdate[] = [];
 
@@ -37,6 +49,8 @@ export async function synthesizeToPending(
     const existingSection = existing?.content
       ? `Current content of "${theme}":\n${existing.content}\n\n`
       : "";
+
+    const otherThemes = allThemeNames.filter((t) => t !== theme);
 
     const proposedContent = await provider.complete({
       model,
@@ -67,6 +81,8 @@ The document structure should be:
 
 Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries and existing content above. Remove anything you cannot trace back to a specific source. If you are unsure whether something is real, leave it out.
 
+Other themes in the wiki: ${otherThemes.join(", ")}. Where content relates to another theme, add [[theme-name]] links.
+
 Return ONLY the Markdown content, no fences or explanations.`,
       systemPrompt: `You are a work journal assistant. Your goal is to maintain an accurate, up-to-date status page for a specific project or topic. The user relies on these status pages to quickly understand what's happening across their projects.
 
@@ -92,6 +108,7 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       entries: items.map((i) => i.entry),
       createdAt: new Date().toISOString(),
       status: "pending",
+      batchId,
     };
 
     const filename = `${update.id}.json`;

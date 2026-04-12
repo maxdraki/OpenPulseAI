@@ -29,34 +29,51 @@ function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
 
 /**
  * Deterministic classification: extract project names from content.
- * Looks for file paths, repo references, and structured data.
+ * Returns an array of 1-3 theme tags.
+ * - Primary tag from file paths / repo refs / headings
+ * - Secondary tags: scan entry text for mentions of existing theme names
  */
-function deterministicClassify(entry: ActivityEntry): string | null {
+function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): string[] | null {
   const log = entry.log;
+  const tags: string[] = [];
 
   // 1. File paths: /Users/.../Documents/GitHub/PROJECT_NAME/...
   const pathMatch = log.match(/\/(?:Documents\/GitHub|Projects|repos|src)\/([a-zA-Z0-9_-]+)\//);
-  if (pathMatch) return pathMatch[1].toLowerCase();
+  if (pathMatch) tags.push(pathMatch[1].toLowerCase());
 
   // 2. GitHub repo references: owner/repo — match any owner
-  const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release|issue))/i)
-    ?? log.match(/\*?\*?Repository:?\*?\*?\s*`?[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)`?/i);
-  if (repoMatch) return repoMatch[1].toLowerCase();
+  if (tags.length === 0) {
+    const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release|issue))/i)
+      ?? log.match(/\*?\*?Repository:?\*?\*?\s*`?[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)`?/i);
+    if (repoMatch) tags.push(repoMatch[1].toLowerCase());
+  }
 
   // 3. Source metadata — if the entry came from a known source, use it
-  if (entry.source && entry.source !== "auto") {
-    // For skill-generated entries, check if the content mentions a specific project
+  if (tags.length === 0 && entry.source && entry.source !== "auto") {
     const projectMention = log.match(/^###?\s+([A-Za-z0-9_-]+)\s*$/m);
     if (projectMention) {
       const name = projectMention[1].toLowerCase();
-      // Only use it if it looks like a project name (not a generic heading)
       if (!["instructions", "output", "summary", "status", "highlights", "findings", "context"].includes(name)) {
-        return name;
+        tags.push(name);
       }
     }
   }
 
-  return null;
+  // No primary tag found — return null to trigger LLM
+  if (tags.length === 0) return null;
+
+  // Secondary tags: scan for existing theme name mentions (word boundary)
+  for (const theme of existingThemes) {
+    if (tags.includes(theme)) continue;
+    const escaped = theme.replace(/[-]/g, "[-]");
+    const re = new RegExp(`\\b${escaped}\\b`, "i");
+    if (re.test(log)) {
+      tags.push(theme);
+    }
+    if (tags.length >= 3) break;
+  }
+
+  return tags.slice(0, 3);
 }
 
 /**
@@ -65,7 +82,7 @@ function deterministicClassify(entry: ActivityEntry): string | null {
  * Pipeline:
  * 1. Pre-filter: strip "inactive/no changes" noise
  * 2. Already-tagged entries: use their existing theme
- * 3. Deterministic: extract project from file paths, repo names
+ * 3. Deterministic: extract project from file paths, repo names + secondary tags from existingThemes
  * 4. LLM fallback: only for entries that can't be classified deterministically
  */
 export async function classifyEntries(
@@ -83,14 +100,14 @@ export async function classifyEntries(
   for (const entry of cleaned) {
     // Step 2: Already tagged
     if (entry.theme && entry.theme !== "auto" && entry.theme !== "ingested") {
-      results.push({ entry, theme: entry.theme, confidence: 1.0 });
+      results.push({ entry, themes: [entry.theme], confidence: 1.0 });
       continue;
     }
 
     // Step 3: Deterministic classification
-    const project = deterministicClassify(entry);
-    if (project) {
-      results.push({ entry, theme: project, confidence: 0.95 });
+    const tags = deterministicClassify(entry, existingThemes);
+    if (tags) {
+      results.push({ entry, themes: tags, confidence: 0.95 });
       continue;
     }
 
@@ -107,21 +124,21 @@ export async function classifyEntries(
     try {
       const responseText = await provider.complete({
         model,
-        prompt: `Classify each numbered entry into a theme (lowercase-kebab-case).
+        prompt: `Classify each numbered entry into 1-3 relevant themes (lowercase-kebab-case).
 Existing themes: ${existingThemes.length > 0 ? existingThemes.join(", ") : "(none)"}.
 Use project names as themes when possible. Only create new themes for genuinely distinct topics.
 
 Entries:
 ${entriesText}
 
-Respond with ONLY a JSON array: [{"index": 0, "theme": "name"}]`,
+Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1", "name2"]}]`,
         temperature: 0,
       });
 
-      const parsed = JSON.parse(responseText) as Array<{ index: number; theme: string }>;
+      const parsed = JSON.parse(responseText) as Array<{ index: number; themes: string[] }>;
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
-          results.push({ entry: needsLlm[p.index], theme: p.theme, confidence: 0.7 });
+          results.push({ entry: needsLlm[p.index], themes: p.themes.slice(0, 3), confidence: 0.7 });
         }
       }
     } catch {
@@ -129,7 +146,7 @@ Respond with ONLY a JSON array: [{"index": 0, "theme": "name"}]`,
       for (const entry of needsLlm) {
         results.push({
           entry,
-          theme: entry.source ?? "uncategorized",
+          themes: [entry.source ?? "uncategorized"],
           confidence: 0.3,
         });
       }
