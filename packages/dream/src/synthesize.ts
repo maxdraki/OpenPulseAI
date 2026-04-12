@@ -75,7 +75,9 @@ Return ONLY the Markdown content, no fences or explanations.`,
 - Dates, metrics, or statistics
 - Actions taken or decisions made
 
-If the source data is sparse, write a short summary. An accurate 2-line summary is better than a detailed paragraph with invented details. When in doubt, quote the source entry directly rather than paraphrasing with added context.`,
+If the source data is sparse, write a short summary. An accurate 2-line summary is better than a detailed paragraph with invented details. When in doubt, quote the source entry directly rather than paraphrasing with added context.
+
+CRITICAL: If the source entries only mention a project as "inactive", "no changes", or in a list of unmodified directories, do NOT write content claiming work was done on that project. Write "No activity recorded" instead.`,
       maxTokens: 2048,
     });
 

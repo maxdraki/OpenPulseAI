@@ -39,7 +39,11 @@ ${entriesText}
 
 Respond with a JSON array of objects: [{"index": 0, "theme": "theme-name", "confidence": 0.9}, ...]
 Return ONLY the JSON array, no other text.`,
-    systemPrompt: `You are classifying activity log entries into themes. Each theme should represent a distinct project or topic. Never lump unrelated projects into a single theme. When in doubt, create a new theme.`,
+    systemPrompt: `You are classifying activity log entries into themes. Rules:
+- Only create a theme for a project if the entry describes ACTUAL WORK done on that project (code changes, commits, PRs, deployments)
+- Do NOT create themes for projects that are merely mentioned as "inactive", "no changes", or listed in a directory scan
+- If an entry mentions multiple projects, classify it under the project where the ACTUAL activity occurred
+- When in doubt, classify under the source skill name (e.g. "github-activity", "folder-watcher")`,
   });
 
   const parsed = JSON.parse(responseText) as Array<{
