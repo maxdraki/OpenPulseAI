@@ -7,7 +7,7 @@ export interface ActivityEntry {
 }
 
 /** LLM provider identifiers */
-export type LlmProviderName = "anthropic" | "openai" | "gemini" | "ollama";
+export type LlmProviderName = "anthropic" | "openai" | "gemini" | "mistral" | "ollama";
 
 /** Configuration for OpenPulseAI */
 export interface OpenPulseConfig {

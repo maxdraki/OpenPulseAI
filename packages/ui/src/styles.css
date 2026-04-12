@@ -1675,6 +1675,17 @@ body {
   color: var(--hot);
 }
 
+.provider-select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.provider-logo {
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
 .modal-box {
   background: var(--bg-raised);
   border: 1px solid var(--border-default);

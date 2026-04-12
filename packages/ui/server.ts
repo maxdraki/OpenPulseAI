@@ -24,6 +24,7 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   gemini: "GEMINI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
   ollama: "",
 };
 
@@ -460,6 +461,15 @@ app.post("/api/validate-models", async (req, res) => {
       models = (data.models ?? [])
         .filter((m: any) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
         .map((m: any) => ({ id: (m.name ?? "").replace("models/", ""), name: m.displayName ?? m.name }));
+    } else if (provider === "mistral") {
+      if (!apiKey) return res.json({ valid: false, error: "API key is required", models: [] });
+      const resp = await fetch("https://api.mistral.ai/v1/models", {
+        headers: { "Authorization": `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return res.json({ valid: false, error: resp.status === 401 ? "Invalid API key" : `API error: ${resp.status}`, models: [] });
+      const data = await resp.json();
+      models = (data.data ?? []).map((m: any) => ({ id: m.id, name: m.id }));
     } else if (provider === "ollama") {
       const url = baseUrl || "http://localhost:11434";
       const resp = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });

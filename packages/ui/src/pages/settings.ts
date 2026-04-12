@@ -2,11 +2,15 @@ import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, tes
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 
+const LOGO_TOKEN = "pk_LAYYrrRiTb2tIjkY-KCbMw";
+const logo = (domain: string) => `https://img.logo.dev/${domain}?token=${LOGO_TOKEN}&size=32&format=png`;
+
 const PROVIDERS = [
-  { id: "anthropic", name: "Anthropic", desc: "Claude models", needsKey: true },
-  { id: "openai", name: "OpenAI", desc: "GPT models", needsKey: true },
-  { id: "gemini", name: "Google", desc: "Gemini models", needsKey: true },
-  { id: "ollama", name: "Ollama", desc: "Local models", needsKey: false },
+  { id: "anthropic", name: "Anthropic", desc: "Claude models", needsKey: true, logo: logo("anthropic.com") },
+  { id: "openai", name: "OpenAI", desc: "GPT models", needsKey: true, logo: logo("openai.com") },
+  { id: "gemini", name: "Google", desc: "Gemini models", needsKey: true, logo: logo("google.com") },
+  { id: "mistral", name: "Mistral", desc: "Mistral models", needsKey: true, logo: logo("mistral.ai") },
+  { id: "ollama", name: "Ollama", desc: "Local models", needsKey: false, logo: logo("ollama.com") },
 ];
 
 export async function renderSettings(container: HTMLElement): Promise<void> {
@@ -40,25 +44,54 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   providerCardEl.className = "card";
   const providerH3 = document.createElement("h3");
   providerH3.textContent = "LLM Provider";
-  const providerGrid = document.createElement("div");
-  providerGrid.className = "provider-grid";
-  providerGrid.id = "provider-grid";
 
-  for (const p of PROVIDERS) {
-    const btn = document.createElement("button");
-    btn.className = "provider-card" + (p.id === currentProvider ? " selected" : "");
-    btn.dataset.provider = p.id;
-    const strong = document.createElement("strong");
-    strong.textContent = p.name;
-    const span = document.createElement("span");
-    span.textContent = p.desc;
-    btn.appendChild(strong);
-    btn.appendChild(span);
-    providerGrid.appendChild(btn);
+  const providerRow = document.createElement("div");
+  providerRow.className = "provider-select-row";
+
+  const providerLogo = document.createElement("img");
+  providerLogo.className = "provider-logo";
+  providerLogo.width = 24;
+  providerLogo.height = 24;
+  providerLogo.addEventListener("error", () => { providerLogo.style.display = "none"; });
+  const currentProv = PROVIDERS.find((p) => p.id === currentProvider);
+  if (currentProv?.logo) {
+    providerLogo.src = currentProv.logo;
+    providerLogo.alt = currentProv.name;
   }
 
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "form-select";
+  providerSelect.id = "provider-select";
+  for (const p of PROVIDERS) {
+    const option = document.createElement("option");
+    option.value = p.id;
+    option.textContent = `${p.name} — ${p.desc}`;
+    if (p.id === currentProvider) option.selected = true;
+    providerSelect.appendChild(option);
+  }
+
+  providerSelect.addEventListener("change", () => {
+    const selected = PROVIDERS.find((p) => p.id === providerSelect.value);
+    if (selected?.logo) {
+      providerLogo.src = selected.logo;
+      providerLogo.alt = selected.name;
+      providerLogo.style.display = "";
+    } else {
+      providerLogo.style.display = "none";
+    }
+    currentProvider = providerSelect.value;
+
+    // Reset downstream
+    const modelCard = document.getElementById("model-card");
+    if (modelCard) modelCard.style.display = "none";
+    renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
+  });
+
+  providerRow.appendChild(providerLogo);
+  providerRow.appendChild(providerSelect);
+
   providerCardEl.appendChild(providerH3);
-  providerCardEl.appendChild(providerGrid);
+  providerCardEl.appendChild(providerRow);
 
   const credentialsCard = document.createElement("div");
   credentialsCard.className = "card";
@@ -153,25 +186,6 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
-  // Provider grid click handler
-  providerGrid.addEventListener("click", (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-provider]");
-    if (!btn) return;
-    const providerId = btn.dataset.provider!;
-
-    // Update selection highlight
-    document.querySelectorAll(".provider-card").forEach(c => c.classList.remove("selected"));
-    btn.classList.add("selected");
-
-    // Hide model card when switching providers
-    modelCard.style.display = "none";
-
-    // If switching back to the saved provider, restore saved values
-    const savedModel = providerId === currentProvider ? currentModel : "";
-    const savedApiKey = providerId === currentProvider ? currentApiKey : "";
-    const savedBaseUrl = providerId === currentProvider ? currentBaseUrl : "";
-    renderCredentials(providerId, savedModel, savedApiKey, savedBaseUrl);
-  });
 }
 
 function renderCredentials(provider: string, currentModel: string, currentApiKey: string, currentBaseUrl: string): void {

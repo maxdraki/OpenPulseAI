@@ -16,6 +16,9 @@ export function createProvider(config: OpenPulseConfig): LlmProvider {
     case "gemini":
       if (!apiKey) throw new Error("Gemini requires an API key (set GEMINI_API_KEY or configure in settings)");
       return new GeminiProvider(apiKey);
+    case "mistral":
+      if (!apiKey) throw new Error("Mistral requires an API key (set MISTRAL_API_KEY or configure in settings)");
+      return new OpenAIProvider(apiKey, "https://api.mistral.ai/v1");
     case "ollama":
       return new OllamaProvider(config.llm.baseUrl);
     default:
@@ -28,6 +31,7 @@ function getEnvKey(provider: string): string | undefined {
     anthropic: "ANTHROPIC_API_KEY",
     openai: "OPENAI_API_KEY",
     gemini: "GEMINI_API_KEY",
+    mistral: "MISTRAL_API_KEY",
   };
   return process.env[envMap[provider] ?? ""];
 }

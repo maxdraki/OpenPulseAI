@@ -4,8 +4,11 @@ import type { LlmProvider, CompletionParams } from "./provider.js";
 export class OpenAIProvider implements LlmProvider {
   private client: OpenAI;
 
-  constructor(apiKey?: string) {
-    this.client = new OpenAI(apiKey ? { apiKey } : undefined);
+  constructor(apiKey?: string, baseURL?: string) {
+    this.client = new OpenAI({
+      ...(apiKey ? { apiKey } : {}),
+      ...(baseURL ? { baseURL } : {}),
+    });
   }
 
   async complete(params: CompletionParams): Promise<string> {
