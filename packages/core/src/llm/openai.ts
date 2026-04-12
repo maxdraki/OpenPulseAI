@@ -18,6 +18,7 @@ export class OpenAIProvider implements LlmProvider {
     const response = await this.client.chat.completions.create({
       model: params.model,
       max_tokens: params.maxTokens ?? 2048,
+      temperature: params.temperature,
       messages,
     });
 

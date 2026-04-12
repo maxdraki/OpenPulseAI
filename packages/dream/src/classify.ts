@@ -115,6 +115,7 @@ Entries:
 ${entriesText}
 
 Respond with ONLY a JSON array: [{"index": 0, "theme": "name"}]`,
+        temperature: 0,
       });
 
       const parsed = JSON.parse(responseText) as Array<{ index: number; theme: string }>;

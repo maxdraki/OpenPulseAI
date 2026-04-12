@@ -175,7 +175,7 @@ export async function runSkill(
       commandContext,
     ].join("\n");
 
-    const response = await provider.complete({ model, prompt, systemPrompt });
+    const response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.2 });
 
     if (response.trim()) {
       await appendActivity(vault, {

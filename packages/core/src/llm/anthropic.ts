@@ -12,6 +12,7 @@ export class AnthropicProvider implements LlmProvider {
     const response = await this.client.messages.create({
       model: params.model,
       max_tokens: params.maxTokens ?? 2048,
+      temperature: params.temperature,
       system: params.systemPrompt,
       messages: [{ role: "user", content: params.prompt }],
     });

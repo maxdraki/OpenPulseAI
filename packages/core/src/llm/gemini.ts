@@ -12,6 +12,7 @@ export class GeminiProvider implements LlmProvider {
     const model = this.genAI.getGenerativeModel({
       model: params.model,
       systemInstruction: params.systemPrompt,
+      generationConfig: params.temperature !== undefined ? { temperature: params.temperature } : undefined,
     });
 
     const result = await model.generateContent(params.prompt);

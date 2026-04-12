@@ -79,6 +79,7 @@ If the source data is sparse, write a short summary. An accurate 2-line summary 
 
 CRITICAL: If the source entries only mention a project as "inactive", "no changes", or in a list of unmodified directories, do NOT write content claiming work was done on that project. Write "No activity recorded" instead.`,
       maxTokens: 2048,
+      temperature: 0.1,
     });
 
     const update: PendingUpdate = {

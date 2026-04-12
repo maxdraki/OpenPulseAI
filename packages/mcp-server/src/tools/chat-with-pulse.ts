@@ -47,7 +47,7 @@ export async function handleChatWithPulse(
 
   const systemPrompt = `You are OpenPulse, a Digital Twin proxy. Answer questions based ONLY on the following curated knowledge. Be concise and accurate. NEVER invent repository names, PR numbers, project names, or any other details not explicitly present in the knowledge below. If you don't have information about something, say "I don't have data on that" rather than guessing.\n\n${context}`;
 
-  const response = await provider.complete({ model, prompt, systemPrompt });
+  const response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
 
   session.messages.push({ role: "assistant", content: response });
   await saveSession(vault, session);

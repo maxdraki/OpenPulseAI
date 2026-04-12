@@ -12,4 +12,5 @@ export interface CompletionParams {
   prompt: string;
   maxTokens?: number;
   systemPrompt?: string;
+  temperature?: number; // 0 = deterministic, 1 = creative. Default varies by use case.
 }
