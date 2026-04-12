@@ -1,5 +1,7 @@
-import type { Vault, LlmProvider } from "@openpulse/core";
-import { readAllThemes } from "@openpulse/core";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
+import { readAllThemes, readTheme } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
 import { searchWarmFiles } from "../search.js";
 
@@ -23,8 +25,42 @@ export async function handleChatWithPulse(
   if (!session) session = createNewSession();
 
   // Find relevant warm themes
-  const relevantThemes = await searchWarmFiles(vault, input.message);
-  const allThemes = relevantThemes.length > 0 ? relevantThemes : await readAllThemes(vault);
+  let allThemes: ThemeDocument[] | undefined;
+  try {
+    const indexContent = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    const themeEntries = [...indexContent.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]);
+
+    // Find relevant themes: query words match theme name or index summary
+    const queryWords = input.message.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const indexLower = indexContent.toLowerCase();
+
+    const relevant = themeEntries.filter(name => {
+      const nameLower = name.toLowerCase();
+      return queryWords.some(w => nameLower.includes(w)) ||
+             queryWords.some(w => {
+               // Check the line containing this theme for query matches
+               const lineStart = indexLower.indexOf(`[[${nameLower}]]`);
+               if (lineStart < 0) return false;
+               const lineEnd = indexContent.indexOf('\n', lineStart);
+               const line = indexLower.slice(lineStart, lineEnd > 0 ? lineEnd : undefined);
+               return line.includes(w);
+             });
+    });
+
+    if (relevant.length > 0) {
+      allThemes = [];
+      for (const name of relevant) {
+        const theme = await readTheme(vault, name);
+        if (theme) allThemes.push(theme);
+      }
+    }
+  } catch { /* index.md doesn't exist yet */ }
+
+  // Fallback
+  if (!allThemes || allThemes.length === 0) {
+    const relevantThemes = await searchWarmFiles(vault, input.message);
+    allThemes = relevantThemes.length > 0 ? relevantThemes : await readAllThemes(vault);
+  }
   session.themesConsulted = [...new Set([
     ...session.themesConsulted,
     ...allThemes.map((t) => t.theme),
