@@ -203,6 +203,16 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
+  // Wire save button with current credentials
+  function wireSaveButton() {
+    const saveBtn = document.getElementById("btn-save");
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        await handleSave(currentProvider, currentApiKey, currentBaseUrl);
+      };
+    }
+  }
+
   // If we have a saved key, auto-validate to populate the full model list
   if (currentApiKey && currentProvider !== "ollama") {
     const mc = document.getElementById("model-card");
@@ -211,26 +221,27 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
       if (result.valid && result.models.length > 0) {
         populateModelDropdown(result.models, currentModel);
         if (mc) mc.style.display = "";
+        wireSaveButton();
       } else if (currentModel) {
-        // Validation failed but we have a saved model — show just that
         populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
         if (mc) mc.style.display = "";
+        wireSaveButton();
       }
     } catch {
-      // Fallback: show just the saved model
       if (currentModel) {
         populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
         if (mc) mc.style.display = "";
+        wireSaveButton();
       }
     }
   } else if (currentProvider === "ollama") {
-    // Ollama doesn't need a key — validate immediately
     const mc = document.getElementById("model-card");
     try {
       const result = await validateAndListModels("ollama", undefined, currentBaseUrl);
       if (result.valid && result.models.length > 0) {
         populateModelDropdown(result.models, currentModel);
         if (mc) mc.style.display = "";
+        wireSaveButton();
       }
     } catch { /* ignore */ }
   }
