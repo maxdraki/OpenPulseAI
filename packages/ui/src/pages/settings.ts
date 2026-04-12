@@ -98,11 +98,14 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   credentialsCard.id = "credentials-card";
 
   const modelCard = document.createElement("div");
-  modelCard.className = "card";
   modelCard.id = "model-card";
   modelCard.style.display = "none";
+  modelCard.style.marginTop = "1rem";
+  modelCard.style.borderTop = "1px solid var(--border-subtle)";
+  modelCard.style.paddingTop = "0.75rem";
 
   const modelH3 = document.createElement("h3");
+  modelH3.style.fontSize = "0.85rem";
   modelH3.textContent = "Model";
   const modelSection = document.createElement("div");
   modelSection.className = "settings-section";
@@ -165,12 +168,12 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   claudeRow.id = "claude-desktop-row";
   connectionsCard.appendChild(claudeRow);
 
-  // Mount everything
+  // Mount everything — model card is inside credentials, not separate
   container.textContent = "";
   container.appendChild(pageHeader);
   container.appendChild(providerCardEl);
   container.appendChild(credentialsCard);
-  container.appendChild(modelCard);
+  credentialsCard.appendChild(modelCard);
   container.appendChild(connectionsCard);
   container.appendChild(vaultCard);
 
@@ -186,6 +189,12 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
+  // If we have a saved model, show it in the model section
+  if (currentModel) {
+    populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
+    const mc = document.getElementById("model-card");
+    if (mc) mc.style.display = "";
+  }
 }
 
 function renderCredentials(provider: string, currentModel: string, currentApiKey: string, currentBaseUrl: string): void {
