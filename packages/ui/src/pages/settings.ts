@@ -28,6 +28,12 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     currentBaseUrl = config.baseUrl ?? "";
   } catch { /* use defaults */ }
 
+  // Remember the saved provider so we can restore credentials when switching back
+  const savedProvider = currentProvider;
+  const savedApiKey = currentApiKey;
+  const savedBaseUrl = currentBaseUrl;
+  const savedModel = currentModel;
+
   // Build provider buttons using DOM methods (safe)
   const pageHeader = document.createElement("div");
   pageHeader.className = "page-header";
@@ -80,17 +86,22 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
       providerLogo.style.display = "none";
     }
     const newProvider = providerSelect.value;
+    currentProvider = newProvider;
 
-    // Reset downstream — clear credentials when switching providers
+    // Reset downstream
     const modelCardEl = document.getElementById("model-card");
     if (modelCardEl) modelCardEl.style.display = "none";
 
-    // Only keep credentials if switching back to the saved provider
-    const savedKey = newProvider === currentProvider ? currentApiKey : "";
-    const savedUrl = newProvider === currentProvider ? currentBaseUrl : "";
-    const savedModel = newProvider === currentProvider ? currentModel : "";
-    currentProvider = newProvider;
-    renderCredentials(currentProvider, savedModel, savedKey, savedUrl);
+    // Restore saved credentials if switching back to the original provider
+    if (newProvider === savedProvider) {
+      renderCredentials(newProvider, savedModel, savedApiKey, savedBaseUrl);
+      if (savedModel) {
+        populateModelDropdown([{ id: savedModel, name: savedModel }], savedModel);
+        if (modelCardEl) modelCardEl.style.display = "";
+      }
+    } else {
+      renderCredentials(newProvider, "", "", "");
+    }
   });
 
   providerRow.appendChild(providerLogo);
@@ -192,11 +203,36 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
 
-  // If we have a saved model, show it in the model section
-  if (currentModel) {
-    populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
+  // If we have a saved key, auto-validate to populate the full model list
+  if (currentApiKey && currentProvider !== "ollama") {
     const mc = document.getElementById("model-card");
-    if (mc) mc.style.display = "";
+    try {
+      const result = await validateAndListModels(currentProvider, currentApiKey, currentBaseUrl);
+      if (result.valid && result.models.length > 0) {
+        populateModelDropdown(result.models, currentModel);
+        if (mc) mc.style.display = "";
+      } else if (currentModel) {
+        // Validation failed but we have a saved model — show just that
+        populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
+        if (mc) mc.style.display = "";
+      }
+    } catch {
+      // Fallback: show just the saved model
+      if (currentModel) {
+        populateModelDropdown([{ id: currentModel, name: currentModel }], currentModel);
+        if (mc) mc.style.display = "";
+      }
+    }
+  } else if (currentProvider === "ollama") {
+    // Ollama doesn't need a key — validate immediately
+    const mc = document.getElementById("model-card");
+    try {
+      const result = await validateAndListModels("ollama", undefined, currentBaseUrl);
+      if (result.valid && result.models.length > 0) {
+        populateModelDropdown(result.models, currentModel);
+        if (mc) mc.style.display = "";
+      }
+    } catch { /* ignore */ }
   }
 }
 
