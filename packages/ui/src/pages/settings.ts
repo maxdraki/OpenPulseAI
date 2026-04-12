@@ -79,12 +79,18 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     } else {
       providerLogo.style.display = "none";
     }
-    currentProvider = providerSelect.value;
+    const newProvider = providerSelect.value;
 
-    // Reset downstream
-    const modelCard = document.getElementById("model-card");
-    if (modelCard) modelCard.style.display = "none";
-    renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
+    // Reset downstream — clear credentials when switching providers
+    const modelCardEl = document.getElementById("model-card");
+    if (modelCardEl) modelCardEl.style.display = "none";
+
+    // Only keep credentials if switching back to the saved provider
+    const savedKey = newProvider === currentProvider ? currentApiKey : "";
+    const savedUrl = newProvider === currentProvider ? currentBaseUrl : "";
+    const savedModel = newProvider === currentProvider ? currentModel : "";
+    currentProvider = newProvider;
+    renderCredentials(currentProvider, savedModel, savedKey, savedUrl);
   });
 
   providerRow.appendChild(providerLogo);
@@ -98,14 +104,11 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   credentialsCard.id = "credentials-card";
 
   const modelCard = document.createElement("div");
+  modelCard.className = "card";
   modelCard.id = "model-card";
   modelCard.style.display = "none";
-  modelCard.style.marginTop = "1rem";
-  modelCard.style.borderTop = "1px solid var(--border-subtle)";
-  modelCard.style.paddingTop = "0.75rem";
 
   const modelH3 = document.createElement("h3");
-  modelH3.style.fontSize = "0.85rem";
   modelH3.textContent = "Model";
   const modelSection = document.createElement("div");
   modelSection.className = "settings-section";
@@ -168,12 +171,12 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   claudeRow.id = "claude-desktop-row";
   connectionsCard.appendChild(claudeRow);
 
-  // Mount everything — model card is inside credentials, not separate
+  // Mount everything
   container.textContent = "";
   container.appendChild(pageHeader);
   container.appendChild(providerCardEl);
   container.appendChild(credentialsCard);
-  credentialsCard.appendChild(modelCard);
+  container.appendChild(modelCard);
   container.appendChild(connectionsCard);
   container.appendChild(vaultCard);
 
