@@ -1,7 +1,7 @@
 import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
-import { confirmDialog } from "../lib/dialog.js";
+import { confirmDialog, formDialog, type FormField } from "../lib/dialog.js";
 
 // Logo.dev CDN for service logos
 const LOGO_TOKEN = "pk_LAYYrrRiTb2tIjkY-KCbMw";
@@ -249,72 +249,46 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
       addBtn.className = "btn btn-sm ds-catalog-add";
       addBtn.textContent = "Add";
 
-      // Inline config form (hidden until Add is clicked)
-      const configForm = document.createElement("div");
-      configForm.className = "ds-inline-config";
-      configForm.style.display = "none";
-
       const matchedSkill = skills.find((s) => s.name === ds.id);
-      const configFields = matchedSkill?.config ?? [];
-
-      if (configFields.length > 0) {
-        for (const field of configFields) {
-          if (field.default) continue; // Skip fields with defaults
-          const row = document.createElement("div");
-          row.style.marginBottom = "0.35rem";
-          const label = document.createElement("label");
-          label.className = "form-label";
-          label.style.fontSize = "0.73rem";
-          label.textContent = field.label;
-          const input = document.createElement("input");
-          input.className = "form-input";
-          input.style.fontSize = "0.8rem";
-          input.type = field.key.includes("token") || field.key.includes("key") || field.key.includes("secret") ? "password" : "text";
-          input.placeholder = field.label;
-          input.dataset.configKey = field.key;
-          row.appendChild(label);
-          row.appendChild(input);
-          configForm.appendChild(row);
-        }
-
-        const saveBtn = document.createElement("button");
-        saveBtn.className = "btn btn-sm btn-primary";
-        saveBtn.textContent = "Save & Connect";
-        saveBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const values: Record<string, string> = {};
-          configForm.querySelectorAll<HTMLInputElement>("input[data-config-key]").forEach((inp) => {
-            if (inp.value) values[inp.dataset.configKey!] = inp.value;
-          });
-          if (Object.keys(values).length === 0) return;
-          try {
-            await saveSkillConfig(ds.id, values);
-            log("info", `Data source configured: ${ds.name}`);
-            // Reload the page to move this source to "Your Data Sources"
-            await loadSkills?.();
-          } catch (err: any) {
-            log("error", `Config save failed: ${ds.name}`, String(err));
-          }
-        });
-        configForm.appendChild(saveBtn);
-      } else {
-        // No config needed — just has missing deps
-        const msg = document.createElement("p");
-        msg.style.cssText = "font-size: 0.78rem; color: var(--text-secondary); margin: 0;";
-        const matched = skills.find((s) => s.name === ds.id);
-        msg.textContent = matched ? `Missing: ${matched.missing.join(", ")}` : "Install dependencies to use this source.";
-        configForm.appendChild(msg);
-      }
+      const configFields = (matchedSkill?.config ?? []).filter((f) => !f.default);
 
       addBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        configForm.style.display = configForm.style.display === "none" ? "" : "none";
+        if (configFields.length > 0) {
+          // Open modal with config fields
+          const fields: FormField[] = configFields.map((f) => ({
+            key: f.key,
+            label: f.label,
+            type: f.key.includes("token") || f.key.includes("key") || f.key.includes("secret") || f.key.includes("password") ? "password" : "text",
+          }));
+          formDialog(
+            `Connect ${ds.name}`,
+            ds.description,
+            fields,
+            "Save & Connect",
+            async (values) => {
+              if (Object.keys(values).length === 0) return;
+              try {
+                await saveSkillConfig(ds.id, values);
+                log("info", `Data source configured: ${ds.name}`);
+                await loadSkills?.();
+              } catch (err: any) {
+                log("error", `Config save failed: ${ds.name}`, String(err));
+              }
+            }
+          );
+        } else if (matchedSkill) {
+          // No config fields — show what's missing
+          confirmDialog(
+            `${ds.name} requires: ${matchedSkill.missing.join(", ")}. Install the dependencies first.`,
+            () => {}
+          );
+        }
       });
 
       card.appendChild(iconEl);
       card.appendChild(infoEl);
       card.appendChild(addBtn);
-      card.appendChild(configForm);
       catalogGrid.appendChild(card);
     }
 
