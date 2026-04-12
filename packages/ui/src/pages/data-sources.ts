@@ -198,7 +198,8 @@ export async function renderDataSources(container: HTMLElement): Promise<void> {
 function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
   container.textContent = "";
 
-  const installedIds = new Set(skills.map((s) => s.name));
+  // Only mark as "Connected" if the skill is eligible (deps met + config provided)
+  const connectedIds = new Set(skills.filter((s) => s.eligible).map((s) => s.name));
 
   // ── Catalog section ──
   const catalogSection = document.createElement("div");
@@ -245,7 +246,7 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
     card.appendChild(iconEl);
     card.appendChild(infoEl);
 
-    if (installedIds.has(ds.id)) {
+    if (connectedIds.has(ds.id)) {
       const badge = document.createElement("span");
       badge.className = "ds-catalog-badge";
       badge.textContent = "\u2713 Connected";
