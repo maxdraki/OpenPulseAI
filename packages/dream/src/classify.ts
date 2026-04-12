@@ -1,62 +1,139 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider } from "@openpulse/core";
 
+/**
+ * Pre-filter: remove "no activity" / "inactive" noise from entries.
+ * Returns cleaned entries — strips paragraphs about inactive projects.
+ */
+function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
+  return entries
+    .map((entry) => {
+      // Strip lines/paragraphs about inactivity
+      const lines = entry.log.split("\n");
+      const filtered = lines.filter((line) => {
+        const lower = line.toLowerCase();
+        // Skip lines that only talk about inactivity
+        if (/no (recent |file )?activity|inactive|no changes|no modifications|no .* detected/i.test(lower) &&
+            !/(modified|changed|added|created|updated|committed|pushed|merged)/i.test(lower)) {
+          return false;
+        }
+        return true;
+      });
+
+      const cleanedLog = filtered.join("\n").trim();
+      if (!cleanedLog) return null;
+
+      return { ...entry, log: cleanedLog };
+    })
+    .filter((e): e is ActivityEntry => e !== null && e.log.length > 10);
+}
+
+/**
+ * Deterministic classification: extract project names from content.
+ * Looks for file paths, repo references, and structured data.
+ */
+function deterministicClassify(entry: ActivityEntry): string | null {
+  const log = entry.log;
+
+  // 1. File paths: /Users/.../Documents/GitHub/PROJECT_NAME/...
+  const pathMatch = log.match(/\/(?:Documents\/GitHub|Projects|repos|src)\/([a-zA-Z0-9_-]+)\//);
+  if (pathMatch) return pathMatch[1].toLowerCase();
+
+  // 2. GitHub repo references: owner/repo — match any owner
+  const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release|issue))/i)
+    ?? log.match(/\*?\*?Repository:?\*?\*?\s*`?[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)`?/i);
+  if (repoMatch) return repoMatch[1].toLowerCase();
+
+  // 3. Source metadata — if the entry came from a known source, use it
+  if (entry.source && entry.source !== "auto") {
+    // For skill-generated entries, check if the content mentions a specific project
+    const projectMention = log.match(/^###?\s+([A-Za-z0-9_-]+)\s*$/m);
+    if (projectMention) {
+      const name = projectMention[1].toLowerCase();
+      // Only use it if it looks like a project name (not a generic heading)
+      if (!["instructions", "output", "summary", "status", "highlights", "findings", "context"].includes(name)) {
+        return name;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Classify entries into themes.
+ *
+ * Pipeline:
+ * 1. Pre-filter: strip "inactive/no changes" noise
+ * 2. Already-tagged entries: use their existing theme
+ * 3. Deterministic: extract project from file paths, repo names
+ * 4. LLM fallback: only for entries that can't be classified deterministically
+ */
 export async function classifyEntries(
   entries: ActivityEntry[],
   existingThemes: string[],
   provider: LlmProvider,
   model: string
 ): Promise<ClassificationResult[]> {
-  const tagged: ClassificationResult[] = [];
-  const untagged: ActivityEntry[] = [];
+  // Step 1: Pre-filter noise
+  const cleaned = preFilter(entries);
 
-  for (const entry of entries) {
-    if (entry.theme && existingThemes.includes(entry.theme)) {
-      tagged.push({ entry, theme: entry.theme, confidence: 1.0 });
-    } else {
-      untagged.push(entry);
+  const results: ClassificationResult[] = [];
+  const needsLlm: ActivityEntry[] = [];
+
+  for (const entry of cleaned) {
+    // Step 2: Already tagged
+    if (entry.theme && entry.theme !== "auto" && entry.theme !== "ingested") {
+      results.push({ entry, theme: entry.theme, confidence: 1.0 });
+      continue;
     }
+
+    // Step 3: Deterministic classification
+    const project = deterministicClassify(entry);
+    if (project) {
+      results.push({ entry, theme: project, confidence: 0.95 });
+      continue;
+    }
+
+    // Step 4: Needs LLM
+    needsLlm.push(entry);
   }
 
-  if (untagged.length === 0) return tagged;
+  // LLM fallback for remaining entries
+  if (needsLlm.length > 0) {
+    const entriesText = needsLlm
+      .map((e, i) => `[${i}] ${e.timestamp}: ${e.log.slice(0, 300)}`)
+      .join("\n\n");
 
-  const entriesText = untagged
-    .map((e, i) => `[${i}] ${e.timestamp}: ${e.log}`)
-    .join("\n");
-
-  const responseText = await provider.complete({
-    model,
-    prompt: `Classify each numbered entry into a theme. Existing themes: ${existingThemes.length > 0 ? existingThemes.join(", ") : "(none yet)"}.
-
-Rules for theme names:
-- Use the PROJECT NAME as the theme when the entry is about a specific project (e.g., "openpulse", "aigis", "gustave")
-- Use a TOPIC name only for cross-project entries (e.g., "weekly-status", "infrastructure")
-- Theme names must be lowercase-kebab-case
-- Prefer specific themes over generic ones — "openpulse" is better than "development-logs"
-- Create new themes freely when existing ones don't fit well
+    try {
+      const responseText = await provider.complete({
+        model,
+        prompt: `Classify each numbered entry into a theme (lowercase-kebab-case).
+Existing themes: ${existingThemes.length > 0 ? existingThemes.join(", ") : "(none)"}.
+Use project names as themes when possible. Only create new themes for genuinely distinct topics.
 
 Entries:
 ${entriesText}
 
-Respond with a JSON array of objects: [{"index": 0, "theme": "theme-name", "confidence": 0.9}, ...]
-Return ONLY the JSON array, no other text.`,
-    systemPrompt: `You are classifying activity log entries into themes. Rules:
-- Only create a theme for a project if the entry describes ACTUAL WORK done on that project (code changes, commits, PRs, deployments)
-- Do NOT create themes for projects that are merely mentioned as "inactive", "no changes", or listed in a directory scan
-- If an entry mentions multiple projects, classify it under the project where the ACTUAL activity occurred
-- When in doubt, classify under the source skill name (e.g. "github-activity", "folder-watcher")`,
-  });
+Respond with ONLY a JSON array: [{"index": 0, "theme": "name"}]`,
+      });
 
-  const parsed = JSON.parse(responseText) as Array<{
-    index: number;
-    theme: string;
-    confidence: number;
-  }>;
+      const parsed = JSON.parse(responseText) as Array<{ index: number; theme: string }>;
+      for (const p of parsed) {
+        if (p.index >= 0 && p.index < needsLlm.length) {
+          results.push({ entry: needsLlm[p.index], theme: p.theme, confidence: 0.7 });
+        }
+      }
+    } catch {
+      // LLM failed — classify under source or "uncategorized"
+      for (const entry of needsLlm) {
+        results.push({
+          entry,
+          theme: entry.source ?? "uncategorized",
+          confidence: 0.3,
+        });
+      }
+    }
+  }
 
-  const llmResults = parsed.map((p) => ({
-    entry: untagged[p.index],
-    theme: p.theme,
-    confidence: p.confidence,
-  }));
-
-  return [...tagged, ...llmResults];
+  return results;
 }
