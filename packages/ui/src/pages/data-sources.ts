@@ -693,29 +693,6 @@ function renderSkillCard(skill: SkillData): HTMLElement {
     card.appendChild(errorDiv);
   }
 
-  // Actions
-  const actions = document.createElement("div");
-  actions.className = "skill-card-actions";
-
-  const runBtn = document.createElement("button");
-  runBtn.className = "btn btn-primary";
-  runBtn.disabled = !skill.eligible;
-  runBtn.title = skill.eligible ? "Run this skill now" : "Fix missing dependencies first";
-
-  const playSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  playSvg.setAttribute("width", "14");
-  playSvg.setAttribute("height", "14");
-  playSvg.setAttribute("viewBox", "0 0 24 24");
-  playSvg.setAttribute("fill", "none");
-  playSvg.setAttribute("stroke", "currentColor");
-  playSvg.setAttribute("stroke-width", "2");
-  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-  polygon.setAttribute("points", "5 3 19 12 5 21 5 3");
-  playSvg.appendChild(polygon);
-  runBtn.appendChild(playSvg);
-  runBtn.appendChild(document.createTextNode(" Run Now"));
-  actions.appendChild(runBtn);
-
   // Remove icon (non-builtin only) — bottom-right of card
   if (!skill.isBuiltin) {
     const removeBtn = document.createElement("button");
@@ -745,31 +722,6 @@ function renderSkillCard(skill: SkillData): HTMLElement {
     card.appendChild(removeBtn);
   }
 
-  card.appendChild(actions);
-
-  // Output console
-  const output = document.createElement("div");
-  output.className = "console-output";
-  card.appendChild(output);
-
-  // Run handler
-  runBtn.addEventListener("click", async () => {
-    runBtn.classList.add("loading");
-    runBtn.disabled = true;
-    output.textContent = `Running ${skill.name}...`;
-    output.classList.add("visible");
-    try {
-      const result = await runSkillNow(skill.name);
-      log("info", `Skill completed: ${skill.name}`, result);
-      output.textContent = result;
-    } catch (e: any) {
-      log("error", `Skill failed: ${skill.name}`, String(e));
-      output.textContent = `Error: ${e}`;
-    } finally {
-      runBtn.classList.remove("loading");
-      runBtn.disabled = !skill.eligible;
-    }
-  });
 
   return card;
 }

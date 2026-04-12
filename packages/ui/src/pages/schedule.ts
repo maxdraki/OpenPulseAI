@@ -418,13 +418,22 @@ function buildCollectorCard(
   meta.appendChild(nextRunEl);
   card.appendChild(meta);
 
-  // Run Now button
+  // Run Now button with play icon
   const runBtn = document.createElement("button");
   runBtn.type = "button";
-  runBtn.className = "btn btn-ghost btn-sm";
-  runBtn.style.fontSize = "0.78rem";
-  runBtn.style.padding = "0.2rem 0.6rem";
-  runBtn.textContent = "Run Now";
+  runBtn.className = "btn btn-primary";
+  const playSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  playSvg.setAttribute("width", "14");
+  playSvg.setAttribute("height", "14");
+  playSvg.setAttribute("viewBox", "0 0 24 24");
+  playSvg.setAttribute("fill", "none");
+  playSvg.setAttribute("stroke", "currentColor");
+  playSvg.setAttribute("stroke-width", "2");
+  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  polygon.setAttribute("points", "5 3 19 12 5 21 5 3");
+  playSvg.appendChild(polygon);
+  runBtn.appendChild(playSvg);
+  runBtn.appendChild(document.createTextNode(" Run Now"));
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
     runBtn.textContent = "Running…";
