@@ -3,15 +3,19 @@ import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog } from "../lib/dialog.js";
 
+// Logo.dev CDN for service logos
+const LOGO_TOKEN = "pk_LAYYrrRiTb2tIjkY-KCbMw";
+const logo = (domain: string) => `https://img.logo.dev/${domain}?token=${LOGO_TOKEN}&size=48&format=png`;
+
 // Catalog of known data sources
 const DATA_SOURCES = [
-  { id: "github-activity", name: "GitHub", description: "Commits, PRs, reviews, issues and notifications", icon: "\u{1F4BB}" },
-  { id: "folder-watcher", name: "File Changes", description: "Track modified files across project directories", icon: "\u{1F4C1}" },
-  { id: "google-daily-digest", name: "Google Workspace", description: "Gmail and Calendar activity digest", icon: "\u{1F4E7}" },
-  { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: "\u{1F4CB}" },
-  { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: "\u{1F41B}" },
-  { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: "\u{1F4AC}" },
-  { id: "weekly-rollup", name: "Weekly Rollup", description: "Synthesise themes into a weekly status", icon: "\u{1F4CA}" },
+  { id: "github-activity", name: "GitHub", description: "Commits, PRs, reviews, issues and notifications", icon: logo("github.com") },
+  { id: "folder-watcher", name: "File Changes", description: "Track modified files across project directories", icon: "" },
+  { id: "google-daily-digest", name: "Google Workspace", description: "Gmail and Calendar activity digest", icon: logo("google.com") },
+  { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: logo("trello.com") },
+  { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: logo("atlassian.com") },
+  { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: logo("slack.com") },
+  { id: "weekly-rollup", name: "Weekly Rollup", description: "Synthesise themes into a weekly status", icon: "" },
 ];
 
 // Human-readable cron descriptions for common patterns
@@ -213,7 +217,17 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
 
     const iconEl = document.createElement("div");
     iconEl.className = "ds-catalog-icon";
-    iconEl.textContent = ds.icon;
+    if (ds.icon.startsWith("http")) {
+      const img = document.createElement("img");
+      img.src = ds.icon;
+      img.alt = ds.name;
+      img.width = 28;
+      img.height = 28;
+      img.style.borderRadius = "4px";
+      iconEl.appendChild(img);
+    } else {
+      iconEl.textContent = ds.icon || "\u{1F4E6}";
+    }
 
     const infoEl = document.createElement("div");
     infoEl.className = "ds-catalog-info";
