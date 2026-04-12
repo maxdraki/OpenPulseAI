@@ -198,12 +198,11 @@ export async function renderDataSources(container: HTMLElement): Promise<void> {
 function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
   container.textContent = "";
 
-  // Split skills: "yours" = eligible (configured), "available" = not eligible (needs setup)
+  // "Your sources" = eligible (deps met + config filled or no config needed)
+  // "Available" = catalog entries that aren't in "yours"
   const yourSources = skills.filter((s) => s.eligible);
-  const availableEntries = DATA_SOURCES.filter((ds) => {
-    const matched = skills.find((s) => s.name === ds.id);
-    return !matched || !matched.eligible;
-  });
+  const yourIds = new Set(yourSources.map((s) => s.name));
+  const availableEntries = DATA_SOURCES.filter((ds) => !yourIds.has(ds.id));
 
   // ── Available section (only show if there are unconfigured sources) ──
   if (availableEntries.length > 0) {
@@ -249,21 +248,73 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
       const addBtn = document.createElement("button");
       addBtn.className = "btn btn-sm ds-catalog-add";
       addBtn.textContent = "Add";
+
+      // Inline config form (hidden until Add is clicked)
+      const configForm = document.createElement("div");
+      configForm.className = "ds-inline-config";
+      configForm.style.display = "none";
+
+      const matchedSkill = skills.find((s) => s.name === ds.id);
+      const configFields = matchedSkill?.config ?? [];
+
+      if (configFields.length > 0) {
+        for (const field of configFields) {
+          if (field.default) continue; // Skip fields with defaults
+          const row = document.createElement("div");
+          row.style.marginBottom = "0.35rem";
+          const label = document.createElement("label");
+          label.className = "form-label";
+          label.style.fontSize = "0.73rem";
+          label.textContent = field.label;
+          const input = document.createElement("input");
+          input.className = "form-input";
+          input.style.fontSize = "0.8rem";
+          input.type = field.key.includes("token") || field.key.includes("key") || field.key.includes("secret") ? "password" : "text";
+          input.placeholder = field.label;
+          input.dataset.configKey = field.key;
+          row.appendChild(label);
+          row.appendChild(input);
+          configForm.appendChild(row);
+        }
+
+        const saveBtn = document.createElement("button");
+        saveBtn.className = "btn btn-sm btn-primary";
+        saveBtn.textContent = "Save & Connect";
+        saveBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const values: Record<string, string> = {};
+          configForm.querySelectorAll<HTMLInputElement>("input[data-config-key]").forEach((inp) => {
+            if (inp.value) values[inp.dataset.configKey!] = inp.value;
+          });
+          if (Object.keys(values).length === 0) return;
+          try {
+            await saveSkillConfig(ds.id, values);
+            log("info", `Data source configured: ${ds.name}`);
+            // Reload the page to move this source to "Your Data Sources"
+            await loadSkills?.();
+          } catch (err: any) {
+            log("error", `Config save failed: ${ds.name}`, String(err));
+          }
+        });
+        configForm.appendChild(saveBtn);
+      } else {
+        // No config needed — just has missing deps
+        const msg = document.createElement("p");
+        msg.style.cssText = "font-size: 0.78rem; color: var(--text-secondary); margin: 0;";
+        const matched = skills.find((s) => s.name === ds.id);
+        msg.textContent = matched ? `Missing: ${matched.missing.join(", ")}` : "Install dependencies to use this source.";
+        configForm.appendChild(msg);
+      }
+
       addBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Scroll to the skill's card in the full list below
-        const target = document.getElementById(`skill-card-${ds.id}`);
-        if (target) {
-          target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-          // Open the config panel
-          const configToggle = target.querySelector(".skill-config-toggle") as HTMLButtonElement | null;
-          if (configToggle) configToggle.click();
-        }
+        configForm.style.display = configForm.style.display === "none" ? "" : "none";
       });
 
       card.appendChild(iconEl);
       card.appendChild(infoEl);
       card.appendChild(addBtn);
+      card.appendChild(configForm);
       catalogGrid.appendChild(card);
     }
 
@@ -293,21 +344,6 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
   }
 
   container.appendChild(yourSection);
-
-  // ── Unconfigured sources shown below for setup ──
-  const unconfigured = skills.filter((s) => !s.eligible);
-  if (unconfigured.length > 0) {
-    const setupH3 = document.createElement("h3");
-    setupH3.style.cssText = "font-size: 0.8rem; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 1.25rem 0 0.5rem;";
-    setupH3.textContent = "Needs Setup";
-    container.appendChild(setupH3);
-
-    for (const skill of unconfigured) {
-      const card = renderSkillCard(skill);
-      card.id = `skill-card-${skill.name}`;
-      container.appendChild(card);
-    }
-  }
 }
 
 function renderSkillsList(container: HTMLElement, skills: SkillData[]): void {
