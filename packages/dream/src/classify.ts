@@ -25,13 +25,21 @@ export async function classifyEntries(
 
   const responseText = await provider.complete({
     model,
-    prompt: `Classify each numbered entry into one of these themes: ${existingThemes.join(", ")}. If none fit, suggest a new theme name (lowercase-kebab-case).
+    prompt: `Classify each numbered entry into a theme. Existing themes: ${existingThemes.length > 0 ? existingThemes.join(", ") : "(none yet)"}.
+
+Rules for theme names:
+- Use the PROJECT NAME as the theme when the entry is about a specific project (e.g., "openpulse", "aigis", "gustave")
+- Use a TOPIC name only for cross-project entries (e.g., "weekly-status", "infrastructure")
+- Theme names must be lowercase-kebab-case
+- Prefer specific themes over generic ones — "openpulse" is better than "development-logs"
+- Create new themes freely when existing ones don't fit well
 
 Entries:
 ${entriesText}
 
 Respond with a JSON array of objects: [{"index": 0, "theme": "theme-name", "confidence": 0.9}, ...]
 Return ONLY the JSON array, no other text.`,
+    systemPrompt: `You are classifying activity log entries into themes. Each theme should represent a distinct project or topic. Never lump unrelated projects into a single theme. When in doubt, create a new theme.`,
   });
 
   const parsed = JSON.parse(responseText) as Array<{

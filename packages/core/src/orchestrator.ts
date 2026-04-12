@@ -415,25 +415,25 @@ export class Orchestrator {
       dp.collectorsCompletedToday.push(name);
     }
 
-    // Check barrier: all enabled collectors done today?
+    // Check barrier: have all enabled collectors run since the last dream pipeline?
     if (!dp.autoTrigger) return;
-
-    const today = getLocalDate();
-    if (dp.lastRun && dp.lastRun.startsWith(today)) {
-      // Dream already ran today
-      return;
-    }
 
     const enabledCollectors = Object.entries(this.state.collectors)
       .filter(([, c]) => c.enabled)
       .map(([n]) => n);
 
-    const allDone = enabledCollectors.every((n) =>
-      dp.collectorsCompletedToday.includes(n)
-    );
+    if (enabledCollectors.length === 0) return;
 
-    if (allDone && enabledCollectors.length > 0) {
-      await vaultLog("info", "[orchestrator] Barrier met — triggering Dream Pipeline");
+    // Check if all enabled collectors have run more recently than the last dream run
+    const dreamLastRun = dp.lastRun ? new Date(dp.lastRun).getTime() : 0;
+    const allRunSinceDream = enabledCollectors.every((n) => {
+      const col = this.state.collectors[n];
+      if (!col?.lastRun) return false;
+      return new Date(col.lastRun).getTime() > dreamLastRun;
+    });
+
+    if (allRunSinceDream) {
+      await vaultLog("info", "[orchestrator] Barrier met — all collectors ran since last dream, triggering pipeline");
       await this.runDream();
     }
   }
