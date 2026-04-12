@@ -1666,6 +1666,14 @@ body {
   flex-shrink: 0;
 }
 
+.ds-catalog-badge--ready {
+  color: var(--accent);
+}
+
+.ds-catalog-badge--setup {
+  color: var(--hot);
+}
+
 .ds-catalog-add {
   flex-shrink: 0;
 }

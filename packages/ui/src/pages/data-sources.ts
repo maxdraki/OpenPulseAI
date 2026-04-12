@@ -198,8 +198,12 @@ export async function renderDataSources(container: HTMLElement): Promise<void> {
 function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
   container.textContent = "";
 
-  // Only mark as "Connected" if the skill is eligible (deps met + config provided)
-  const connectedIds = new Set(skills.filter((s) => s.eligible).map((s) => s.name));
+  // A source is "Connected" only if it has been successfully run at least once
+  const connectedIds = new Set(
+    skills
+      .filter((s) => s.eligible && s.lastStatus === "success")
+      .map((s) => s.name)
+  );
 
   // ── Catalog section ──
   const catalogSection = document.createElement("div");
@@ -246,13 +250,34 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
     card.appendChild(iconEl);
     card.appendChild(infoEl);
 
+    const matchedSkill = skills.find((s) => s.name === ds.id);
+
     if (connectedIds.has(ds.id)) {
+      // Successfully run at least once
       const badge = document.createElement("span");
       badge.className = "ds-catalog-badge";
       badge.textContent = "\u2713 Connected";
       card.appendChild(badge);
-
-      // Clicking scrolls to the installed skill card
+      card.addEventListener("click", () => {
+        const target = document.getElementById(`skill-card-${ds.id}`);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    } else if (matchedSkill && matchedSkill.eligible) {
+      // Eligible but not yet run
+      const badge = document.createElement("span");
+      badge.className = "ds-catalog-badge ds-catalog-badge--ready";
+      badge.textContent = "Ready";
+      card.appendChild(badge);
+      card.addEventListener("click", () => {
+        const target = document.getElementById(`skill-card-${ds.id}`);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    } else if (matchedSkill && !matchedSkill.eligible) {
+      // Needs setup (missing deps or config)
+      const badge = document.createElement("span");
+      badge.className = "ds-catalog-badge ds-catalog-badge--setup";
+      badge.textContent = "Setup needed";
+      card.appendChild(badge);
       card.addEventListener("click", () => {
         const target = document.getElementById(`skill-card-${ds.id}`);
         if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
