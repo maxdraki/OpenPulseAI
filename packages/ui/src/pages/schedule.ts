@@ -340,18 +340,20 @@ function buildCollectorCard(
   }
 
   renderTags();
-  card.appendChild(tagsWrap);
 
-  // Add schedule button + picker slot
-  let pickerActive = false;
-  const pickerSlot = document.createElement("div");
-
+  // Add schedule button inline with tags
   const addBtn = document.createElement("button");
   addBtn.type = "button";
   addBtn.className = "btn btn-ghost btn-sm";
-  addBtn.style.fontSize = "0.78rem";
-  addBtn.style.padding = "0.2rem 0.5rem";
-  addBtn.textContent = "+ Add schedule";
+  addBtn.style.cssText = "font-size: 0.78rem; padding: 0.2rem 0.5rem;";
+  addBtn.textContent = "+ Add";
+  tagsWrap.appendChild(addBtn);
+
+  card.appendChild(tagsWrap);
+
+  // Picker slot (hidden until Add clicked)
+  let pickerActive = false;
+  const pickerSlot = document.createElement("div");
 
   addBtn.addEventListener("click", () => {
     if (pickerActive) return;
@@ -380,10 +382,9 @@ function buildCollectorCard(
     pickerSlot.appendChild(picker.el);
   });
 
-  card.appendChild(addBtn);
   card.appendChild(pickerSlot);
 
-  // Meta row
+  // Meta row (last run + next run + Run Now button on same line)
   const meta = document.createElement("div");
   meta.className = "schedule-meta";
 
@@ -416,7 +417,6 @@ function buildCollectorCard(
 
   meta.appendChild(lastRunEl);
   meta.appendChild(nextRunEl);
-  card.appendChild(meta);
 
   // Run Now button with play icon
   const runBtn = document.createElement("button");
@@ -448,7 +448,8 @@ function buildCollectorCard(
       runBtn.textContent = "Run Now";
     }
   });
-  card.appendChild(runBtn);
+  meta.appendChild(runBtn);
+  card.appendChild(meta);
 
   // Error detail
   if (collector?.lastResult === "error" && collector.lastError) {
@@ -562,7 +563,8 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
     }
 
     // ── Unscheduled section ──
-    const unscheduled = skills.filter((s) => !skillsInOrchestrator.has(s.name));
+    // Only show eligible (configured) sources that aren't scheduled yet
+    const unscheduled = skills.filter((s) => s.eligible && !skillsInOrchestrator.has(s.name));
     if (unscheduled.length > 0) {
       const unschedSection = document.createElement("div");
       unschedSection.className = "unscheduled-section";

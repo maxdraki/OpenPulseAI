@@ -1567,7 +1567,8 @@ body {
 .schedule-tag-remove { cursor: pointer; opacity: 0.6; font-size: 0.9rem; line-height: 1; border: none; background: none; color: inherit; }
 .schedule-tag-remove:hover { opacity: 1; color: var(--danger); }
 
-.schedule-meta { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 0.4rem; }
+.schedule-meta { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; font-size: 0.75rem; color: var(--text-tertiary); margin-bottom: 0.4rem; }
+.schedule-meta .btn { margin-left: auto; }
 
 .time-picker { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 0.75rem; margin: 0.5rem 0; }
 .time-picker-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
