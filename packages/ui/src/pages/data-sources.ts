@@ -11,7 +11,8 @@ const logo = (domain: string) => `https://img.logo.dev/${domain}?token=${LOGO_TO
 const DATA_SOURCES = [
   { id: "github-activity", name: "GitHub", description: "Commits, PRs, reviews, issues and notifications", icon: logo("github.com") },
   { id: "folder-watcher", name: "File Changes", description: "Track modified files across project directories", icon: "" },
-  { id: "google-daily-digest", name: "Google Workspace", description: "Gmail and Calendar activity digest", icon: logo("google.com") },
+  // Google Workspace hidden until we have a proper OAuth setup flow
+  // { id: "google-daily-digest", name: "Google Workspace", description: "Gmail and Calendar activity digest", icon: logo("google.com") },
   { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: logo("trello.com") },
   { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: logo("atlassian.com") },
   { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: logo("slack.com") },
