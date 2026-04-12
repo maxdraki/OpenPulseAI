@@ -16,6 +16,7 @@ export interface PendingUpdate {
   entries: Array<{ timestamp: string; log: string }>;
   createdAt: string;
   status: string;
+  batchId?: string;
 }
 
 // Detect Tauri runtime — exported for use by logger.ts

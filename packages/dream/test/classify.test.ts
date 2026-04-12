@@ -17,18 +17,18 @@ describe("classifyEntries", () => {
 
     const provider = mockProvider(
       JSON.stringify([
-        { index: 0, theme: "hiring", confidence: 0.9 },
-        { index: 1, theme: "project-auth", confidence: 0.85 },
+        { index: 0, themes: ["hiring"] },
+        { index: 1, themes: ["project-auth"] },
       ])
     );
 
     const results = await classifyEntries(entries, themes, provider, "test-model");
 
     expect(results).toHaveLength(3);
-    expect(results[0].theme).toBe("project-auth");
+    expect(results[0].themes).toEqual(["project-auth"]);
     expect(results[0].confidence).toBe(1.0);
-    expect(results[1].theme).toBe("hiring");
-    expect(results[2].theme).toBe("project-auth");
+    expect(results[1].themes).toEqual(["hiring"]);
+    expect(results[2].themes).toEqual(["project-auth"]);
   });
 
   it("skips LLM when all entries are pre-tagged", async () => {
@@ -39,7 +39,7 @@ describe("classifyEntries", () => {
 
     const results = await classifyEntries(entries, ["docs"], provider, "test-model");
 
-    expect(results[0].theme).toBe("docs");
+    expect(results[0].themes).toEqual(["docs"]);
     expect(results[0].confidence).toBe(1.0);
     expect(provider.complete).not.toHaveBeenCalled();
   });

@@ -28,7 +28,7 @@ describe("synthesizeToPending", () => {
     const classified: ClassificationResult[] = [
       {
         entry: { timestamp: "2026-04-03T10:00:00Z", log: "Refactored login page" },
-        theme: "project-auth",
+        themes: ["project-auth"],
         confidence: 0.95,
       },
     ];
@@ -47,7 +47,7 @@ describe("synthesizeToPending", () => {
     const classified: ClassificationResult[] = [
       {
         entry: { timestamp: "2026-04-03T14:00:00Z", log: "OAuth completed" },
-        theme: "project-auth",
+        themes: ["project-auth"],
         confidence: 0.9,
       },
     ];
@@ -58,6 +58,54 @@ describe("synthesizeToPending", () => {
     expect(provider.complete).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("OAuth integration pending"),
+      })
+    );
+  });
+
+  it("groups entries by theme and creates one pending update per theme", async () => {
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-03T10:00:00Z", log: "Login page refactored" },
+        themes: ["project-auth", "frontend"],
+        confidence: 0.95,
+      },
+      {
+        entry: { timestamp: "2026-04-03T11:00:00Z", log: "Added unit tests" },
+        themes: ["project-auth"],
+        confidence: 0.9,
+      },
+    ];
+
+    const provider = mockProvider("## Current Status\n\nWork done.");
+    const results = await synthesizeToPending(vault, classified, provider, "test-model");
+
+    // Should create two pending updates: one for project-auth, one for frontend
+    expect(results.length).toBe(2);
+    const themeNames = results.map((r) => r.theme).sort();
+    expect(themeNames).toEqual(["frontend", "project-auth"]);
+
+    // All updates share the same batchId
+    expect(results[0].batchId).toBeDefined();
+    expect(results[0].batchId).toBe(results[1].batchId);
+  });
+
+  it("includes cross-reference instruction in LLM prompt", async () => {
+    await writeTheme(vault, "other-theme", "Some other theme content.");
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-03T10:00:00Z", log: "Work on project-auth" },
+        themes: ["project-auth"],
+        confidence: 0.95,
+      },
+    ];
+
+    const provider = mockProvider("## Current Status\n\nDone.");
+    await synthesizeToPending(vault, classified, provider, "test-model");
+
+    expect(provider.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("Other themes in the wiki"),
       })
     );
   });
