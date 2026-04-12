@@ -194,149 +194,120 @@ export async function renderDataSources(container: HTMLElement): Promise<void> {
   await loadSkills?.();
 }
 
-// Render catalog + installed sections
+// Render two sections: Available (not configured) + Your Data Sources (configured/active)
 function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): void {
   container.textContent = "";
 
-  // Connected = eligible AND has run successfully
-  // Ready = eligible AND hasn't run yet (no config issues)
-  // Setup needed = NOT eligible (missing deps, config, or env)
-  const connectedIds = new Set(
-    skills.filter((s) => s.eligible && s.lastStatus === "success").map((s) => s.name)
-  );
-  const readyIds = new Set(
-    skills.filter((s) => s.eligible && s.lastStatus !== "success").map((s) => s.name)
-  );
+  // Split skills: "yours" = eligible (configured), "available" = not eligible (needs setup)
+  const yourSources = skills.filter((s) => s.eligible);
+  const availableEntries = DATA_SOURCES.filter((ds) => {
+    const matched = skills.find((s) => s.name === ds.id);
+    return !matched || !matched.eligible;
+  });
 
-  // ── Catalog section ──
-  const catalogSection = document.createElement("div");
-  catalogSection.className = "card";
+  // ── Available section (only show if there are unconfigured sources) ──
+  if (availableEntries.length > 0) {
+    const availSection = document.createElement("div");
+    availSection.className = "card";
 
-  const catalogH3 = document.createElement("h3");
-  catalogH3.textContent = "Add a Data Source";
-  catalogSection.appendChild(catalogH3);
+    const availH3 = document.createElement("h3");
+    availH3.textContent = "Available Data Sources";
+    availSection.appendChild(availH3);
 
-  const catalogGrid = document.createElement("div");
-  catalogGrid.className = "data-source-catalog";
+    const catalogGrid = document.createElement("div");
+    catalogGrid.className = "data-source-catalog";
 
-  for (const ds of DATA_SOURCES) {
-    const card = document.createElement("div");
-    card.className = "ds-catalog-card";
+    for (const ds of availableEntries) {
+      const card = document.createElement("div");
+      card.className = "ds-catalog-card";
 
-    const iconEl = document.createElement("div");
-    iconEl.className = "ds-catalog-icon";
-    if (ds.icon.startsWith("http")) {
-      const img = document.createElement("img");
-      img.src = ds.icon;
-      img.alt = ds.name;
-      img.width = 28;
-      img.height = 28;
-      img.style.borderRadius = "4px";
-      iconEl.appendChild(img);
-    } else {
-      iconEl.textContent = ds.icon || "\u{1F4E6}";
-    }
+      const iconEl = document.createElement("div");
+      iconEl.className = "ds-catalog-icon";
+      if (ds.icon.startsWith("http")) {
+        const img = document.createElement("img");
+        img.src = ds.icon;
+        img.alt = ds.name;
+        img.width = 28;
+        img.height = 28;
+        img.style.borderRadius = "4px";
+        iconEl.appendChild(img);
+      } else {
+        iconEl.textContent = ds.icon || "\u{1F4E6}";
+      }
 
-    const infoEl = document.createElement("div");
-    infoEl.className = "ds-catalog-info";
+      const infoEl = document.createElement("div");
+      infoEl.className = "ds-catalog-info";
+      const nameEl = document.createElement("div");
+      nameEl.className = "ds-catalog-name";
+      nameEl.textContent = ds.name;
+      const descEl = document.createElement("div");
+      descEl.className = "ds-catalog-desc";
+      descEl.textContent = ds.description;
+      infoEl.appendChild(nameEl);
+      infoEl.appendChild(descEl);
 
-    const nameEl = document.createElement("div");
-    nameEl.className = "ds-catalog-name";
-    nameEl.textContent = ds.name;
-
-    const descEl = document.createElement("div");
-    descEl.className = "ds-catalog-desc";
-    descEl.textContent = ds.description;
-
-    infoEl.appendChild(nameEl);
-    infoEl.appendChild(descEl);
-    card.appendChild(iconEl);
-    card.appendChild(infoEl);
-
-    const matchedSkill = skills.find((s) => s.name === ds.id);
-
-    if (connectedIds.has(ds.id)) {
-      // Successfully run at least once
-      const badge = document.createElement("span");
-      badge.className = "ds-catalog-badge";
-      badge.textContent = "\u2713 Connected";
-      card.appendChild(badge);
-      card.addEventListener("click", () => {
-        const target = document.getElementById(`skill-card-${ds.id}`);
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      });
-    } else if (matchedSkill && readyIds.has(ds.id) && (!matchedSkill.config || matchedSkill.config.length === 0)) {
-      // Eligible, no config needed, just hasn't run yet
-      const badge = document.createElement("span");
-      badge.className = "ds-catalog-badge ds-catalog-badge--ready";
-      badge.textContent = "Ready";
-      card.appendChild(badge);
-      card.addEventListener("click", () => {
-        const target = document.getElementById(`skill-card-${ds.id}`);
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      });
-    } else if (matchedSkill) {
-      // Has config fields that need filling, or missing deps
-      const badge = document.createElement("span");
-      badge.className = "ds-catalog-badge ds-catalog-badge--setup";
-      badge.textContent = "Setup needed";
-      card.appendChild(badge);
-      card.addEventListener("click", () => {
-        const target = document.getElementById(`skill-card-${ds.id}`);
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      });
-    } else {
       const addBtn = document.createElement("button");
       addBtn.className = "btn btn-sm ds-catalog-add";
       addBtn.textContent = "Add";
-      // For uninstalled builtin IDs: clicking scrolls down if somehow present; otherwise no-op for now
       addBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Future: open config panel. For now scroll to advanced section.
-        const adv = document.querySelector(".advanced-toggle") as HTMLButtonElement | null;
-        if (adv) {
-          adv.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        // Scroll to the skill's card in the full list below
+        const target = document.getElementById(`skill-card-${ds.id}`);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          // Open the config panel
+          const configToggle = target.querySelector(".skill-config-toggle") as HTMLButtonElement | null;
+          if (configToggle) configToggle.click();
         }
       });
+
+      card.appendChild(iconEl);
+      card.appendChild(infoEl);
       card.appendChild(addBtn);
+      catalogGrid.appendChild(card);
     }
 
-    catalogGrid.appendChild(card);
+    availSection.appendChild(catalogGrid);
+    container.appendChild(availSection);
   }
 
-  catalogSection.appendChild(catalogGrid);
-  container.appendChild(catalogSection);
+  // ── Your Data Sources (eligible/configured) ──
+  const yourSection = document.createElement("div");
 
-  // ── Installed section ──
-  const installedSection = document.createElement("div");
-  installedSection.id = "installed-data-sources";
+  const yourH3 = document.createElement("h3");
+  yourH3.style.cssText = "font-size: 0.8rem; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 1.25rem 0 0.5rem;";
+  yourH3.textContent = "Your Data Sources";
+  yourSection.appendChild(yourH3);
 
-  const installedH3 = document.createElement("h3");
-  installedH3.style.cssText = "font-size: 0.8rem; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 1.25rem 0 0.5rem;";
-  installedH3.textContent = "Your Data Sources";
-  installedSection.appendChild(installedH3);
-
-  if (skills.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    const icon = document.createElement("div");
-    icon.className = "empty-state-icon";
-    icon.style.cssText = "background: rgba(96, 165, 250, 0.08); color: var(--accent);";
-    icon.textContent = "?";
-    const msg = document.createElement("p");
-    msg.textContent = "No data sources found. Add one from the catalog above or install a SKILL.md file to ~/OpenPulseAI/skills/";
-    empty.appendChild(icon);
-    empty.appendChild(msg);
-    installedSection.appendChild(empty);
+  if (yourSources.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "dashboard-empty";
+    empty.textContent = "No data sources configured yet. Add one from above to get started.";
+    yourSection.appendChild(empty);
   } else {
-    for (const skill of skills) {
+    for (const skill of yourSources) {
       const card = renderSkillCard(skill);
       card.id = `skill-card-${skill.name}`;
-      installedSection.appendChild(card);
+      yourSection.appendChild(card);
     }
   }
 
-  container.appendChild(installedSection);
+  container.appendChild(yourSection);
+
+  // ── Unconfigured sources shown below for setup ──
+  const unconfigured = skills.filter((s) => !s.eligible);
+  if (unconfigured.length > 0) {
+    const setupH3 = document.createElement("h3");
+    setupH3.style.cssText = "font-size: 0.8rem; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin: 1.25rem 0 0.5rem;";
+    setupH3.textContent = "Needs Setup";
+    container.appendChild(setupH3);
+
+    for (const skill of unconfigured) {
+      const card = renderSkillCard(skill);
+      card.id = `skill-card-${skill.name}`;
+      container.appendChild(card);
+    }
+  }
 }
 
 function renderSkillsList(container: HTMLElement, skills: SkillData[]): void {
