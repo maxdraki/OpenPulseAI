@@ -20,14 +20,19 @@ export function extractShellCommands(body: string): string[] {
 
   const inlineRegex = /`([^`]+)`/g;
   let match;
+  const shellBinaries = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date)\b/;
   while ((match = inlineRegex.exec(body)) !== null) {
     const cmd = match[1].trim();
     if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
-      // Skip things that look like code references (function calls, object literals)
-      // but allow shell grouping like \( and ${ and escaped braces
-      const looksLikeCode = /\w+\(/.test(cmd) && !cmd.includes("\\(");
-      if (!looksLikeCode && !cmd.startsWith("//")) {
+      // Commands starting with a known binary are always shell commands
+      if (shellBinaries.test(cmd)) {
         commands.push(cmd);
+      } else {
+        // For other commands, skip things that look like function calls
+        const looksLikeCode = /\w+\(/.test(cmd) && !cmd.includes("\\(");
+        if (!looksLikeCode && !cmd.startsWith("//")) {
+          commands.push(cmd);
+        }
       }
     }
   }
@@ -78,15 +83,24 @@ function expandHome(value: string): string {
   return value;
 }
 
-function applyConfig(text: string, config: Record<string, string>): string {
+function applyConfig(text: string, config: Record<string, string>, skill: SkillDefinition): string {
+  const pathFields = new Set(
+    (skill.config ?? []).filter((f) => f.type === "path" || f.type === "paths").map((f) => f.key)
+  );
+
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = config[key];
     if (value === undefined) return `{{${key}}}`;
-    // Expand ~ to home dir. For multi-line values (paths type),
-    // escape each path separately so find/ls get them as separate args
-    const lines = value.split("\n").filter((l) => l.trim());
-    const expanded = lines.map(expandHome);
-    return expanded.map(escapeForShell).join(" ");
+
+    if (pathFields.has(key)) {
+      // Path values: expand ~ and shell-escape (may contain spaces)
+      const lines = value.split("\n").filter((l) => l.trim());
+      const expanded = lines.map(expandHome);
+      return expanded.map(escapeForShell).join(" ");
+    }
+
+    // Text values (API keys, tokens, IDs): use raw value — no shell escaping
+    return value;
   });
 }
 
@@ -113,7 +127,7 @@ export async function runSkill(
 
   try {
     const config = await loadSkillConfig(vault, skill);
-    const body = applyConfig(skill.body, config);
+    const body = applyConfig(skill.body, config, skill);
 
     const isBuiltin = skill.location.includes("builtin-skills");
     const threats = scanSkillForThreats(body, isBuiltin);
