@@ -717,10 +717,15 @@ app.post("/api/skill-config/:name", async (req, res) => {
 
 // --- Confluence space discovery ---
 
+const ATLASSIAN_DOMAIN = /^[\w-]+(\.[\w-]+)*\.atlassian\.net$/;
+
 app.post("/api/confluence-activity/spaces", async (req, res) => {
   const { domain, email, token } = req.body as { domain?: string; email?: string; token?: string };
   if (!domain || !email || !token) {
     return res.status(400).json({ error: "domain, email, and token are required" });
+  }
+  if (!ATLASSIAN_DOMAIN.test(domain)) {
+    return res.status(400).json({ error: "domain must be an *.atlassian.net host" });
   }
   try {
     const resp = await fetch(
