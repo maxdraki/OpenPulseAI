@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { Vault } from "../../src/vault.js";
 import type { LlmProvider, SkillDefinition } from "../../src/index.js";
 import { runSkill, extractShellCommands } from "../../src/skills/runner.js";
+import { loadCollectorState } from "../../src/skills/scheduler.js";
 
 function mockProvider(response: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(response) };
@@ -97,23 +98,27 @@ describe("runSkill", () => {
     expect(hotContent).toContain("test-skill");
   });
 
-  it("returns error when all commands fail", async () => {
+  it("throws and saves error state when all commands fail", async () => {
     const skill = makeSkill("1. Run `nonexistent-command-xyz --flag` to get data");
     const provider = mockProvider("No data available.");
 
-    const state = await runSkill(skill, vault, provider, "test-model");
-    expect(state.lastStatus).toBe("error");
+    await expect(runSkill(skill, vault, provider, "test-model")).rejects.toThrow("All commands failed");
+
+    const state = await loadCollectorState(vault, "test-skill");
+    expect(state?.lastStatus).toBe("error");
   });
 
-  it("saves error state when LLM fails", async () => {
+  it("throws and saves error state when LLM fails", async () => {
     const skill = makeSkill("1. Run `echo test` and summarize");
     const provider: LlmProvider = {
       complete: vi.fn().mockRejectedValue(new Error("API key invalid")),
     };
 
-    const state = await runSkill(skill, vault, provider, "test-model");
-    expect(state.lastStatus).toBe("error");
-    expect(state.lastError).toContain("API key invalid");
+    await expect(runSkill(skill, vault, provider, "test-model")).rejects.toThrow("API key invalid");
+
+    const state = await loadCollectorState(vault, "test-skill");
+    expect(state?.lastStatus).toBe("error");
+    expect(state?.lastError).toContain("API key invalid");
   });
 
   it("succeeds when some commands fail but not all", async () => {
