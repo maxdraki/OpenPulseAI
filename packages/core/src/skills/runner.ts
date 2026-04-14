@@ -20,7 +20,7 @@ export function extractShellCommands(body: string): string[] {
 
   const inlineRegex = /`([^`]+)`/g;
   let match;
-  const shellBinaries = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date)\b/;
+  const shellBinaries = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date|linear|glab|notion)\b/;
   while ((match = inlineRegex.exec(body)) !== null) {
     const cmd = match[1].trim();
     if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
