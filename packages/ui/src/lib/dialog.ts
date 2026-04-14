@@ -12,6 +12,15 @@ export interface FormField {
   value?: string;     // pre-filled value
 }
 
+/** Render simple markdown (links, bold, inline code) from trusted SKILL.md content */
+function renderSimpleMarkdown(text: string): string {
+  let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-base);padding:0.1em 0.3em;border-radius:3px;font-size:0.85em">$1</code>');
+  return html;
+}
+
 /** Trap Tab/Shift-Tab within a container */
 function trapFocus(container: HTMLElement): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
@@ -53,12 +62,7 @@ export function formDialog(
   if (description) {
     const desc = document.createElement("div");
     desc.className = "modal-desc";
-    // Render markdown links from setup guides (trusted SKILL.md content)
-    const escaped = description.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    desc.innerHTML = escaped.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>'
-    );
+    desc.innerHTML = renderSimpleMarkdown(description);
     box.appendChild(desc);
   }
 
@@ -218,11 +222,7 @@ export function infoDialog(title: string, description: string): void {
 
   const desc = document.createElement("div");
   desc.className = "modal-desc";
-  const escaped = description.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  desc.innerHTML = escaped.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>'
-  );
+  desc.innerHTML = renderSimpleMarkdown(description);
   box.appendChild(desc);
 
   const actions = document.createElement("div");
