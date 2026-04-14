@@ -51,9 +51,14 @@ export function formDialog(
   box.appendChild(h3);
 
   if (description) {
-    const desc = document.createElement("p");
+    const desc = document.createElement("div");
     desc.className = "modal-desc";
-    desc.textContent = description;
+    // Render markdown links from setup guides (trusted SKILL.md content)
+    const escaped = description.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    desc.innerHTML = escaped.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>'
+    );
     box.appendChild(desc);
   }
 

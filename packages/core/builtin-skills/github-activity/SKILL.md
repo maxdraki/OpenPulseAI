@@ -5,6 +5,7 @@ schedule: "0 18 * * 1-5"
 lookback: 24h
 requires:
   bins: [gh]
+setup_guide: "Requires the [GitHub CLI](https://cli.github.com). After installing, run `gh auth login` in your terminal to authenticate. No API key needed — the CLI manages auth."
 ---
 
 ## Instructions

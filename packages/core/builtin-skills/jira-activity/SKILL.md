@@ -5,18 +5,19 @@ schedule: "0 18 * * 1-5"
 lookback: 24h
 requires:
   bins: [curl]
+setup_guide: "Create an API token at [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Your domain is the subdomain you use to access Jira (e.g. **myteam**.atlassian.net). The project key is the prefix on your issue IDs (e.g. **ENG**-123)."
 config:
   - key: jira_domain
     label: Jira domain (e.g. myteam.atlassian.net)
     type: text
   - key: jira_email
-    label: Jira account email
+    label: Account email
     type: text
   - key: jira_api_token
-    label: Jira API token (from id.atlassian.com/manage-profile/security/api-tokens)
+    label: API token
     type: text
   - key: jira_project_key
-    label: Project key (e.g. ENG, PROD)
+    label: Project key (e.g. ENG)
     type: text
 ---
 

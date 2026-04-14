@@ -41,6 +41,7 @@ export function parseFrontmatter(
         env: Array.isArray(requires?.env) ? requires.env.filter((e): e is string => typeof e === "string") : [],
       },
       config,
+      setupGuide: typeof parsed.setup_guide === "string" ? parsed.setup_guide : undefined,
     };
   } catch {
     return null;

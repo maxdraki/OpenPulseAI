@@ -5,9 +5,10 @@ schedule: "0 18 * * 1-5"
 lookback: 24h
 requires:
   bins: [curl]
+setup_guide: "Create a Personal API key at [Linear API Settings](https://linear.app/settings/api). Select read-only scope. If you also install the [Linear CLI](https://github.com/schpet/linear-cli), the collector will use it automatically for richer output."
 config:
   - key: linear_api_key
-    label: Linear API key (Settings > API > Personal API keys)
+    label: API key
     type: text
 ---
 

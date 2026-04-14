@@ -182,6 +182,7 @@ export interface SkillData {
   lookback: string;
   requires: { bins: string[]; env: string[] };
   body: string;
+  setupGuide: string;
   config: Array<{ key: string; label: string; default?: string; type?: string }>;
   eligible: boolean;
   missing: string[];

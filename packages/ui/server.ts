@@ -375,6 +375,7 @@ app.get("/api/skills", async (_req, res) => {
           env: skill.requires?.env ?? [],
         },
         body: skill.body ?? "",
+        setupGuide: skill.setupGuide ?? "",
         config: configFields,
         isBuiltin: skill.location.includes("builtin-skills"),
         eligible,

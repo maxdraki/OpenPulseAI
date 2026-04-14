@@ -265,7 +265,7 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
           }));
           formDialog(
             `Connect ${ds.name}`,
-            ds.description,
+            matchedSkill?.setupGuide || ds.description,
             fields,
             "Save & Connect",
             async (values) => {

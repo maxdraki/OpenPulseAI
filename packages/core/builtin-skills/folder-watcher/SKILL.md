@@ -5,6 +5,7 @@ schedule: "0 19 * * *"
 lookback: 24h
 requires:
   bins: [find]
+setup_guide: "Add the directories you want to watch for file changes. Use the folder picker or type paths manually. Separate multiple paths with newlines."
 config:
   - key: watch_paths
     label: Directories to watch

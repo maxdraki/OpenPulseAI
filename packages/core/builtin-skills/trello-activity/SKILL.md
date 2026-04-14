@@ -5,15 +5,16 @@ schedule: "0 18 * * 1-5"
 lookback: 24h
 requires:
   bins: [curl]
+setup_guide: "Get your API key from [trello.com/app-key](https://trello.com/app-key). Then click the Token link on that page to generate a token. Find your board ID from the board URL — it's the alphanumeric string after /b/ (e.g. trello.com/b/**aBcDeFg**/board-name)."
 config:
   - key: trello_api_key
-    label: Trello API Key (from trello.com/app-key)
+    label: API key
     type: text
   - key: trello_token
-    label: Trello Token
+    label: Token
     type: text
   - key: trello_board_id
-    label: Board ID (from board URL)
+    label: Board ID
     type: text
 ---
 

@@ -78,6 +78,7 @@ export interface SkillDefinition {
     env: string[];
   };
   config?: SkillConfigField[];
+  setupGuide?: string;     // markdown shown in setup dialog
 }
 
 /** Multi-turn chat session */
