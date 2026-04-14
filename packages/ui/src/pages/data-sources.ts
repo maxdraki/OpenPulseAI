@@ -1,7 +1,7 @@
 import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, type SkillData } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
-import { confirmDialog, formDialog, type FormField } from "../lib/dialog.js";
+import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
 
 const logo = (domain: string) => logoUrl(domain, 48);
@@ -220,7 +220,7 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
 
     for (const ds of availableEntries) {
       const card = document.createElement("div");
-      card.className = "ds-catalog-card";
+      card.className = "ds-catalog-card clickable";
 
       const iconEl = document.createElement("div");
       iconEl.className = "ds-catalog-icon";
@@ -285,6 +285,12 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
             () => {}
           );
         }
+      });
+
+      // Clicking the card shows the setup guide
+      card.addEventListener("click", () => {
+        const guide = matchedSkill?.setupGuide || ds.description;
+        infoDialog(ds.name, guide);
       });
 
       card.appendChild(iconEl);

@@ -1631,6 +1631,7 @@ body {
   align-items: center;
   gap: 0.75rem;
   transition: border-color 0.15s;
+  cursor: pointer;
 }
 
 .ds-catalog-card:hover {

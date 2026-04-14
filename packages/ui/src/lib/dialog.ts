@@ -202,3 +202,50 @@ export function confirmDialog(message: string, onConfirm: () => void): void {
 
   confirmBtn.focus();
 }
+
+/** Simple info dialog with a title, markdown description, and Close button. */
+export function infoDialog(title: string, description: string): void {
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-overlay";
+
+  const box = document.createElement("div");
+  box.className = "modal-box";
+
+  const h3 = document.createElement("h3");
+  h3.className = "modal-title";
+  h3.textContent = title;
+  box.appendChild(h3);
+
+  const desc = document.createElement("div");
+  desc.className = "modal-desc";
+  const escaped = description.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  desc.innerHTML = escaped.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener">$1</a>'
+  );
+  box.appendChild(desc);
+
+  const actions = document.createElement("div");
+  actions.className = "confirm-actions";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "btn btn-primary";
+  closeBtn.textContent = "Close";
+
+  function close() {
+    document.removeEventListener("keydown", focusTrap);
+    overlay.remove();
+  }
+
+  closeBtn.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+  actions.appendChild(closeBtn);
+  box.appendChild(actions);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  const focusTrap = trapFocus(box);
+  document.addEventListener("keydown", focusTrap);
+  closeBtn.focus();
+}
