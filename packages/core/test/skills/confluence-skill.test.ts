@@ -58,8 +58,9 @@ describe("confluence-activity SKILL.md", () => {
     expect(skill!.body).toContain("space IN (");
     expect(skill!.body).toContain("body.export_view");
     expect(skill!.body).toContain("--data-urlencode");
-    // Space keys must be quoted in Confluence CQL IN clauses
-    expect(skill!.body).toContain('sed \'s/,/","/g\'');
+    // Space keys must be quoted in CQL IN clauses; date computed via shell
+    expect(skill!.body).toContain("sed 's/,/\",\"/g'");
+    expect(skill!.body).toContain("date");
   });
 
   it("extracts exactly one shell command from the body", async () => {

@@ -23,7 +23,7 @@ config:
 
 ## Instructions
 
-1. Run `SPACES="\"$(echo '{{confluence_space_keys}}' | sed 's/,/","/g')\"" && curl -s -u "{{confluence_email}}:{{confluence_api_token}}" -H "Accept: application/json" --get --data-urlencode "cql=space IN ($SPACES) AND type=page AND lastModified >= \"-1d\" ORDER BY lastModified DESC" --data-urlencode "expand=body.export_view,version,history.lastUpdated" --data-urlencode "limit=10" "https://{{confluence_domain}}/wiki/rest/api/content/search"` to get recently updated pages
+1. Run `SPACES=$(echo '{{confluence_space_keys}}' | sed 's/,/","/g') && DATE=$(date -d 'yesterday' +%Y-%m-%d 2>/dev/null || date -v-1d +%Y-%m-%d) && curl -s -u "{{confluence_email}}:{{confluence_api_token}}" -H "Accept: application/json" --get --data-urlencode "cql=space IN (\"$SPACES\") AND type=page AND lastModified >= \"$DATE\" ORDER BY lastModified DESC" --data-urlencode "expand=body.export_view,version,history.lastUpdated" --data-urlencode "limit=10" "https://{{confluence_domain}}/wiki/rest/api/content/search"` to get recently updated pages
 
 Summarise ONLY what the API returns. For each page:
 - Read the `title` and `space.name` to identify the page and which space it belongs to
