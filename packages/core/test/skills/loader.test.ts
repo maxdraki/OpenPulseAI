@@ -43,6 +43,17 @@ describe("Skill Loader", () => {
       expect(result!.requires.bins).toEqual([]);
       expect(result!.requires.env).toEqual([]);
     });
+
+    it("parses setup_guide field", () => {
+      const yaml = 'name: test\ndescription: Test\nsetup_guide: "Get your key from [Settings](https://example.com)."';
+      const result = parseFrontmatter(yaml);
+      expect(result!.setupGuide).toBe("Get your key from [Settings](https://example.com).");
+    });
+
+    it("returns undefined setupGuide when field is missing", () => {
+      const result = parseFrontmatter("name: test\ndescription: Test");
+      expect(result!.setupGuide).toBeUndefined();
+    });
   });
 
   describe("loadSkillFromFile", () => {

@@ -48,6 +48,22 @@ describe("extractShellCommands", () => {
     expect(cmds).not.toContain("functionName()");
     expect(cmds).not.toContain("{object}");
   });
+
+  it("extracts commands starting with known shell binaries despite parentheses in content", () => {
+    // GraphQL queries contain parentheses like issues(first: 50) which triggered looksLikeCode
+    const body = '1. Run `curl -s -X POST https://api.linear.app/graphql -d \'{"query":"{ issues(first: 50) { nodes { id } } }"}\'` to get issues';
+    const cmds = extractShellCommands(body);
+    expect(cmds.length).toBe(1);
+    expect(cmds[0]).toContain("curl");
+  });
+
+  it("extracts commands for linear, glab, and notion binaries", () => {
+    const body = "1. Run `linear issue query --all-teams` for issues\n2. Run `glab mr list` for MRs\n3. Run `notion search --query test` for pages";
+    const cmds = extractShellCommands(body);
+    expect(cmds).toContain("linear issue query --all-teams");
+    expect(cmds).toContain("glab mr list");
+    expect(cmds).toContain("notion search --query test");
+  });
 });
 
 describe("runSkill", () => {
@@ -98,6 +114,67 @@ describe("runSkill", () => {
     const state = await runSkill(skill, vault, provider, "test-model");
     expect(state.lastStatus).toBe("error");
     expect(state.lastError).toContain("API key invalid");
+  });
+
+  it("succeeds when some commands fail but not all", async () => {
+    const skill = makeSkill("1. Run `echo working` for data\n2. Run `nonexistent-cmd-xyz` for more");
+    const provider = mockProvider("Partial data collected.");
+
+    const state = await runSkill(skill, vault, provider, "test-model");
+    expect(state.lastStatus).toBe("success");
+  });
+
+  it("sanitizes shell metacharacters in text config values", async () => {
+    const skill = makeSkill("1. Run `echo {{token}}` to test", {
+      config: [{ key: "token", label: "Token", type: "text" }],
+      location: "/fake/builtin-skills/test/SKILL.md", // bypass security scanner
+    });
+    // Write a config with shell injection attempt
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const configDir = join(tempDir, "vault", "skill-config");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "test-skill.json"),
+      JSON.stringify({ token: "good-token;$(whoami)" }),
+      "utf-8"
+    );
+
+    const provider = mockProvider("Test output.");
+    const state = await runSkill(skill, vault, provider, "test-model");
+
+    expect(state.lastStatus).toBe("success");
+    // The semicolon and $() should be stripped, preventing injection
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    expect(prompt).toContain("good-token");
+    expect(prompt).not.toContain(";");
+    expect(prompt).not.toContain("$(");
+  });
+
+  it("shell-escapes path config values but not text values", async () => {
+    const skill = makeSkill("1. Run `echo {{api_key}} {{watch_dir}}` to test", {
+      config: [
+        { key: "api_key", label: "API Key", type: "text" },
+        { key: "watch_dir", label: "Dir", type: "path" },
+      ],
+      location: "/fake/builtin-skills/test/SKILL.md",
+    });
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const configDir = join(tempDir, "vault", "skill-config");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "test-skill.json"),
+      JSON.stringify({ api_key: "sk-abc123", watch_dir: "/my path" }),
+      "utf-8"
+    );
+
+    const provider = mockProvider("Test.");
+    await runSkill(skill, vault, provider, "test-model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    // Text value: raw (sanitized but not quoted)
+    expect(prompt).toContain("sk-abc123");
+    // Path value: shell-escaped with single quotes
+    expect(prompt).toContain("'/my path'");
   });
 
   it("writes nothing to hot when LLM returns empty", async () => {
