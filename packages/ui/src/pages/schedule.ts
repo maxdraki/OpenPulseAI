@@ -442,7 +442,6 @@ function buildCollectorCard(
     try {
       await triggerOrchestratorRun(skillName);
       log("info", `Triggered run for ${skillName}`);
-      onUpdate();
     } catch (e) {
       log("error", `Error triggering run for ${skillName}`, String(e));
     } finally {
@@ -451,6 +450,7 @@ function buildCollectorCard(
       while (runBtn.firstChild) runBtn.removeChild(runBtn.firstChild);
       runBtn.appendChild(playSvg);
       runBtn.appendChild(document.createTextNode(" Run Now"));
+      onUpdate();
     }
   });
   meta.appendChild(runBtn);

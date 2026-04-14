@@ -1,6 +1,28 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider } from "@openpulse/core";
 
 /**
+ * Common English words that should never become theme names.
+ * Themes must be meaningful project/entity/concept names, not conjunctions,
+ * articles, prepositions, or other glue words.
+ */
+const THEME_STOPWORDS = new Set([
+  // Articles
+  "a", "an", "the",
+  // Conjunctions
+  "and", "or", "but", "nor", "for", "yet", "so",
+  // Prepositions
+  "in", "on", "at", "to", "by", "of", "up", "as", "via", "per", "vs",
+  // Common short words that are never project names
+  "is", "it", "be", "do", "go", "no", "if", "we", "my",
+]);
+
+/** A valid theme name is at least 3 chars and not a common stopword. */
+function isValidThemeName(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  return lower.length >= 3 && !THEME_STOPWORDS.has(lower);
+}
+
+/**
  * Pre-filter: remove "no activity" / "inactive" noise from entries.
  * Returns cleaned entries — strips paragraphs about inactive projects.
  */
@@ -39,13 +61,20 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
 
   // 1. File paths: /Users/.../Documents/GitHub/PROJECT_NAME/...
   const pathMatch = log.match(/\/(?:Documents\/GitHub|Projects|repos|src)\/([a-zA-Z0-9_-]+)\//);
-  if (pathMatch) tags.push(pathMatch[1].toLowerCase());
+  if (pathMatch) {
+    const name = pathMatch[1].toLowerCase();
+    if (isValidThemeName(name)) tags.push(name);
+  }
 
-  // 2. GitHub repo references: owner/repo — match any owner
+  // 2. GitHub repo references: owner/repo — match any owner.
+  // Require the captured repo name to be a valid theme (filters out "and/or" → "or" false positives).
   if (tags.length === 0) {
-    const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release|issue))/i)
+    const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release))/i)
       ?? log.match(/\*?\*?Repository:?\*?\*?\s*`?[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)`?/i);
-    if (repoMatch) tags.push(repoMatch[1].toLowerCase());
+    if (repoMatch) {
+      const name = repoMatch[1].toLowerCase();
+      if (isValidThemeName(name)) tags.push(name);
+    }
   }
 
   // 3. Source metadata — if the entry came from a known source, use it
@@ -53,7 +82,8 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
     const projectMention = log.match(/^###?\s+([A-Za-z0-9_-]+)\s*$/m);
     if (projectMention) {
       const name = projectMention[1].toLowerCase();
-      if (!["instructions", "output", "summary", "status", "highlights", "findings", "context"].includes(name)) {
+      const headingStopwords = ["instructions", "output", "summary", "status", "highlights", "findings", "context"];
+      if (!headingStopwords.includes(name) && isValidThemeName(name)) {
         tags.push(name);
       }
     }
@@ -62,11 +92,14 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
   // No primary tag found — return null to trigger LLM
   if (tags.length === 0) return null;
 
-  // Secondary tags: scan for existing theme name mentions (word boundary)
+  // Secondary tags: scan for existing theme name mentions.
+  // Require the theme to appear as a whole word NOT adjacent to a slash,
+  // so "or" in "and/or" doesn't match the theme "or".
   for (const theme of existingThemes) {
     if (tags.includes(theme)) continue;
+    if (!isValidThemeName(theme)) continue;
     const escaped = theme.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`\\b${escaped}\\b`, "i");
+    const re = new RegExp(`(?<![/\\w])${escaped}(?![/\\w])`, "i");
     if (re.test(log)) {
       tags.push(theme);
     }
@@ -124,14 +157,20 @@ export async function classifyEntries(
     try {
       const responseText = await provider.complete({
         model,
-        prompt: `Classify each numbered entry into 1-3 relevant themes (lowercase-kebab-case).
+        prompt: `Classify each numbered entry into 1-2 themes (lowercase-kebab-case).
 Existing themes: ${existingThemes.length > 0 ? existingThemes.join(", ") : "(none)"}.
-Use project names as themes when possible. Only create new themes for genuinely distinct topics.
+Rules:
+- Prefer 1 theme. Only use 2 if the entry genuinely covers two distinct projects or topics.
+- Use specific project or product names as themes (e.g. "vdp", "data-pipeline", "openpulse")
+- Do NOT use collector or tool names as themes (e.g. avoid "jira", "github", "slack" — use the project name instead)
+- Reuse existing themes when relevant rather than creating new ones
+- Never use common English words (e.g. "or", "and", "the", "in", "new", "all")
+- Theme names must be at least 3 characters and meaningful on their own as a wiki page title
 
 Entries:
 ${entriesText}
 
-Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1", "name2"]}]`,
+Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"]}]`,
         temperature: 0,
       });
 
@@ -145,7 +184,9 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1", "name2"]}]`,
       const returnedIndexes = new Set<number>();
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
-          results.push({ entry: needsLlm[p.index], themes: p.themes.slice(0, 3), confidence: 0.7 });
+          const validThemes = p.themes.filter(isValidThemeName).slice(0, 3);
+          const themes = validThemes.length > 0 ? validThemes : [needsLlm[p.index].source ?? "uncategorized"];
+          results.push({ entry: needsLlm[p.index], themes, confidence: 0.7 });
           returnedIndexes.add(p.index);
         }
       }

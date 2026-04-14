@@ -27,7 +27,7 @@ export function parseFrontmatter(
             key: c.key as string,
             label: c.label as string,
             default: typeof c.default === "string" ? c.default : undefined,
-            type: (c.type === "paths" ? "paths" : c.type === "path" ? "path" : "text") as "text" | "path" | "paths",
+            type: (c.type === "paths" ? "paths" : c.type === "path" ? "path" : c.type === "domain" ? "domain" : "text") as "text" | "path" | "paths" | "domain",
           }))
       : undefined;
 

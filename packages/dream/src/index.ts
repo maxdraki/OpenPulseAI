@@ -66,6 +66,7 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
     for (const block of blocks) {
       const tsMatch = block.match(/^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m);
       const themeMatch = block.match(/^\*\*Theme:\*\*\s*(.+)/m);
+      const sourceMatch = block.match(/^\*\*Source:\*\*\s*(.+)/m);
       const logLines = block
         .split("\n")
         .filter(
@@ -81,6 +82,7 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
           timestamp: tsMatch[1],
           log: logLines.join("\n").trim(),
           theme: themeMatch?.[1],
+          source: sourceMatch?.[1],
         });
       }
     }

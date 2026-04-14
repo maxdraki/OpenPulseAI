@@ -100,6 +100,9 @@ function applyConfig(text: string, config: Record<string, string>, skill: SkillD
   const pathFields = new Set(
     (skill.config ?? []).filter((f) => f.type === "path" || f.type === "paths").map((f) => f.key)
   );
+  const domainFields = new Set(
+    (skill.config ?? []).filter((f) => f.type === "domain").map((f) => f.key)
+  );
 
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = config[key];
@@ -112,8 +115,15 @@ function applyConfig(text: string, config: Record<string, string>, skill: SkillD
       return expanded.map(escapeForShell).join(" ");
     }
 
-    // Text values (API keys, tokens, IDs): sanitize shell metacharacters
-    return sanitizeConfigValue(value);
+    if (domainFields.has(key)) {
+      // Domain values: strip accidental protocol prefix (e.g. https://example.com → example.com)
+      return sanitizeConfigValue(value.replace(/^https?:\/\//i, ""));
+    }
+
+    // Text values (API keys, tokens, IDs): sanitize shell metacharacters.
+    // Also strip spaces around commas so comma-separated values (e.g. project keys)
+    // are URL-safe without requiring the user to avoid spaces.
+    return sanitizeConfigValue(value.replace(/\s*,\s*/g, ","));
   });
 }
 
@@ -238,7 +248,7 @@ export async function runSkill(
       entriesCollected: 0,
     };
     await saveCollectorState(vault, state);
-    return state;
+    throw e;
   }
 }
 

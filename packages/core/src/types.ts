@@ -62,7 +62,7 @@ export interface SkillConfigField {
   key: string;
   label: string;
   default?: string;
-  type?: "text" | "path" | "paths";
+  type?: "text" | "path" | "paths" | "domain";
 }
 
 /** Parsed skill from a SKILL.md file */
