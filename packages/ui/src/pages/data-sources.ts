@@ -14,6 +14,7 @@ const DATA_SOURCES = [
   { id: "linear-activity", name: "Linear", description: "Issues, status changes, comments, cycle progress", icon: logo("linear.app") },
   { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: logo("trello.com") },
   { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: logo("atlassian.com") },
+  { id: "confluence-activity", name: "Confluence", description: "Recently updated pages across spaces", icon: logo("confluence.atlassian.com") },
   { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: logo("slack.com") },
   { id: "gitlab-activity", name: "GitLab", description: "Merge requests, commits, issues, pipelines", icon: logo("gitlab.com") },
   { id: "todoist-activity", name: "Todoist", description: "Completed tasks, new items, upcoming due dates", icon: logo("todoist.com") },
