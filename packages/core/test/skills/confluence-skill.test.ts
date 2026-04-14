@@ -55,8 +55,9 @@ describe("confluence-activity SKILL.md", () => {
   it("body contains a CQL curl command targeting the Confluence search API", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     expect(skill!.body).toContain("/wiki/rest/api/content/search");
-    expect(skill!.body).toContain("cql=space+IN+");
+    expect(skill!.body).toContain("space IN (");
     expect(skill!.body).toContain("body.export_view");
+    expect(skill!.body).toContain("--data-urlencode");
   });
 
   it("extracts exactly one shell command from the body", async () => {
