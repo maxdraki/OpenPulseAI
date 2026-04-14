@@ -264,7 +264,7 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
           const fields: FormField[] = configFields.map((f) => ({
             key: f.key,
             label: f.label,
-            type: f.key.includes("token") || f.key.includes("key") || f.key.includes("secret") || f.key.includes("password") ? "password" : "text",
+            type: f.key.includes("token") || f.key.endsWith("_key") || f.key === "key" || f.key.includes("secret") || f.key.includes("password") ? "password" : "text",
           }));
           formDialog(
             `Connect ${ds.name}`,
