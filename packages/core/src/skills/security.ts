@@ -10,7 +10,19 @@ export interface ThreatReport {
   findings: ThreatFinding[];
 }
 
-const TRUSTED_DOMAINS = /github\.com|google\.com|googleapis\.com|api\.trello\.com|atlassian\.net|slack\.com|api\.linear\.app|gitlab\.com|api\.todoist\.com|sentry\.io/;
+const TRUSTED_DOMAIN_LIST = [
+  "github.com",
+  "google.com",
+  "googleapis.com",
+  "api.trello.com",
+  "atlassian.net",
+  "slack.com",
+  "api.linear.app",
+  "gitlab.com",
+  "api.todoist.com",
+  "sentry.io",
+];
+const TRUSTED_DOMAINS = new RegExp(TRUSTED_DOMAIN_LIST.map((d) => d.replace(/\./g, "\\.")).join("|"));
 
 function checkNetworkExfiltration(body: string): ThreatFinding[] {
   const findings: ThreatFinding[] = [];

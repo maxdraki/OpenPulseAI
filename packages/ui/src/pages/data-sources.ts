@@ -1,5 +1,4 @@
 import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, type SkillData } from "../lib/tauri-bridge.js";
-import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
@@ -583,6 +582,11 @@ function renderSkillCard(skill: SkillData): HTMLElement {
         }
       });
       configFields.appendChild(saveBtn);
+    }).catch((e) => {
+      const errMsg = document.createElement("p");
+      errMsg.style.cssText = "color: var(--danger); font-size: 0.8rem; padding: 0.5rem;";
+      errMsg.textContent = `Failed to load config: ${e}`;
+      configFields.appendChild(errMsg);
     });
 
     configTitle.addEventListener("click", () => {
@@ -700,9 +704,13 @@ function renderSkillCard(skill: SkillData): HTMLElement {
     removeBtn.appendChild(trashSvg);
     removeBtn.addEventListener("click", () => {
       confirmDialog(`Remove skill "${skill.name}"? This deletes the skill files.`, async () => {
-        await removeSkill(skill.name);
-        log("info", `Skill removed: ${skill.name}`);
-        card.remove();
+        try {
+          await removeSkill(skill.name);
+          log("info", `Skill removed: ${skill.name}`);
+          card.remove();
+        } catch (e: any) {
+          log("error", `Failed to remove: ${skill.name}`, String(e));
+        }
       });
     });
     card.appendChild(removeBtn);

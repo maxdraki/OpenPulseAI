@@ -11,7 +11,7 @@ config:
     label: Bot token (xoxb-...)
     type: text
   - key: slack_channel_ids
-    label: Channel IDs (comma-separated)
+    label: Channel ID (one channel per data source)
     type: text
 ---
 
@@ -19,8 +19,6 @@ config:
 
 1. Run `curl -s -H "Authorization: Bearer {{slack_bot_token}}" "https://slack.com/api/conversations.history?channel={{slack_channel_ids}}&limit=100&oldest=$(date -v-24H +%s 2>/dev/null || date -d '24 hours ago' +%s)"` to get recent messages from the channel
 2. Run `curl -s -H "Authorization: Bearer {{slack_bot_token}}" "https://slack.com/api/users.list?limit=200"` to resolve user IDs to display names
-
-Note: if multiple channel IDs are provided, the LLM should run step 1 for each channel ID separately.
 
 Summarise ONLY what the API returns. Focus on:
 - Key decisions or announcements

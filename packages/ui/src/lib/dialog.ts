@@ -12,9 +12,11 @@ export interface FormField {
   value?: string;     // pre-filled value
 }
 
+import { escapeHtml } from "./utils.js";
+
 /** Render simple markdown (links, bold, inline code) from trusted SKILL.md content */
 function renderSimpleMarkdown(text: string): string {
-  let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let html = escapeHtml(text);
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-base);padding:0.1em 0.3em;border-radius:3px;font-size:0.85em">$1</code>');
@@ -23,12 +25,11 @@ function renderSimpleMarkdown(text: string): string {
 
 /** Trap Tab/Shift-Tab within a container */
 function trapFocus(container: HTMLElement): (e: KeyboardEvent) => void {
+  const focusable = container.querySelectorAll<HTMLElement>(
+    'input, button, select, textarea, [tabindex]:not([tabindex="-1"])'
+  );
   return (e: KeyboardEvent) => {
-    if (e.key !== "Tab") return;
-    const focusable = container.querySelectorAll<HTMLElement>(
-      'input, button, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    if (focusable.length === 0) return;
+    if (e.key !== "Tab" || focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (e.shiftKey && document.activeElement === first) {
@@ -112,17 +113,24 @@ export function formDialog(
 
   function doSave() {
     const values: Record<string, string> = {};
-    form.querySelectorAll<HTMLInputElement>("input[data-key]").forEach((inp) => {
-      if (inp.value.trim()) values[inp.dataset.key!] = inp.value.trim();
+    const inputs = form.querySelectorAll<HTMLInputElement>("input[data-key]");
+    let emptyCount = 0;
+    inputs.forEach((inp) => {
+      if (inp.value.trim()) {
+        values[inp.dataset.key!] = inp.value.trim();
+      } else {
+        emptyCount++;
+      }
     });
-    if (Object.keys(values).length === 0) {
-      // Show validation error instead of silently closing
+    if (emptyCount > 0) {
       if (!errorEl) {
         errorEl = document.createElement("p");
         errorEl.style.cssText = "color: var(--danger); font-size: 0.8rem; margin: 0.4rem 0 0;";
         form.appendChild(errorEl);
       }
-      errorEl.textContent = "Please fill in at least one field.";
+      errorEl.textContent = emptyCount === inputs.length
+        ? "Please fill in all fields."
+        : `${emptyCount} field${emptyCount > 1 ? "s" : ""} still empty.`;
       return;
     }
     close();

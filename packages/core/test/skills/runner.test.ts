@@ -81,12 +81,12 @@ describe("runSkill", () => {
     expect(hotContent).toContain("test-skill");
   });
 
-  it("handles command failures gracefully", async () => {
+  it("returns error when all commands fail", async () => {
     const skill = makeSkill("1. Run `nonexistent-command-xyz --flag` to get data");
     const provider = mockProvider("No data available.");
 
     const state = await runSkill(skill, vault, provider, "test-model");
-    expect(state.lastStatus).toBe("success");
+    expect(state.lastStatus).toBe("error");
   });
 
   it("saves error state when LLM fails", async () => {

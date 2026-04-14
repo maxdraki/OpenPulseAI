@@ -15,17 +15,18 @@ const execFileAsync = promisify(execFile);
  * Extract shell commands from a SKILL.md body.
  * Looks for inline backtick commands and fenced code blocks.
  */
+const SHELL_BINARIES = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date|linear|glab|notion)\b/;
+
 export function extractShellCommands(body: string): string[] {
   const commands: string[] = [];
 
   const inlineRegex = /`([^`]+)`/g;
   let match;
-  const shellBinaries = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date|linear|glab|notion)\b/;
   while ((match = inlineRegex.exec(body)) !== null) {
     const cmd = match[1].trim();
     if (cmd.includes(" ") || cmd.startsWith("./") || cmd.startsWith("$")) {
       // Commands starting with a known binary are always shell commands
-      if (shellBinaries.test(cmd)) {
+      if (SHELL_BINARIES.test(cmd)) {
         commands.push(cmd);
       } else {
         // For other commands, skip things that look like function calls
@@ -66,7 +67,11 @@ async function loadSkillConfig(
     for (const [key, value] of Object.entries(userConfig)) {
       if (typeof value === "string") config[key] = value;
     }
-  } catch { /* no user config */ }
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") {
+      console.error(`[skills] Failed to read config for "${skill.name}":`, e?.message ?? e);
+    }
+  }
 
   return config;
 }
@@ -81,6 +86,14 @@ function expandHome(value: string): string {
     return (process.env.HOME ?? "") + value.slice(1);
   }
   return value;
+}
+
+/** Strip shell metacharacters from text config values to prevent injection */
+function sanitizeConfigValue(value: string): string {
+  // Allow alphanumeric, dashes, underscores, dots, colons, @, +, /
+  // These cover API keys, tokens, email addresses, domains, URLs
+  // Strip anything that could be shell-interpreted: $`;&|(){}!#\n
+  return value.replace(/[`$;&|(){}!#\\\n\r]/g, "");
 }
 
 function applyConfig(text: string, config: Record<string, string>, skill: SkillDefinition): string {
@@ -99,8 +112,8 @@ function applyConfig(text: string, config: Record<string, string>, skill: SkillD
       return expanded.map(escapeForShell).join(" ");
     }
 
-    // Text values (API keys, tokens, IDs): use raw value — no shell escaping
-    return value;
+    // Text values (API keys, tokens, IDs): sanitize shell metacharacters
+    return sanitizeConfigValue(value);
   });
 }
 
@@ -159,6 +172,12 @@ export async function runSkill(
           error: e.stderr?.trim() || e.message,
         });
       }
+    }
+
+    const allFailed = commands.length > 0 && commandOutputs.every((c) => c.error);
+    if (allFailed) {
+      const errors = commandOutputs.map((c) => c.error).join("; ");
+      throw new Error(`All commands failed: ${errors}`);
     }
 
     const commandContext = commandOutputs.length > 0
@@ -225,7 +244,10 @@ export async function runSkill(
 
 function parseLookback(lookback: string): number {
   const match = lookback.match(/^(\d+)(h|d|w)$/);
-  if (!match) return 24 * 60 * 60 * 1000;
+  if (!match) {
+    console.error(`[skills] Unrecognised lookback "${lookback}", defaulting to 24h`);
+    return 24 * 60 * 60 * 1000;
+  }
   const value = parseInt(match[1]);
   const unit = match[2];
   switch (unit) {
