@@ -677,7 +677,8 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           const input = document.createElement("input");
           input.className = "form-input";
           input.style.fontSize = "0.82rem";
-          input.type = "text";
+          const isSensitive = field.key.includes("token") || field.key.endsWith("_key") || field.key === "key" || field.key.includes("secret") || field.key.includes("password");
+          input.type = isSensitive ? "password" : "text";
           input.placeholder = field.default ?? "";
           input.value = savedConfig[field.key] ?? field.default ?? "";
           input.dataset.configKey = field.key;
