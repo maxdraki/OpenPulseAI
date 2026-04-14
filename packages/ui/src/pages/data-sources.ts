@@ -16,6 +16,9 @@ const DATA_SOURCES = [
   { id: "trello-activity", name: "Trello", description: "Board activity, card updates, comments", icon: logo("trello.com") },
   { id: "jira-activity", name: "Jira", description: "Issues, sprints, status changes", icon: logo("atlassian.com") },
   { id: "slack-activity", name: "Slack", description: "Channel messages and mentions", icon: logo("slack.com") },
+  { id: "gitlab-activity", name: "GitLab", description: "Merge requests, commits, issues, pipelines", icon: logo("gitlab.com") },
+  { id: "todoist-activity", name: "Todoist", description: "Completed tasks, new items, upcoming due dates", icon: logo("todoist.com") },
+  { id: "sentry-activity", name: "Sentry", description: "Errors, unresolved issues, regressions", icon: logo("sentry.io") },
   { id: "weekly-rollup", name: "Weekly Rollup", description: "Synthesise themes into a weekly status", icon: "" },
 ];
 

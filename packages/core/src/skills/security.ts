@@ -10,7 +10,7 @@ export interface ThreatReport {
   findings: ThreatFinding[];
 }
 
-const TRUSTED_DOMAINS = /github\.com|google\.com|googleapis\.com|api\.trello\.com|atlassian\.net|slack\.com|api\.linear\.app/;
+const TRUSTED_DOMAINS = /github\.com|google\.com|googleapis\.com|api\.trello\.com|atlassian\.net|slack\.com|api\.linear\.app|gitlab\.com|api\.todoist\.com|sentry\.io/;
 
 function checkNetworkExfiltration(body: string): ThreatFinding[] {
   const findings: ThreatFinding[] = [];
