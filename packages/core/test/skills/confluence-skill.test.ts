@@ -58,13 +58,17 @@ describe("confluence-activity SKILL.md", () => {
     expect(skill!.body).toContain("space IN (");
     expect(skill!.body).toContain("body.export_view");
     expect(skill!.body).toContain("--data-urlencode");
+    // Space keys must be quoted in Confluence CQL IN clauses
+    expect(skill!.body).toContain('sed \'s/,/","/g\'');
   });
 
   it("extracts exactly one shell command from the body", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const cmds = extractShellCommands(skill!.body);
     expect(cmds).toHaveLength(1);
-    expect(cmds[0]).toMatch(/^curl\s/);
+    // Command starts with SPACES= assignment then pipes into curl
+    expect(cmds[0]).toContain("curl");
+    expect(cmds[0]).toContain("wiki/rest/api/content/search");
   });
 });
 
