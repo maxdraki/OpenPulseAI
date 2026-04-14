@@ -208,6 +208,14 @@ export async function saveSkillConfig(name: string, config: Record<string, strin
   await apiPost(`/skill-config/${name}`, config);
 }
 
+export async function fetchConfluenceSpaces(
+  domain: string,
+  email: string,
+  token: string
+): Promise<Array<{ key: string; name: string }>> {
+  return apiPost("/confluence-activity/spaces", { domain, email, token });
+}
+
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
   if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });
