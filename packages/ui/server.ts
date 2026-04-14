@@ -715,6 +715,38 @@ app.post("/api/skill-config/:name", async (req, res) => {
   }
 });
 
+// --- Confluence space discovery ---
+
+app.post("/api/confluence-activity/spaces", async (req, res) => {
+  const { domain, email, token } = req.body as { domain?: string; email?: string; token?: string };
+  if (!domain || !email || !token) {
+    return res.status(400).json({ error: "domain, email, and token are required" });
+  }
+  try {
+    const resp = await fetch(
+      `https://${domain}/wiki/rest/api/space?limit=250&type=global`,
+      {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: `Confluence returned ${resp.status}` });
+    }
+    const data = await resp.json() as { results: Array<{ key: string; name: string }> };
+    const spaces = (data.results ?? [])
+      .map((s) => ({ key: s.key, name: s.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json(spaces);
+  } catch (e: any) {
+    const msg = e.name === "TimeoutError" ? "Connection timed out" : e.message;
+    res.status(500).json({ error: msg });
+  }
+});
+
 // --- Dependency fix runner ---
 
 // Whitelisted install commands — only these can be executed
