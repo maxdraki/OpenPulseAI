@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, type SkillData } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
@@ -67,6 +67,135 @@ const MANUAL_FIX: Record<string, string> = {
 
 // Module-level reference so renderSkillCard can trigger a reload
 let loadSkills: (() => Promise<void>) | null = null;
+
+function renderSpacePicker(row: HTMLElement, configFields: HTMLElement, savedKeys: string): void {
+  const selectedKeys = new Set(savedKeys.split(",").map((k) => k.trim()).filter(Boolean));
+
+  // Hidden input — picked up by existing save logic
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.dataset.configKey = "confluence_space_keys";
+  hidden.value = savedKeys;
+  row.appendChild(hidden);
+
+  function updateHidden() {
+    hidden.value = Array.from(selectedKeys).join(",");
+  }
+
+  // Discover button
+  const discoverBtn = document.createElement("button");
+  discoverBtn.className = "btn btn-sm";
+  discoverBtn.style.marginBottom = "0.4rem";
+  discoverBtn.textContent = "Discover Spaces";
+  row.appendChild(discoverBtn);
+
+  // Status message
+  const status = document.createElement("p");
+  status.style.cssText = "font-size: 0.78rem; color: var(--text-tertiary); margin: 0.25rem 0;";
+  if (savedKeys) status.textContent = `${selectedKeys.size} space(s) selected — click Discover to refresh`;
+  row.appendChild(status);
+
+  // Search input (hidden until spaces loaded)
+  const searchInput = document.createElement("input");
+  searchInput.className = "form-input";
+  searchInput.style.cssText = "font-size: 0.82rem; margin-bottom: 0.25rem; display: none;";
+  searchInput.placeholder = "Search spaces\u2026";
+  row.appendChild(searchInput);
+
+  // Space list container
+  const listContainer = document.createElement("div");
+  listContainer.style.cssText = "display: none; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);";
+  row.appendChild(listContainer);
+
+  let allSpaces: Array<{ key: string; name: string }> = [];
+
+  function renderList(filter: string) {
+    listContainer.textContent = "";
+    const lower = filter.toLowerCase();
+    const filtered = filter
+      ? allSpaces.filter((s) => s.key.toLowerCase().includes(lower) || s.name.toLowerCase().includes(lower))
+      : allSpaces;
+
+    for (const space of filtered) {
+      const item = document.createElement("label");
+      item.style.cssText = "display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.82rem;";
+      item.style.borderBottom = "1px solid var(--border)";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selectedKeys.has(space.key);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedKeys.add(space.key);
+        else selectedKeys.delete(space.key);
+        updateHidden();
+        status.textContent = `${selectedKeys.size} space(s) selected`;
+      });
+
+      const keySpan = document.createElement("code");
+      keySpan.style.cssText = "font-size: 0.75rem; color: var(--text-tertiary); min-width: 4rem;";
+      keySpan.textContent = space.key;
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = space.name;
+
+      item.appendChild(cb);
+      item.appendChild(keySpan);
+      item.appendChild(nameSpan);
+      listContainer.appendChild(item);
+    }
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("p");
+      empty.style.cssText = "padding: 0.5rem; color: var(--text-tertiary); font-size: 0.82rem; margin: 0;";
+      empty.textContent = filter ? "No matching spaces" : "No spaces found";
+      listContainer.appendChild(empty);
+    }
+  }
+
+  searchInput.addEventListener("input", () => renderList(searchInput.value));
+
+  discoverBtn.addEventListener("click", async () => {
+    const domainInput = configFields.querySelector<HTMLInputElement>('input[data-config-key="confluence_domain"]');
+    const emailInput = configFields.querySelector<HTMLInputElement>('input[data-config-key="confluence_email"]');
+    const tokenInput = configFields.querySelector<HTMLInputElement>('input[data-config-key="confluence_api_token"]');
+
+    const domain = domainInput?.value.trim() ?? "";
+    const email = emailInput?.value.trim() ?? "";
+    const token = tokenInput?.value.trim() ?? "";
+
+    if (!domain || !email || !token) {
+      status.textContent = "Enter domain, email, and token first, then click Discover.";
+      status.style.color = "var(--warning, orange)";
+      return;
+    }
+
+    discoverBtn.classList.add("loading");
+    discoverBtn.disabled = true;
+    status.textContent = "Loading spaces\u2026";
+    status.style.color = "var(--text-tertiary)";
+    listContainer.style.display = "none";
+    searchInput.style.display = "none";
+
+    try {
+      allSpaces = await fetchConfluenceSpaces(domain, email, token);
+      searchInput.value = "";
+      renderList("");
+      searchInput.style.display = "";
+      listContainer.style.display = "";
+      status.textContent = `${selectedKeys.size} space(s) selected \u2014 ${allSpaces.length} available`;
+      status.style.color = "var(--text-tertiary)";
+    } catch (e: any) {
+      const msg = e.message?.includes("401") ? "Authentication failed \u2014 check credentials"
+        : e.message?.includes("timed out") ? "Connection timed out"
+        : "Could not reach Confluence";
+      status.textContent = msg;
+      status.style.color = "var(--danger)";
+    } finally {
+      discoverBtn.classList.remove("loading");
+      discoverBtn.disabled = false;
+    }
+  });
+}
 
 export async function renderDataSources(container: HTMLElement): Promise<void> {
   // Build page
@@ -541,6 +670,8 @@ function renderSkillCard(skill: SkillData): HTMLElement {
             if (paths.length > 1) item.appendChild(rmBtn);
             pathList.insertBefore(item, addBtn);
           }
+        } else if (field.key === "confluence_space_keys") {
+          renderSpacePicker(row, configFields, savedConfig[field.key] ?? "");
         } else {
           // Single text/path input
           const input = document.createElement("input");
