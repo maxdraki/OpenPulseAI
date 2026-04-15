@@ -752,6 +752,50 @@ app.post("/api/confluence-activity/spaces", async (req, res) => {
   }
 });
 
+// --- GitHub repo discovery ---
+
+const GITHUB_HOSTNAME = /^[\w][\w.-]*\.[a-zA-Z]{2,}$/;
+
+app.post("/api/github-activity/repos", async (req, res) => {
+  const { hostname } = req.body as { hostname?: string };
+
+  const ghArgs = [
+    "api",
+    "user/repos?affiliation=owner,collaborator,organization_member&per_page=100",
+    "--jq",
+    '[.[] | {nameWithOwner: .full_name, description: (.description // ""), visibility: .visibility}]',
+  ];
+
+  if (hostname) {
+    if (!GITHUB_HOSTNAME.test(hostname)) {
+      return res.status(400).json({ error: "Invalid hostname format" });
+    }
+    ghArgs.push("--hostname", hostname);
+  }
+
+  try {
+    const { stdout } = await execFileAsync("gh", ghArgs, { timeout: 15000 });
+    const repos = JSON.parse(stdout.trim()) as Array<{
+      nameWithOwner: string;
+      description: string;
+      visibility: string;
+    }>;
+    res.json(repos.sort((a, b) => a.nameWithOwner.localeCompare(b.nameWithOwner)));
+  } catch (e: any) {
+    if (e.code === "ENOENT") {
+      return res.status(503).json({ error: "gh CLI not found — install from cli.github.com" });
+    }
+    const stderr: string = e.stderr ?? "";
+    if (stderr.includes("authentication") || stderr.includes("auth login")) {
+      return res.status(401).json({ error: "Not authenticated — run: gh auth login" });
+    }
+    if (stderr.includes("Could not resolve host") || stderr.includes("no such host")) {
+      return res.status(503).json({ error: "Cannot reach host — check the enterprise hostname" });
+    }
+    res.status(500).json({ error: e.name === "TimeoutError" ? "Connection timed out" : (stderr || e.message) });
+  }
+});
+
 // --- Dependency fix runner ---
 
 // Whitelisted install commands — only these can be executed
