@@ -145,12 +145,20 @@ Skills are [AgentSkills.io](https://agentskills.io)-compatible SKILL.md files. N
 
 | Skill | Requires | Schedule | Description |
 |-------|----------|----------|-------------|
-| `github-activity` | [gh](https://cli.github.com) | Configurable | Commits, PRs, reviews, issues, notifications |
+| `github-activity` | [gh](https://cli.github.com) | Configurable | Watch specific repos (github.com + GHE) — commits and PRs |
+| `gitlab-activity` | curl | Configurable | Merge requests, commits, issues, pipeline status |
 | `folder-watcher` | find | Configurable | Track file changes across project directories |
-| `google-daily-digest` | gogcli + auth | Configurable | Gmail + Calendar summary |
+| `confluence-activity` | curl | Configurable | Recently updated pages across selected spaces |
+| `jira-activity` | curl | Configurable | Issues, sprint progress, comments |
+| `linear-activity` | curl | Configurable | Issues, status changes, comments, cycle progress |
+| `slack-activity` | curl | Configurable | Messages and mentions from key channels |
+| `trello-activity` | curl | Configurable | Card moves, comments, due dates |
+| `todoist-activity` | curl | Configurable | Completed tasks, new items, upcoming due dates |
+| `sentry-activity` | curl | Configurable | Errors, unresolved issues, regressions |
+| `google-daily-digest` | [gogcli](https://github.com/slashdevops/gog) | Configurable | Gmail + Calendar summary |
 | `weekly-rollup` | — | Manual | Synthesize themes into a weekly status |
 
-Skills have configurable settings (watch paths, accounts) via the UI. Dependencies can be installed with one click.
+Skills have configurable settings (API tokens, watch paths, space/repo selectors) via the UI. Dependencies can be installed with one click.
 
 ### Write your own
 
@@ -197,9 +205,12 @@ OpenPulse draws from [Andrej Karpathy's LLM Wiki pattern](https://gist.github.co
 - [x] MCP server (stdio + HTTPS transports, 5 tools)
 - [x] Wiki-style Dream Pipeline (multi-tag classify, cross-references, index.md, log.md)
 - [x] BYO LLM (Anthropic, OpenAI, Gemini, Ollama)
-- [x] Control Center UI (Dashboard, Review, Skills, Schedule, Logs, Settings, Help)
+- [x] Control Center UI (Dashboard, Review, Data Sources, Schedule, Logs, Settings, Help)
 - [x] Skills system with security scanner, config system, one-click dependency install
 - [x] Orchestrator with visual scheduler and barrier-based auto-triggering
+- [x] 12 bundled skills (GitHub, GitLab, Confluence, Jira, Linear, Slack, Trello, Todoist, Sentry, Google, Folder Watcher, Weekly Rollup)
+- [x] GitHub repo watcher — paste any github.com or GHE URL to watch specific repos
+- [x] Confluence space picker — discover and select spaces via API
 - [x] Tauri v2 desktop wrapper (Rust backend built, needs E2E testing)
 - [x] One-click Claude Desktop connection
 - [x] Light/dark/system theme toggle

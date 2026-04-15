@@ -1,6 +1,6 @@
 ---
 name: github-activity
-description: Summarize recent GitHub activity — commits, PRs, reviews, issues, and notifications
+description: Watch specific repos (github.com or GitHub Enterprise) — commits and pull requests
 schedule: "0 18 * * 1-5"
 lookback: 24h
 requires:
