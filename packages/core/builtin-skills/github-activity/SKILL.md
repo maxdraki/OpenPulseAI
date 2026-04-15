@@ -15,21 +15,16 @@ config:
 
 ## Instructions
 
-1. Run `gh api events --limit 100 --jq '[.[] | select(.type == "PushEvent" or .type == "PullRequestEvent" or .type == "IssuesEvent" or .type == "CreateEvent" or .type == "PullRequestReviewEvent" or .type == "IssueCommentEvent") | {type, repo: .repo.name, created_at, payload_action: .payload.action, ref: .payload.ref, commits: (.payload.commits // [] | map(.message))}]'` for recent activity across all repos
-2. Run `gh pr list --author @me --state all --json title,state,updatedAt,url,repository --limit 20` for your PRs
-3. Run `gh pr list --search "reviewed-by:@me" --state all --json title,state,url --limit 10` for PRs you reviewed
-4. Run `gh api notifications --method GET --jq '[.[] | {reason, subject_title: .subject.title, repo: .repository.full_name, updated_at}]'` for recent notifications
-5. Run `gh api user/repos --jq '[.[] | select(.pushed_at > (now - 86400 | todate)) | {name: .full_name, pushed_at, default_branch}]'` to find repos with recent pushes
-6. Run `printf '%s\n' "{{github_repo_urls}}" | grep -vE '^\{\{|^[[:space:]]*$' | tr ',' '\n' | sed 's/[[:space:]]//g; s/\.git$//' | grep -v '^$' | while IFS= read -r url; do host=$(echo "$url" | sed 's|https://||; s|/.*||'); repo=$(echo "$url" | sed 's|https://[^/]*/||'); [ -z "$repo" ] && continue; echo "=== $repo ==="; if [ "$host" = "github.com" ]; then gh api "repos/$repo/commits?per_page=10" --jq '[.[] | {sha: .sha[0:7], message: (.commit.message | split("\n")[0]), author: .commit.author.name, date: .commit.author.date}]' 2>/dev/null; gh api "repos/$repo/pulls?state=all&per_page=10&sort=updated" --jq '[.[] | {number, title, state, user: .user.login, updated: .updated_at}]' 2>/dev/null; else gh api "repos/$repo/commits?per_page=10" --hostname "$host" --jq '[.[] | {sha: .sha[0:7], message: (.commit.message | split("\n")[0]), author: .commit.author.name, date: .commit.author.date}]' 2>/dev/null; gh api "repos/$repo/pulls?state=all&per_page=10&sort=updated" --hostname "$host" --jq '[.[] | {number, title, state, user: .user.login, updated: .updated_at}]' 2>/dev/null; fi; done; true` for recent commits and PRs in your watched repos (skipped when none configured)
+1. Run `printf '%s\n' "{{github_repo_urls}}" | grep -vE '^\{\{|^[[:space:]]*$' | tr ',' '\n' | sed 's/[[:space:]]//g; s/\.git$//' | grep -v '^$' | while IFS= read -r url; do host=$(echo "$url" | sed 's|https://||; s|/.*||'); repo=$(echo "$url" | sed 's|https://[^/]*/||'); [ -z "$repo" ] && continue; echo "=== $repo ==="; if [ "$host" = "github.com" ]; then gh api "repos/$repo/commits?per_page=10" --jq '[.[] | {sha: .sha[0:7], message: (.commit.message | split("\n")[0]), author: .commit.author.name, date: .commit.author.date}]' 2>/dev/null; gh api "repos/$repo/pulls?state=all&per_page=10&sort=updated" --jq '[.[] | {number, title, state, user: .user.login, updated: .updated_at}]' 2>/dev/null; else gh api "repos/$repo/commits?per_page=10" --hostname "$host" --jq '[.[] | {sha: .sha[0:7], message: (.commit.message | split("\n")[0]), author: .commit.author.name, date: .commit.author.date}]' 2>/dev/null; gh api "repos/$repo/pulls?state=all&per_page=10&sort=updated" --hostname "$host" --jq '[.[] | {number, title, state, user: .user.login, updated: .updated_at}]' 2>/dev/null; fi; done; true` for recent commits and PRs in your watched repos
 
-When command 6 returns per-repo data, organise that output first, grouped by repo (one level-3 heading per repo), with commits and open PRs for each. If command 6 produces no output, fall back to summarising the general activity from commands 1–5 as before.
+If the command produced no output, write: "No repos configured — add repo URLs in the github-activity settings."
 
-Summarize all activity organized by:
-- **Commits**: repos you pushed to, number of commits, key commit messages
-- **Pull Requests**: opened, merged, or reviewed
-- **Issues**: opened, commented on, or closed
-- **Notifications**: notable items worth mentioning
+Otherwise, write a concise Markdown summary grouped by repo (one level-3 heading per repo). For each repo cover:
+- **Commits**: recent commits within the lookback period — sha, message, author, date
+- **Pull Requests**: open PRs and any recently updated ones
+
+Lead with the most active repo. Include PR numbers. Skip noise (e.g. automated dependency bumps) unless nothing else happened.
 
 ## Output Format
 
-Write a concise Markdown summary. Lead with the most significant activity. Include repo names and link-worthy references (PR numbers, issue numbers). Skip routine bot notifications and automated actions.
+One level-3 heading (### owner/repo) per repo. Under each: commits and PRs. Keep it factual — only what the command output shows.

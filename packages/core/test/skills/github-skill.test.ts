@@ -46,31 +46,22 @@ describe("github-activity SKILL.md", () => {
     expect(byKey["github_repo_urls"].default).toBeTruthy();
   });
 
-  it("still contains all 5 original commands", async () => {
-    const skill = await loadSkillFromFile(SKILL_PATH);
-    expect(skill!.body).toContain("gh api events");
-    expect(skill!.body).toContain("gh pr list --author @me");
-    expect(skill!.body).toContain("reviewed-by:@me");
-    expect(skill!.body).toContain("gh api notifications");
-    expect(skill!.body).toContain("gh api user/repos");
-  });
-
-  it("contains per-repo command patterns using github_repo_urls", async () => {
+  it("contains per-repo command using github_repo_urls", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     expect(skill!.body).toContain('printf \'%s\\n\' "{{github_repo_urls}}"');
     expect(skill!.body).toContain('gh api "repos/$repo/commits');
     expect(skill!.body).toContain('gh api "repos/$repo/pulls');
   });
 
-  it("command 6 handles enterprise repos via hostname extracted from URL", async () => {
+  it("handles enterprise repos via hostname extracted from URL", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     expect(skill!.body).toContain('--hostname "$host"');
   });
 
-  it("extracts exactly 6 shell commands from the body", async () => {
+  it("extracts exactly 1 shell command from the body", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const cmds = extractShellCommands(skill!.body);
-    expect(cmds).toHaveLength(6);
+    expect(cmds).toHaveLength(1);
   });
 });
 
