@@ -33,6 +33,7 @@ export interface CollectorState {
 
 export interface DreamPipelineState {
   autoTrigger: boolean;
+  running: boolean;
   lastRun: string | null;   // ISO 8601
   lastResult: "success" | "error" | "never";
   lastError?: string;
@@ -117,6 +118,7 @@ export function defaultState(): OrchestratorState {
     collectors: {},
     dreamPipeline: {
       autoTrigger: true,
+      running: false,
       lastRun: null,
       lastResult: "never",
       collectorsCompletedToday: [],
@@ -433,6 +435,10 @@ export class Orchestrator {
     });
 
     if (allRunSinceDream) {
+      if (dp.running) {
+        await vaultLog("info", "[orchestrator] Barrier met but dream already running — skipping duplicate trigger");
+        return;
+      }
       await vaultLog("info", "[orchestrator] Barrier met — all collectors ran since last dream, triggering pipeline");
       await this.runDream();
     }
@@ -441,6 +447,7 @@ export class Orchestrator {
   private async runDream(): Promise<void> {
     const dp = this.state.dreamPipeline;
     const startedAt = new Date().toISOString();
+    dp.running = true;
 
     await vaultLog("info", "[orchestrator] Running Dream Pipeline");
 
@@ -468,6 +475,7 @@ export class Orchestrator {
 
       await vaultLog("error", "[orchestrator] Dream Pipeline failed", String(err));
     } finally {
+      dp.running = false;
       clearTimeout(warningTimer);
       await saveState(this.vaultRoot, this.state);
     }
