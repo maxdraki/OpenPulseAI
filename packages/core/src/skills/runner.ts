@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
  * Extract shell commands from a SKILL.md body.
  * Looks for inline backtick commands and fenced code blocks.
  */
-const SHELL_BINARIES = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|date|linear|glab|notion)\b/;
+const SHELL_BINARIES = /^(?:curl|wget|gh|git|find|ls|cat|grep|awk|sed|jq|node|python3?|bash|sh|echo|printf|date|linear|glab|notion)\b/;
 
 export function extractShellCommands(body: string): string[] {
   const commands: string[] = [];
