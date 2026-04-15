@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, fetchGithubRepos, type GithubRepo, type SkillData } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
@@ -189,6 +189,148 @@ function renderSpacePicker(row: HTMLElement, configFields: HTMLElement, savedKey
         : e.message?.includes("timed out") ? "Connection timed out"
         : "Could not reach Confluence";
       status.textContent = msg;
+      status.style.color = "var(--danger)";
+    } finally {
+      discoverBtn.classList.remove("loading");
+      discoverBtn.disabled = false;
+    }
+  });
+}
+
+function renderRepoPicker(
+  row: HTMLElement,
+  configFields: HTMLElement,
+  fieldKey: "github_repos" | "github_enterprise_repos",
+  savedRepos: string
+): void {
+  const isEnterprise = fieldKey === "github_enterprise_repos";
+  const selectedRepos = new Set(
+    savedRepos.split(",").map((r) => r.trim()).filter(Boolean)
+  );
+
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.dataset.configKey = fieldKey;
+  hidden.value = savedRepos;
+  row.appendChild(hidden);
+
+  function updateHidden() { hidden.value = Array.from(selectedRepos).join(","); }
+
+  const discoverBtn = document.createElement("button");
+  discoverBtn.className = "btn btn-sm";
+  discoverBtn.style.marginBottom = "0.4rem";
+  discoverBtn.textContent = isEnterprise ? "Discover Enterprise Repos" : "Discover Repos";
+  row.appendChild(discoverBtn);
+
+  const status = document.createElement("p");
+  status.style.cssText = "font-size: 0.78rem; color: var(--text-tertiary); margin: 0.25rem 0;";
+  if (selectedRepos.size > 0) {
+    status.textContent = `${selectedRepos.size} repo(s) selected \u2014 click Discover to refresh`;
+  }
+  row.appendChild(status);
+
+  const searchInput = document.createElement("input");
+  searchInput.className = "form-input";
+  searchInput.style.cssText = "font-size: 0.82rem; margin-bottom: 0.25rem; display: none;";
+  searchInput.placeholder = "Search repos\u2026";
+  row.appendChild(searchInput);
+
+  const listContainer = document.createElement("div");
+  listContainer.style.cssText = "display: none; max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);";
+  row.appendChild(listContainer);
+
+  let allRepos: GithubRepo[] = [];
+
+  function renderList(filter: string) {
+    listContainer.textContent = "";
+    const lower = filter.toLowerCase();
+    const filtered = filter
+      ? allRepos.filter((r) => r.nameWithOwner.toLowerCase().includes(lower) || r.description.toLowerCase().includes(lower))
+      : allRepos;
+
+    for (const repo of filtered) {
+      const item = document.createElement("label");
+      item.style.cssText = "display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.82rem; border-bottom: 1px solid var(--border);";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.style.marginTop = "0.15rem";
+      cb.checked = selectedRepos.has(repo.nameWithOwner);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedRepos.add(repo.nameWithOwner); else selectedRepos.delete(repo.nameWithOwner);
+        updateHidden();
+        status.textContent = `${selectedRepos.size} repo(s) selected`;
+      });
+
+      const info = document.createElement("div");
+
+      const nameEl = document.createElement("code");
+      nameEl.style.cssText = "font-size: 0.8rem; display: block;";
+      nameEl.textContent = repo.nameWithOwner;
+
+      const badge = document.createElement("span");
+      badge.style.cssText = "font-size: 0.68rem; background: var(--surface-raised, #eee); border-radius: 3px; padding: 0 0.3rem; margin-left: 0.4rem; color: var(--text-tertiary);";
+      badge.textContent = repo.visibility;
+      nameEl.appendChild(badge);
+      info.appendChild(nameEl);
+
+      if (repo.description) {
+        const desc = document.createElement("span");
+        desc.style.cssText = "font-size: 0.75rem; color: var(--text-tertiary);";
+        desc.textContent = repo.description;
+        info.appendChild(desc);
+      }
+
+      item.appendChild(cb);
+      item.appendChild(info);
+      listContainer.appendChild(item);
+    }
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("p");
+      empty.style.cssText = "padding: 0.5rem; color: var(--text-tertiary); font-size: 0.82rem; margin: 0;";
+      empty.textContent = filter ? "No matching repos" : "No repos found";
+      listContainer.appendChild(empty);
+    }
+  }
+
+  searchInput.addEventListener("input", () => renderList(searchInput.value));
+
+  discoverBtn.addEventListener("click", async () => {
+    let hostname: string | undefined;
+    if (isEnterprise) {
+      const hostEl = configFields.querySelector<HTMLInputElement>('input[data-config-key="github_enterprise_host"]');
+      hostname = hostEl?.value.trim();
+      if (!hostname || hostname === "github.com") {
+        status.textContent = "Enter the enterprise hostname above, then click Discover.";
+        status.style.color = "var(--warning, orange)";
+        return;
+      }
+    }
+
+    discoverBtn.classList.add("loading");
+    discoverBtn.disabled = true;
+    status.textContent = "Loading repos\u2026";
+    status.style.color = "var(--text-tertiary)";
+    listContainer.style.display = "none";
+    searchInput.style.display = "none";
+
+    try {
+      allRepos = await fetchGithubRepos(hostname);
+      searchInput.value = "";
+      renderList("");
+      searchInput.style.display = "";
+      listContainer.style.display = "";
+      status.textContent = `${selectedRepos.size} repo(s) selected \u2014 ${allRepos.length} available`;
+      status.style.color = "var(--text-tertiary)";
+    } catch (e: any) {
+      const msg = e.message ?? "";
+      const friendly = msg.includes("401") || msg.includes("authentication") ? "Not authenticated \u2014 run: gh auth login"
+        : msg.includes("503") || msg.includes("not found") ? "gh CLI not found \u2014 install from cli.github.com"
+        : msg.includes("Cannot reach host") ? "Cannot reach host \u2014 check the enterprise hostname"
+        : msg.includes("timed out") ? "Connection timed out"
+        : "Could not fetch repos";
+      status.textContent = friendly;
       status.style.color = "var(--danger)";
     } finally {
       discoverBtn.classList.remove("loading");
@@ -672,6 +814,10 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           }
         } else if (field.key === "confluence_space_keys") {
           renderSpacePicker(row, configFields, savedConfig[field.key] ?? "");
+        } else if (field.key === "github_repos") {
+          renderRepoPicker(row, configFields, "github_repos", savedConfig[field.key] ?? "");
+        } else if (field.key === "github_enterprise_repos") {
+          renderRepoPicker(row, configFields, "github_enterprise_repos", savedConfig[field.key] ?? "");
         } else {
           // Single text/path input
           const input = document.createElement("input");
