@@ -752,45 +752,42 @@ app.post("/api/confluence-activity/spaces", async (req, res) => {
   }
 });
 
-// --- GitHub repo discovery ---
+// --- GitHub repo access check ---
 
 const GITHUB_HOSTNAME = /^[\w][\w.-]*\.[a-zA-Z]{2,}$/;
+// Matches: https://host/owner/repo[.git][/anything]
+const GITHUB_URL = /^https?:\/\/([\w.-]+)\/([\w.-]+\/[\w.-]+?)(?:\.git)?(\/.*)?$/;
 
-app.post("/api/github-activity/repos", async (req, res) => {
-  const { hostname } = req.body as { hostname?: string };
+app.post("/api/github-activity/check-repo", async (req, res) => {
+  const { url } = req.body as { url?: string };
+  if (!url?.trim()) return res.status(400).json({ error: "url is required" });
 
-  const ghArgs = [
-    "api",
-    "user/repos?affiliation=owner,collaborator,organization_member&per_page=100",
-    "--jq",
-    '[.[] | {nameWithOwner: .full_name, description: (.description // ""), visibility: .visibility}]',
-  ];
+  const match = url.trim().match(GITHUB_URL);
+  if (!match) return res.status(400).json({ error: "Not a valid GitHub repo URL" });
 
-  if (hostname) {
-    if (!GITHUB_HOSTNAME.test(hostname)) {
-      return res.status(400).json({ error: "Invalid hostname format" });
-    }
-    ghArgs.push("--hostname", hostname);
+  const [, host, repoPath] = match;
+  if (host !== "github.com" && !GITHUB_HOSTNAME.test(host)) {
+    return res.status(400).json({ error: "Invalid hostname in URL" });
   }
 
+  const ghArgs = [
+    "api", `repos/${repoPath}`,
+    "--jq", '{"name": .full_name, "description": (.description // ""), "visibility": .visibility}',
+  ];
+  if (host !== "github.com") ghArgs.push("--hostname", host);
+
   try {
-    const { stdout } = await execFileAsync("gh", ghArgs, { timeout: 15000 });
-    const repos = JSON.parse(stdout.trim()) as Array<{
-      nameWithOwner: string;
-      description: string;
-      visibility: string;
-    }>;
-    res.json(repos.sort((a, b) => a.nameWithOwner.localeCompare(b.nameWithOwner)));
+    const { stdout } = await execFileAsync("gh", ghArgs, { timeout: 10000 });
+    res.json(JSON.parse(stdout.trim()));
   } catch (e: any) {
-    if (e.code === "ENOENT") {
-      return res.status(503).json({ error: "gh CLI not found — install from cli.github.com" });
-    }
+    if (e.code === "ENOENT") return res.status(503).json({ error: "gh CLI not found — install from cli.github.com" });
     const stderr: string = e.stderr ?? "";
-    if (stderr.includes("authentication") || stderr.includes("auth login")) {
-      return res.status(401).json({ error: "Not authenticated — run: gh auth login" });
+    if (stderr.includes("Could not resolve") || stderr.includes("no such host")) {
+      return res.status(503).json({ error: "Cannot reach host" });
     }
-    if (stderr.includes("Could not resolve host") || stderr.includes("no such host")) {
-      return res.status(503).json({ error: "Cannot reach host — check the enterprise hostname" });
+    // 404 = repo not found or no access; gh exits non-zero
+    if (stderr.includes("Not Found") || (e.exitCode !== undefined && e.exitCode !== 0)) {
+      return res.status(404).json({ error: "Repo not found or no access — check gh auth login" });
     }
     res.status(500).json({ error: e.name === "TimeoutError" ? "Connection timed out" : (stderr || e.message) });
   }

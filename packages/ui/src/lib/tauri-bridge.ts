@@ -216,14 +216,14 @@ export async function fetchConfluenceSpaces(
   return apiPost("/confluence-activity/spaces", { domain, email, token });
 }
 
-export interface GithubRepo {
-  nameWithOwner: string;
+export interface GithubRepoInfo {
+  name: string;
   description: string;
   visibility: string;
 }
 
-export async function fetchGithubRepos(hostname?: string): Promise<GithubRepo[]> {
-  return apiPost("/github-activity/repos", { hostname: hostname ?? null });
+export async function checkGithubRepo(url: string): Promise<GithubRepoInfo> {
+  return apiPost("/github-activity/check-repo", { url });
 }
 
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {

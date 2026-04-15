@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, fetchGithubRepos, type GithubRepo, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, checkGithubRepo, type GithubRepoInfo, type SkillData } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
@@ -197,146 +197,116 @@ function renderSpacePicker(row: HTMLElement, configFields: HTMLElement, savedKey
   });
 }
 
-function renderRepoPicker(
-  row: HTMLElement,
-  configFields: HTMLElement,
-  fieldKey: "github_repos" | "github_enterprise_repos",
-  savedRepos: string
-): void {
-  const isEnterprise = fieldKey === "github_enterprise_repos";
-  const selectedRepos = new Set(
-    savedRepos.split(",").map((r) => r.trim()).filter(Boolean)
-  );
+function renderRepoUrlInput(row: HTMLElement, savedUrls: string): void {
+  const savedList = savedUrls.split(",").map((u) => u.trim()).filter(Boolean);
+  // Map from URL → display name (owner/repo). Pre-populated from saved URLs.
+  const repoUrls = new Map<string, string>(savedList.map((u) => [u, u]));
 
   const hidden = document.createElement("input");
   hidden.type = "hidden";
-  hidden.dataset.configKey = fieldKey;
-  hidden.value = savedRepos;
+  hidden.dataset.configKey = "github_repo_urls";
+  hidden.value = savedUrls;
   row.appendChild(hidden);
 
-  function updateHidden() { hidden.value = Array.from(selectedRepos).join(","); }
+  function updateHidden() {
+    hidden.value = Array.from(repoUrls.keys()).join(",");
+  }
 
-  const discoverBtn = document.createElement("button");
-  discoverBtn.className = "btn btn-sm";
-  discoverBtn.style.marginBottom = "0.4rem";
-  discoverBtn.textContent = isEnterprise ? "Discover Enterprise Repos" : "Discover Repos";
-  row.appendChild(discoverBtn);
+  // URL input + Add button
+  const inputRow = document.createElement("div");
+  inputRow.style.cssText = "display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem;";
+
+  const urlInput = document.createElement("input");
+  urlInput.className = "form-input";
+  urlInput.style.cssText = "font-size: 0.82rem; flex: 1;";
+  urlInput.type = "text";
+  urlInput.placeholder = "https://github.com/owner/repo";
+  inputRow.appendChild(urlInput);
+
+  const addBtn = document.createElement("button");
+  addBtn.className = "btn btn-sm";
+  addBtn.textContent = "Add";
+  inputRow.appendChild(addBtn);
+  row.appendChild(inputRow);
 
   const status = document.createElement("p");
-  status.style.cssText = "font-size: 0.78rem; color: var(--text-tertiary); margin: 0.25rem 0;";
-  if (selectedRepos.size > 0) {
-    status.textContent = `${selectedRepos.size} repo(s) selected \u2014 click Discover to refresh`;
-  }
+  status.style.cssText = "font-size: 0.78rem; color: var(--text-tertiary); margin: 0.2rem 0 0.35rem;";
   row.appendChild(status);
 
-  const searchInput = document.createElement("input");
-  searchInput.className = "form-input";
-  searchInput.style.cssText = "font-size: 0.82rem; margin-bottom: 0.25rem; display: none;";
-  searchInput.placeholder = "Search repos\u2026";
-  row.appendChild(searchInput);
-
   const listContainer = document.createElement("div");
-  listContainer.style.cssText = "display: none; max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);";
+  listContainer.style.cssText = "display: flex; flex-direction: column; gap: 0.25rem;";
   row.appendChild(listContainer);
 
-  let allRepos: GithubRepo[] = [];
-
-  function renderList(filter: string) {
+  function renderRepoList() {
     listContainer.textContent = "";
-    const lower = filter.toLowerCase();
-    const filtered = filter
-      ? allRepos.filter((r) => r.nameWithOwner.toLowerCase().includes(lower) || r.description.toLowerCase().includes(lower))
-      : allRepos;
-
-    for (const repo of filtered) {
-      const item = document.createElement("label");
-      item.style.cssText = "display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.35rem 0.6rem; cursor: pointer; font-size: 0.82rem; border-bottom: 1px solid var(--border);";
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.style.marginTop = "0.15rem";
-      cb.checked = selectedRepos.has(repo.nameWithOwner);
-      cb.addEventListener("change", () => {
-        if (cb.checked) selectedRepos.add(repo.nameWithOwner); else selectedRepos.delete(repo.nameWithOwner);
-        updateHidden();
-        status.textContent = `${selectedRepos.size} repo(s) selected`;
-      });
-
-      const info = document.createElement("div");
+    for (const [url, label] of repoUrls.entries()) {
+      const item = document.createElement("div");
+      item.style.cssText = "display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.5rem; background: var(--surface-raised, #f0f0f0); border-radius: 4px;";
 
       const nameEl = document.createElement("code");
-      nameEl.style.cssText = "font-size: 0.8rem; display: block;";
-      nameEl.textContent = repo.nameWithOwner;
+      nameEl.style.cssText = "flex: 1; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+      nameEl.textContent = label;
+      nameEl.title = url;
+      item.appendChild(nameEl);
 
-      const badge = document.createElement("span");
-      badge.style.cssText = "font-size: 0.68rem; background: var(--surface-raised, #eee); border-radius: 3px; padding: 0 0.3rem; margin-left: 0.4rem; color: var(--text-tertiary);";
-      badge.textContent = repo.visibility;
-      nameEl.appendChild(badge);
-      info.appendChild(nameEl);
-
-      if (repo.description) {
-        const desc = document.createElement("span");
-        desc.style.cssText = "font-size: 0.75rem; color: var(--text-tertiary);";
-        desc.textContent = repo.description;
-        info.appendChild(desc);
-      }
-
-      item.appendChild(cb);
-      item.appendChild(info);
+      const removeBtn = document.createElement("button");
+      removeBtn.style.cssText = "background: none; border: none; cursor: pointer; color: var(--text-tertiary); font-size: 1rem; padding: 0 0.2rem; line-height: 1;";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.title = "Remove";
+      removeBtn.addEventListener("click", () => {
+        repoUrls.delete(url);
+        updateHidden();
+        renderRepoList();
+        if (repoUrls.size === 0) status.textContent = "";
+      });
+      item.appendChild(removeBtn);
       listContainer.appendChild(item);
-    }
-
-    if (filtered.length === 0) {
-      const empty = document.createElement("p");
-      empty.style.cssText = "padding: 0.5rem; color: var(--text-tertiary); font-size: 0.82rem; margin: 0;";
-      empty.textContent = filter ? "No matching repos" : "No repos found";
-      listContainer.appendChild(empty);
     }
   }
 
-  searchInput.addEventListener("input", () => renderList(searchInput.value));
+  if (savedList.length > 0) renderRepoList();
 
-  discoverBtn.addEventListener("click", async () => {
-    let hostname: string | undefined;
-    if (isEnterprise) {
-      const hostEl = configFields.querySelector<HTMLInputElement>('input[data-config-key="github_enterprise_host"]');
-      hostname = hostEl?.value.trim();
-      if (!hostname || hostname === "github.com") {
-        status.textContent = "Enter the enterprise hostname above, then click Discover.";
-        status.style.color = "var(--warning, orange)";
-        return;
-      }
+  async function addRepo() {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    if (repoUrls.has(url)) {
+      status.textContent = "Already added.";
+      status.style.color = "var(--text-tertiary)";
+      urlInput.value = "";
+      return;
     }
 
-    discoverBtn.classList.add("loading");
-    discoverBtn.disabled = true;
-    status.textContent = "Loading repos\u2026";
+    addBtn.classList.add("loading");
+    addBtn.disabled = true;
+    status.textContent = "Checking access\u2026";
     status.style.color = "var(--text-tertiary)";
-    listContainer.style.display = "none";
-    searchInput.style.display = "none";
 
     try {
-      allRepos = await fetchGithubRepos(hostname);
-      searchInput.value = "";
-      renderList("");
-      searchInput.style.display = "";
-      listContainer.style.display = "";
-      status.textContent = `${selectedRepos.size} repo(s) selected \u2014 ${allRepos.length} available`;
-      status.style.color = "var(--text-tertiary)";
+      const info = await checkGithubRepo(url);
+      repoUrls.set(url, info.name);
+      updateHidden();
+      renderRepoList();
+      urlInput.value = "";
+      status.textContent = `\u2713 ${info.name} added${info.description ? ` \u2014 ${info.description}` : ""}`;
+      status.style.color = "var(--success)";
     } catch (e: any) {
       const msg = e.message ?? "";
-      const friendly = msg.includes("401") || msg.includes("authentication") ? "Not authenticated \u2014 run: gh auth login"
-        : msg.includes("503") || msg.includes("not found") ? "gh CLI not found \u2014 install from cli.github.com"
-        : msg.includes("Cannot reach host") ? "Cannot reach host \u2014 check the enterprise hostname"
+      const friendly = msg.includes("404") || msg.includes("not found") ? "Repo not found or no access \u2014 check gh auth login"
+        : msg.includes("401") || msg.includes("authentication") ? "Not authenticated \u2014 run: gh auth login"
+        : msg.includes("503") ? "gh CLI not found \u2014 install from cli.github.com"
+        : msg.includes("valid GitHub") ? "Not a valid GitHub repo URL"
         : msg.includes("timed out") ? "Connection timed out"
-        : "Could not fetch repos";
+        : "Could not check repo access";
       status.textContent = friendly;
       status.style.color = "var(--danger)";
     } finally {
-      discoverBtn.classList.remove("loading");
-      discoverBtn.disabled = false;
+      addBtn.classList.remove("loading");
+      addBtn.disabled = false;
     }
-  });
+  }
+
+  addBtn.addEventListener("click", addRepo);
+  urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addRepo(); });
 }
 
 export async function renderDataSources(container: HTMLElement): Promise<void> {
@@ -814,10 +784,8 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           }
         } else if (field.key === "confluence_space_keys") {
           renderSpacePicker(row, configFields, savedConfig[field.key] ?? "");
-        } else if (field.key === "github_repos") {
-          renderRepoPicker(row, configFields, "github_repos", savedConfig[field.key] ?? "");
-        } else if (field.key === "github_enterprise_repos") {
-          renderRepoPicker(row, configFields, "github_enterprise_repos", savedConfig[field.key] ?? "");
+        } else if (field.key === "github_repo_urls") {
+          renderRepoUrlInput(row, savedConfig[field.key] ?? "");
         } else {
           // Single text/path input
           const input = document.createElement("input");

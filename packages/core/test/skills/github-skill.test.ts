@@ -2,13 +2,12 @@
  * Tests for the github-activity builtin skill.
  *
  * Covers:
- * - SKILL.md parses with the expected config field types
+ * - SKILL.md parses with the expected config field
  * - Existing 5 commands still present (backward compat)
- * - Per-repo commands 6 and 7 are present with correct patterns
- * - `github_enterprise_host` domain field strips https:// prefix
+ * - Per-repo command 6 is present with correct patterns
  * - Comma-separated repo values are normalised (spaces around commas removed)
- * - Shell metacharacters stripped from repo list
- * - Default sentinel "," produces no loop iterations (via grep filter)
+ * - Shell metacharacters stripped from repo URL list
+ * - Default sentinel " " produces no loop iterations (via grep filter)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
@@ -37,22 +36,14 @@ describe("github-activity SKILL.md", () => {
     expect(skill!.setupGuide).toBeDefined();
   });
 
-  it("has 3 new optional config fields with correct types and truthy defaults", async () => {
+  it("has 1 optional config field github_repo_urls with truthy default", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const fields = skill!.config ?? [];
     const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
 
-    expect(byKey["github_repos"]).toBeDefined();
-    expect(byKey["github_repos"].type).toBe("text");
-    expect(byKey["github_repos"].default).toBeTruthy();
-
-    expect(byKey["github_enterprise_host"]).toBeDefined();
-    expect(byKey["github_enterprise_host"].type).toBe("domain");
-    expect(byKey["github_enterprise_host"].default).toBeTruthy();
-
-    expect(byKey["github_enterprise_repos"]).toBeDefined();
-    expect(byKey["github_enterprise_repos"].type).toBe("text");
-    expect(byKey["github_enterprise_repos"].default).toBeTruthy();
+    expect(byKey["github_repo_urls"]).toBeDefined();
+    expect(byKey["github_repo_urls"].type).toBe("text");
+    expect(byKey["github_repo_urls"].default).toBeTruthy();
   });
 
   it("still contains all 5 original commands", async () => {
@@ -64,23 +55,22 @@ describe("github-activity SKILL.md", () => {
     expect(skill!.body).toContain("gh api user/repos");
   });
 
-  it("contains per-repo command patterns for github.com", async () => {
+  it("contains per-repo command patterns using github_repo_urls", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
-    expect(skill!.body).toContain('printf \'%s\\n\' "{{github_repos}}"');
+    expect(skill!.body).toContain('printf \'%s\\n\' "{{github_repo_urls}}"');
     expect(skill!.body).toContain('gh api "repos/$repo/commits');
     expect(skill!.body).toContain('gh api "repos/$repo/pulls');
   });
 
-  it("contains enterprise command with --hostname flag", async () => {
+  it("command 6 handles enterprise repos via hostname extracted from URL", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
-    expect(skill!.body).toContain('printf \'%s\\n\' "{{github_enterprise_repos}}"');
-    expect(skill!.body).toContain('--hostname "{{github_enterprise_host}}"');
+    expect(skill!.body).toContain('--hostname "$host"');
   });
 
-  it("extracts exactly 7 shell commands from the body", async () => {
+  it("extracts exactly 6 shell commands from the body", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const cmds = extractShellCommands(skill!.body);
-    expect(cmds).toHaveLength(7);
+    expect(cmds).toHaveLength(6);
   });
 });
 
@@ -108,117 +98,84 @@ describe("github-activity config application", () => {
     );
   }
 
-  it("strips https:// from github_enterprise_host before interpolation", async () => {
+  it("normalises spaces around commas in github_repo_urls", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const testSkill = {
       ...skill!,
-      body: "1. Run `echo host={{github_enterprise_host}}` to test",
+      body: "1. Run `echo urls={{github_repo_urls}}` to test",
       location: join(tempDir, "builtin-skills/github-activity/SKILL.md"),
     };
 
     await writeSkillConfig({
-      github_repos: ",",
-      github_enterprise_host: "https://github.mycompany.com",
-      github_enterprise_repos: ",",
+      github_repo_urls: "https://github.com/myorg/api, https://github.com/myorg/web",
     });
 
-    const provider = mockProvider("Host output received.");
+    const provider = mockProvider("URLs output received.");
     await runSkill(testSkill, vault, provider, "test-model");
 
     const prompt = (provider.complete as any).mock.calls[0][0].prompt;
-    expect(prompt).toContain("github.mycompany.com");
-    expect(prompt).not.toContain("https://");
+    expect(prompt).toContain("https://github.com/myorg/api,https://github.com/myorg/web");
+    expect(prompt).not.toMatch(/myorg\/api,\s+https/);
   });
 
-  it("normalises spaces around commas in github_repos", async () => {
+  it("strips shell metacharacters from github_repo_urls", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const testSkill = {
       ...skill!,
-      body: "1. Run `echo repos={{github_repos}}` to test",
+      body: "1. Run `echo urls={{github_repo_urls}}` to test",
       location: join(tempDir, "builtin-skills/github-activity/SKILL.md"),
     };
 
     await writeSkillConfig({
-      github_repos: "myorg/api, myorg/web, myorg/docs",
-      github_enterprise_host: "github.com",
-      github_enterprise_repos: ",",
+      github_repo_urls: "https://github.com/myorg/repo;$(whoami)",
     });
 
-    const provider = mockProvider("Repos output received.");
+    const provider = mockProvider("URLs output received.");
     await runSkill(testSkill, vault, provider, "test-model");
 
     const prompt = (provider.complete as any).mock.calls[0][0].prompt;
-    expect(prompt).toContain("myorg/api,myorg/web,myorg/docs");
-    expect(prompt).not.toMatch(/myorg\/api,\s+myorg/);
-  });
-
-  it("strips shell metacharacters from github_repos", async () => {
-    const skill = await loadSkillFromFile(SKILL_PATH);
-    const testSkill = {
-      ...skill!,
-      body: "1. Run `echo repos={{github_repos}}` to test",
-      location: join(tempDir, "builtin-skills/github-activity/SKILL.md"),
-    };
-
-    await writeSkillConfig({
-      github_repos: "myorg/repo;$(whoami)",
-      github_enterprise_host: "github.com",
-      github_enterprise_repos: ",",
-    });
-
-    const provider = mockProvider("Repos output received.");
-    await runSkill(testSkill, vault, provider, "test-model");
-
-    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
-    expect(prompt).toContain("myorg/repo");
+    expect(prompt).toContain("github.com/myorg/repo");
     expect(prompt).not.toContain(";");
     expect(prompt).not.toContain("$(");
   });
 
-  it("grep filter in command 6 drops the comma sentinel so loop never iterates", async () => {
+  it("grep filter in command 6 drops the space sentinel so loop never iterates", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
-    // Use a minimal version of command 6 that echoes REPO=name only when the loop runs
+    // Minimal version of command 6 that echoes REPO=name only when the loop runs
     const testSkill = {
       ...skill!,
-      body: `1. Run \`printf '%s\\n' "{{github_repos}}" | grep -vE '^\\{\\{|^[,[:space:]]*$' | tr ',' '\\n' | grep -v '^[[:space:]]*$' | while IFS= read -r repo; do repo=$(echo "$repo" | tr -d ' '); echo "REPO=$repo"; done; true\` to test loop guard`,
+      body: `1. Run \`printf '%s\\n' "{{github_repo_urls}}" | grep -vE '^\\{\\{|^[[:space:]]*$' | tr ',' '\\n' | sed 's/[[:space:]]//g; s/\\.git$//' | grep -v '^$' | while IFS= read -r url; do echo "REPO=$url"; done; true\` to test loop guard`,
       location: join(tempDir, "builtin-skills/github-activity/SKILL.md"),
     };
 
-    await writeSkillConfig({
-      github_repos: ",",
-      github_enterprise_host: "github.com",
-      github_enterprise_repos: ",",
-    });
+    await writeSkillConfig({ github_repo_urls: " " });
 
     const provider = mockProvider("Loop output received.");
     await runSkill(testSkill, vault, provider, "test-model");
 
     const prompt = (provider.complete as any).mock.calls[0][0].prompt;
     // The loop body should never have executed — output section shows (no output)
-    // (The command text itself contains "REPO=$repo" but the actual output is empty)
     expect(prompt).toContain("(no output)");
-    expect(prompt).not.toMatch(/REPO=[a-zA-Z]/); // no actual repo name in output
+    expect(prompt).not.toMatch(/REPO=https/); // no actual URL in output
   });
 
-  it("loop runs and outputs repo name when github_repos is configured", async () => {
+  it("loop runs and outputs repo URL when github_repo_urls is configured", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     const testSkill = {
       ...skill!,
-      body: `1. Run \`printf '%s\\n' "{{github_repos}}" | grep -vE '^\\{\\{|^[,[:space:]]*$' | tr ',' '\\n' | grep -v '^[[:space:]]*$' | while IFS= read -r repo; do repo=$(echo "$repo" | tr -d ' '); echo "REPO=$repo"; done; true\` to test loop`,
+      body: `1. Run \`printf '%s\\n' "{{github_repo_urls}}" | grep -vE '^\\{\\{|^[[:space:]]*$' | tr ',' '\\n' | sed 's/[[:space:]]//g; s/\\.git$//' | grep -v '^$' | while IFS= read -r url; do echo "REPO=$url"; done; true\` to test loop`,
       location: join(tempDir, "builtin-skills/github-activity/SKILL.md"),
     };
 
     await writeSkillConfig({
-      github_repos: "myorg/api,myorg/web",
-      github_enterprise_host: "github.com",
-      github_enterprise_repos: ",",
+      github_repo_urls: "https://github.com/myorg/api,https://github.com/myorg/web",
     });
 
     const provider = mockProvider("Loop output received.");
     await runSkill(testSkill, vault, provider, "test-model");
 
     const prompt = (provider.complete as any).mock.calls[0][0].prompt;
-    expect(prompt).toContain("REPO=myorg/api");
-    expect(prompt).toContain("REPO=myorg/web");
+    expect(prompt).toContain("REPO=https://github.com/myorg/api");
+    expect(prompt).toContain("REPO=https://github.com/myorg/web");
   });
 });
