@@ -216,6 +216,16 @@ export async function fetchConfluenceSpaces(
   return apiPost("/confluence-activity/spaces", { domain, email, token });
 }
 
+export interface GithubRepo {
+  nameWithOwner: string;
+  description: string;
+  visibility: string;
+}
+
+export async function fetchGithubRepos(hostname?: string): Promise<GithubRepo[]> {
+  return apiPost("/github-activity/repos", { hostname: hostname ?? null });
+}
+
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
   if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });
