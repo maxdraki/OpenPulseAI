@@ -6,7 +6,7 @@ import { appendActivity } from "../hot.js";
 import type { Vault } from "../vault.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillDefinition, CollectorState } from "../types.js";
-import { saveCollectorState } from "./scheduler.js";
+import { loadCollectorState, saveCollectorState } from "./scheduler.js";
 import { scanSkillForThreats } from "./security.js";
 
 const execFileAsync = promisify(execFile);
@@ -148,9 +148,23 @@ export async function runSkill(
 ): Promise<CollectorState> {
   const now = new Date();
 
+  // Compute the collection window: use lastRunAt if available, fall back to lookback for first runs
+  const priorState = await loadCollectorState(vault, skill.name);
+  const rawLastRun = priorState?.lastRunAt ? new Date(priorState.lastRunAt).getTime() : NaN;
+  const sinceMs = Number.isFinite(rawLastRun)
+    ? rawLastRun
+    : now.getTime() - parseLookback(skill.lookback);
+  const sinceDate = new Date(sinceMs);
+  const systemConfig: Record<string, string> = {
+    since_iso:  sinceDate.toISOString(),
+    since_date: sinceDate.toISOString().slice(0, 10),
+    since_unix: Math.floor(sinceMs / 1000).toString(),
+    since_days: Math.max(1, Math.ceil((now.getTime() - sinceMs) / 86_400_000)).toString(),
+  };
+
   try {
     const config = await loadSkillConfig(vault, skill);
-    const body = applyConfig(skill.body, config, skill);
+    const body = applyConfig(skill.body, { ...config, ...systemConfig }, skill);
 
     const isBuiltin = skill.location.includes("builtin-skills");
     const threats = scanSkillForThreats(body, isBuiltin);
@@ -198,15 +212,12 @@ export async function runSkill(
           .join("\n\n")
       : "(No shell commands were executed)";
 
-    const lookbackMs = parseLookback(skill.lookback);
-    const since = new Date(now.getTime() - lookbackMs);
-
     const systemPrompt = [
       `You are a data collector summarising output from the "${skill.name}" skill.`,
       `Your goal: produce a factual journal entry that captures what actually happened,`,
       `so the user can later look back and understand their work activity.`,
       `Today's date: ${now.toISOString().slice(0, 10)}`,
-      `Lookback period: ${skill.lookback} (since ${since.toISOString().slice(0, 10)})`,
+      `Collecting activity since: ${sinceDate.toISOString().slice(0, 10)}${priorState?.lastRunAt ? " (last run)" : " (first run — using lookback window)"}`,
       "",
       "The shell commands below have already been executed and their outputs are provided.",
       "Summarise ONLY what the command output shows. If a command returned no output,",
