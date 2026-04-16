@@ -61,12 +61,12 @@ ${newEntriesText}
 
 Write an updated status document following these rules:
 
-1. Start with "## Current Status" — a brief summary of the LATEST state
-2. PRESERVE all existing activity log entries from the current content — do NOT remove historical entries
-3. ADD the new entries as new dated sections in the activity log (most recent first)
-4. If a new entry updates or supersedes an older one, update the Current Status but KEEP the old activity log entry for history
-5. Remove only exact duplicates (same date, same content)
-6. Use clear, concise Markdown
+1. Start with "## Current Status" — a brief summary of the LATEST state.
+2. PRESERVE all existing activity log entries — do NOT remove historical entries.
+3. MERGE by date: for each new entry, check whether the Activity Log already contains a ### section whose date matches the new entry's date. If a matching section exists, UPDATE it to reflect the most complete picture (use the new entry's data — do not keep two sections for the same date). If no matching section exists, INSERT a new ### section at the top of the Activity Log (most recent first).
+4. Never produce two ### sections with the same date — consolidate any duplicates you find into one.
+5. If a new entry updates or supersedes an older one, update the Current Status accordingly.
+6. Use clear, concise Markdown.
 
 The document structure should be:
 ## Current Status
