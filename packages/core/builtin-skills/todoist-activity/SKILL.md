@@ -14,7 +14,7 @@ config:
 
 ## Instructions
 
-1. Run `curl -s -H "Authorization: Bearer {{todoist_token}}" "https://api.todoist.com/sync/v9/completed/get_all?since=$(date -u -v-1d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%S)&limit=50"` to get recently completed tasks
+1. Run `curl -s -H "Authorization: Bearer {{todoist_token}}" "https://api.todoist.com/sync/v9/completed/get_all?since={{since_iso}}&limit=50"` to get recently completed tasks
 
 2. Run `curl -s -H "Authorization: Bearer {{todoist_token}}" "https://api.todoist.com/rest/v2/tasks?filter=created after: -1 days"` to get recently created tasks
 

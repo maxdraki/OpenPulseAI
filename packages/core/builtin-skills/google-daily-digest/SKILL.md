@@ -18,7 +18,7 @@ You are collecting the user's daily Google Workspace activity to produce a conci
 
 ## Instructions
 
-1. Run `gog gmail search 'newer_than:1d' --max 50 --json` to get today's emails
+1. Run `gog gmail search 'newer_than:{{since_days}}d' --max 50 --json` to get today's emails
 2. Run `gog calendar events list --from today --to tomorrow --json` to get today's calendar events
 3. For each email thread, extract: subject, participants, key decisions or action items
 4. For each calendar event, note: title, attendees, whether attended or declined

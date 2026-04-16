@@ -23,7 +23,7 @@ config:
 
 1. Run `curl -s -H "Authorization: Bearer {{sentry_token}}" "https://{{sentry_domain}}/api/0/organizations/{{sentry_org}}/issues/?query=is:unresolved&sort=date&limit=20"` to get unresolved issues sorted by most recent
 
-2. Run `curl -s -H "Authorization: Bearer {{sentry_token}}" "https://{{sentry_domain}}/api/0/organizations/{{sentry_org}}/issues/?query=firstSeen:>$(date -u -v-1d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%S)&sort=date&limit=20"` to get newly appeared issues in the last 24 hours
+2. Run `curl -s -H "Authorization: Bearer {{sentry_token}}" "https://{{sentry_domain}}/api/0/organizations/{{sentry_org}}/issues/?query=firstSeen:>{{since_iso}}&sort=date&limit=20"` to get newly appeared issues in the last 24 hours
 
 3. Run `curl -s -H "Authorization: Bearer {{sentry_token}}" "https://{{sentry_domain}}/api/0/organizations/{{sentry_org}}/issues/?query=is:regression&sort=date&limit=10"` to get regressions (previously resolved issues that reappeared)
 

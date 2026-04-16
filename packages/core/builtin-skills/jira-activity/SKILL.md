@@ -23,8 +23,8 @@ config:
 
 ## Instructions
 
-1. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+updated>=-1d&fields=summary,status,assignee,priority,comment,project&maxResults=50"` to get recently updated issues
-2. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+status+changed+during+(-1d,now())&fields=summary,status,assignee,project&maxResults=30"` to get issues that changed status
+1. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+updated>="{{since_date}}"&fields=summary,status,assignee,priority,comment,project&maxResults=50"` to get recently updated issues
+2. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+status+changed+during+("{{since_date}}",now())&fields=summary,status,assignee,project&maxResults=30"` to get issues that changed status
 
 Summarise ONLY what the API returns. Focus on:
 - Issues that changed status (e.g. In Progress → Done)
