@@ -736,6 +736,89 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
     contentEl.appendChild(dreamSection);
   }
 
+  // ── Lint Pipeline section ──
+  const lintPipelineState = (status as any).lintPipeline;
+  if (lintPipelineState) {
+    const lintSection = document.createElement("div");
+    lintSection.className = "dream-section";
+    lintSection.style.marginTop = "1rem";
+    lintSection.style.borderTop = "1px solid var(--border)";
+    lintSection.style.paddingTop = "1rem";
+
+    const lintHeader = document.createElement("div");
+    lintHeader.style.display = "flex";
+    lintHeader.style.justifyContent = "space-between";
+    lintHeader.style.alignItems = "center";
+    lintHeader.style.marginBottom = "0.5rem";
+
+    const lintTitle = document.createElement("span");
+    lintTitle.style.fontWeight = "600";
+    lintTitle.style.fontSize = "0.95rem";
+    lintTitle.textContent = "Wiki Lint";
+
+    const schedInfo = document.createElement("span");
+    schedInfo.style.fontSize = "0.78rem";
+    schedInfo.style.color = "var(--text-secondary)";
+    const sched = lintPipelineState.schedule;
+    schedInfo.textContent = `${sched?.days?.join(", ") ?? "sun"} @ ${sched?.time ?? "20:00"}`;
+
+    lintHeader.appendChild(lintTitle);
+    lintHeader.appendChild(schedInfo);
+    lintSection.appendChild(lintHeader);
+
+    const lintMeta = document.createElement("div");
+    lintMeta.className = "schedule-meta";
+
+    const lintLastRun = document.createElement("span");
+    const lintLastLabel = document.createElement("span");
+    lintLastLabel.textContent = "Last run: ";
+    lintLastLabel.style.color = "var(--text-tertiary)";
+    lintLastRun.appendChild(lintLastLabel);
+    lintLastRun.appendChild(resultDot(lintPipelineState.lastResult));
+    lintLastRun.appendChild(document.createTextNode(" " + relativeTime(lintPipelineState.lastRun)));
+    lintMeta.appendChild(lintLastRun);
+    lintSection.appendChild(lintMeta);
+
+    if (lintPipelineState.lastResult === "error" && lintPipelineState.lastError) {
+      const errEl = document.createElement("div");
+      errEl.style.marginTop = "0.35rem";
+      errEl.style.fontSize = "0.75rem";
+      errEl.style.color = "var(--danger)";
+      errEl.style.fontFamily = "var(--font-mono)";
+      errEl.textContent = lintPipelineState.lastError;
+      lintSection.appendChild(errEl);
+    }
+
+    const lintRunBtn = document.createElement("button");
+    lintRunBtn.type = "button";
+    lintRunBtn.className = "btn btn-ghost btn-sm";
+    lintRunBtn.style.fontSize = "0.78rem";
+    lintRunBtn.style.padding = "0.2rem 0.6rem";
+    lintRunBtn.style.marginTop = "0.35rem";
+    lintRunBtn.textContent = "Run Lint Now";
+    lintRunBtn.addEventListener("click", async () => {
+      lintRunBtn.disabled = true;
+      lintRunBtn.textContent = "Running…";
+      try {
+        const res = await fetch("/api/trigger-lint", { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json();
+          log("error", "Lint trigger failed", data.error ?? "unknown error");
+        } else {
+          log("info", "Triggered lint pipeline run");
+          refresh();
+        }
+      } catch (e) {
+        log("error", "Error triggering lint pipeline", String(e));
+      } finally {
+        lintRunBtn.disabled = false;
+        lintRunBtn.textContent = "Run Lint Now";
+      }
+    });
+    lintSection.appendChild(lintRunBtn);
+    contentEl.appendChild(lintSection);
+  }
+
   await refresh();
 
   // Poll every 30 seconds

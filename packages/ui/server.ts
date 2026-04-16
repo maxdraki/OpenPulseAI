@@ -155,6 +155,25 @@ app.post("/api/trigger-dream", async (_req, res) => {
   }
 });
 
+app.post("/api/trigger-lint", async (_req, res) => {
+  try {
+    await orchestrator.triggerLint();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/lint-report", async (_req, res) => {
+  const lintPath = join(VAULT_ROOT, "vault", "warm", "_lint.md");
+  try {
+    const content = await readFile(lintPath, "utf-8");
+    res.json({ content });
+  } catch {
+    res.json({ content: null });
+  }
+});
+
 app.get("/api/llm-config", async (_req, res) => {
   const configPath = join(VAULT_ROOT, "config.yaml");
   try {
@@ -844,6 +863,13 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
     await execFileAsync("node", [dreamBin], {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
+    });
+  },
+  async runLintPipeline(): Promise<void> {
+    const lintBin = join(process.cwd(), "..", "dream", "dist", "lint-cli.js");
+    await execFileAsync("node", [lintBin], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 120000,
     });
   },
   async getSkillNames(): Promise<string[]> {

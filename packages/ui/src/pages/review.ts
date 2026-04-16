@@ -77,7 +77,14 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
           day: "numeric", month: "short", year: "numeric",
           hour: "2-digit", minute: "2-digit",
         });
-        batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
+        // Check if this is a lint-fix batch
+        const firstItem = batchUpdates[0] as any;
+        if (firstItem?.lintFix) {
+          batchLabel.textContent = `Lint Fix — ${firstItem.lintFix}: ${batchUpdates.length} stub page(s)`;
+          batchLabel.style.color = "var(--warning, #d97706)";
+        } else {
+          batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
+        }
 
         const batchActions = document.createElement("div");
         batchActions.className = "batch-actions";
