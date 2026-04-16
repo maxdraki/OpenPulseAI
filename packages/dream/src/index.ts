@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog } from "@openpulse/core";
+import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog, readTheme } from "@openpulse/core";
 import type { ActivityEntry } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
 import { synthesizeToPending } from "./synthesize.js";
 import { archiveProcessedHotFiles } from "./archive.js";
+import { buildBacklinks, writeBacklinksFile } from "./backlinks.js";
+import { seedSchema } from "./schema.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 
@@ -16,6 +18,7 @@ async function main() {
   initLogger(VAULT_ROOT);
   const vault = new Vault(VAULT_ROOT);
   await vault.init();
+  await seedSchema(vault);
   await vaultLog("info", "Dream pipeline started");
 
   const provider = createProvider(config);
@@ -36,8 +39,7 @@ async function main() {
 
   let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    pending = await (synthesizeToPending as any)(vault, classified, provider, model, proposedTypes);
+    pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes);
   } catch (err) {
     console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
     await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
@@ -46,6 +48,8 @@ async function main() {
   console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
 
   await generateIndex(vault);
+  const backlinks = await buildBacklinks(vault);
+  await writeBacklinksFile(vault, backlinks);
   const themeNames = pending.map((p) => p.theme).join(", ");
   await appendLog(vault, "dream", `${entries.length} entries → ${pending.length} updates (${themeNames})`);
 
@@ -116,56 +120,99 @@ export async function generateIndex(vault: Vault): Promise<void> {
     (f) => f.endsWith(".md") && f !== "index.md" && f !== "log.md" && !f.startsWith("_")
   );
 
-  type ThemeEntry = { name: string; summary: string; lastUpdated: string };
+  const themeDocs = await Promise.all(themeFiles.map(async (file) => {
+    const name = file.replace(/\.md$/, "");
+    const doc = await readTheme(vault, name);
+    if (!doc) return null;
 
-  const themes = await Promise.all(themeFiles.map(async (file) => {
-    const content = await readFile(join(vault.warmDir, file), "utf-8");
-    const lines = content.split("\n");
+    const type = doc.type ?? "project";
 
-    let lastUpdated = "";
-    if (lines[0] === "---") {
-      for (let i = 1; i < lines.length; i++) {
-        if (lines[i] === "---") break;
-        const match = lines[i].match(/^lastUpdated:\s*(.+)/);
-        if (match) { lastUpdated = match[1].trim(); break; }
-      }
-    }
-
+    // Extract a summary from the first content section heading
+    const lines = doc.content.split("\n");
+    const sectionHeadings = ["## Current Status", "## Definition", "## Summary"];
     let summary = "";
-    const statusIdx = lines.findIndex((l) => l.trim() === "## Current Status");
-    if (statusIdx !== -1) {
-      for (let i = statusIdx + 1; i < lines.length; i++) {
-        const trimmed = lines[i].trim();
-        if (trimmed && !trimmed.startsWith("#")) {
-          summary = trimmed.length > 100 ? trimmed.slice(0, 100) : trimmed;
+    for (const heading of sectionHeadings) {
+      const idx = lines.findIndex((l) => l.trim() === heading);
+      if (idx === -1) continue;
+      for (let i = idx + 1; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (t && !t.startsWith("#")) {
+          summary = t.length > 100 ? t.slice(0, 100) : t;
           break;
         }
       }
+      if (summary) break;
     }
 
-    const name = file.replace(/\.md$/, "");
-    return { name, summary, lastUpdated } as ThemeEntry;
+    return { name, type, summary, lastUpdated: doc.lastUpdated };
   }));
 
-  // Sort by lastUpdated descending
-  themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+  const valid = themeDocs.filter((t): t is NonNullable<typeof themeDocs[0]> => t !== null);
 
   const formatDate = (iso: string): string => {
     try {
-      const d = new Date(iso);
-      return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+      return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
     } catch {
       return iso;
     }
   };
 
-  const listLines = themes
-    .map((t) => `- [[${t.name}]] — ${t.summary}${t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : ""}`)
-    .join("\n");
+  // Group by type, sorted by lastUpdated descending within each group
+  const byType: Record<string, typeof valid> = {
+    project: [],
+    concept: [],
+    entity: [],
+    "source-summary": [],
+  };
+  for (const t of valid) {
+    const bucket = byType[t.type] ?? byType["project"];
+    bucket.push(t);
+  }
+  for (const list of Object.values(byType)) {
+    list.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+  }
+
+  // Read stub candidates from _lint.md if recent (< 8 days)
+  let stubsSection = "";
+  try {
+    const lintContent = await readFile(join(vault.warmDir, "_lint.md"), "utf-8");
+    const dateMatch = lintContent.match(/# Wiki Lint — (\d{4}-\d{2}-\d{2})/);
+    if (dateMatch) {
+      const lintAge = (Date.now() - new Date(dateMatch[1]).getTime()) / 86_400_000;
+      if (lintAge < 8) {
+        const stubMatch = lintContent.match(/## Stub candidates[\s\S]*?(?=\n## |\n---|\n# |$)/);
+        if (stubMatch) {
+          const stubLines = stubMatch[0].split("\n").filter((l) => l.startsWith("- "));
+          if (stubLines.length > 0) {
+            stubsSection = `\n## Stubs\nMentioned but not yet written:\n${stubLines.slice(0, 5).join("\n")}\n`;
+          }
+        }
+      }
+    }
+  } catch { /* _lint.md may not exist yet */ }
+
+  const SECTION_LABELS: Record<string, string> = {
+    project: "## Projects",
+    concept: "## Concepts",
+    entity: "## Entities",
+    "source-summary": "## Sources",
+  };
+
+  const sections: string[] = [];
+  for (const [type, items] of Object.entries(byType)) {
+    if (items.length === 0) continue;
+    sections.push(SECTION_LABELS[type]);
+    for (const t of items) {
+      const datePart = t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : "";
+      const summaryPart = t.summary ? ` — ${t.summary}` : "";
+      sections.push(`- [[${t.name}]]${summaryPart}${datePart}`);
+    }
+    sections.push("");
+  }
 
   const now = new Date().toISOString();
-  const indexContent = `# OpenPulse Knowledge Base\n\n${listLines}\n\nLast updated: ${now} | ${themes.length} themes\n`;
-
+  const total = valid.length;
+  const indexContent = `# OpenPulse Knowledge Base\n\n${sections.join("\n")}${stubsSection}\nLast updated: ${now} | ${total} themes\n`;
   await writeFile(join(vault.warmDir, "index.md"), indexContent, "utf-8");
 }
 

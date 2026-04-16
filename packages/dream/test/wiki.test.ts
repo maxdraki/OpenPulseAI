@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault } from "@openpulse/core";
+import { Vault, writeTheme } from "@openpulse/core";
 import { generateIndex, appendLog } from "../src/index.js";
 
 describe("generateIndex", () => {
@@ -66,6 +66,99 @@ describe("generateIndex", () => {
     const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
     expect(index).toContain("2 themes");
     expect(index).toContain("# OpenPulse Knowledge Base");
+  });
+});
+
+describe("generateIndex — grouped by type", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-wiki-grouped-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("places project-type themes under ## Projects section", async () => {
+    await writeTheme(vault, "my-project", "## Current Status\n\nActive work here.", { type: "project" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    expect(index).toContain("## Projects");
+    expect(index).toContain("[[my-project]]");
+    // The item should appear after the ## Projects heading
+    const projectsPos = index.indexOf("## Projects");
+    const itemPos = index.indexOf("[[my-project]]");
+    expect(itemPos).toBeGreaterThan(projectsPos);
+  });
+
+  it("places concept-type themes under ## Concepts section", async () => {
+    await writeTheme(vault, "ci-cd", "## Definition\n\nContinuous integration and delivery.", { type: "concept" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    expect(index).toContain("## Concepts");
+    expect(index).toContain("[[ci-cd]]");
+    const conceptsPos = index.indexOf("## Concepts");
+    const itemPos = index.indexOf("[[ci-cd]]");
+    expect(itemPos).toBeGreaterThan(conceptsPos);
+  });
+
+  it("formats items as - [[name]] — summary (date)", async () => {
+    await writeTheme(vault, "feature-x", "## Current Status\n\nIn progress now.", { type: "project" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    // Should have summary extracted from ## Current Status
+    expect(index).toMatch(/- \[\[feature-x\]\] — In progress now\. \(\d+ \w+\)/);
+  });
+
+  it("groups themes with different types into separate sections", async () => {
+    await writeTheme(vault, "auth-service", "## Current Status\n\nDone.", { type: "project" });
+    await writeTheme(vault, "oauth", "## Definition\n\nOpen auth protocol.", { type: "concept" });
+    await writeTheme(vault, "alice", "## Summary\n\nLead engineer.", { type: "entity" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    expect(index).toContain("## Projects");
+    expect(index).toContain("## Concepts");
+    expect(index).toContain("## Entities");
+    expect(index).toContain("[[auth-service]]");
+    expect(index).toContain("[[oauth]]");
+    expect(index).toContain("[[alice]]");
+    expect(index).toContain("3 themes");
+  });
+
+  it("themes without a type field default to project", async () => {
+    // Write without type in frontmatter
+    const rawContent = `---\nlastUpdated: 2026-04-10T10:00:00Z\n---\n## Current Status\n\nNo type specified.\n`;
+    await writeFile(join(vault.warmDir, "no-type.md"), rawContent, "utf-8");
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    expect(index).toContain("## Projects");
+    expect(index).toContain("[[no-type]]");
+  });
+
+  it("does not render empty type sections", async () => {
+    await writeTheme(vault, "thing-a", "## Current Status\n\nActive.", { type: "project" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    // Only project exists — Concepts, Entities, Sources should not appear
+    expect(index).not.toContain("## Concepts");
+    expect(index).not.toContain("## Entities");
+    expect(index).not.toContain("## Sources");
   });
 });
 
