@@ -16,12 +16,13 @@ marked.setOptions({
  * - Convert [[wiki-links]] to anchor tags that navigate to the theme
  * - Strip ^[src:...] provenance markers (they're metadata, not display content)
  */
-function preProcess(md: string): string {
+function preProcess(md: string, knownThemes?: Set<string>): string {
   // Strip provenance markers ^[src:...] and ^[inferred] etc.
   let out = md.replace(/\^\[src:[^\]]+\]/g, "").replace(/\^\[inferred\]/g, "").replace(/\^\[ambiguous\]/g, "");
 
-  // Convert [[theme-name]] to a link that navigates via hash routing
+  // Convert [[theme-name]] to a link only if the theme exists, otherwise plain text
   out = out.replace(/\[\[([^\]]+)\]\]/g, (_match, name) => {
+    if (knownThemes && !knownThemes.has(name)) return name;
     const href = `#themes/${encodeURIComponent(name)}`;
     return `<a href="${href}" class="wiki-link" data-theme="${name}">${name}</a>`;
   });
@@ -29,6 +30,6 @@ function preProcess(md: string): string {
   return out;
 }
 
-export function renderMarkdown(md: string): string {
-  return marked.parse(preProcess(md)) as string;
+export function renderMarkdown(md: string, knownThemes?: Set<string>): string {
+  return marked.parse(preProcess(md, knownThemes)) as string;
 }

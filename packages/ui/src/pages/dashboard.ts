@@ -94,6 +94,8 @@ async function loadThemes(section: HTMLElement, backlinks: Record<string, string
       return;
     }
 
+    const knownThemes = new Set(themes.map(t => t.theme));
+
     for (const theme of themes) {
       const card = document.createElement("div");
       card.className = "dashboard-theme-card";
@@ -126,7 +128,7 @@ async function loadThemes(section: HTMLElement, backlinks: Record<string, string
       const content = document.createElement("div");
       content.className = "dashboard-theme-content md-content";
       content.style.display = "none";
-      content.innerHTML = renderMarkdown(theme.content); // safe: vault content via marked
+      content.innerHTML = renderMarkdown(theme.content, knownThemes); // safe: vault content via marked
 
       const inbound = backlinks[theme.theme] ?? [];
       if (inbound.length > 0) {
