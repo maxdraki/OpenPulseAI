@@ -107,7 +107,7 @@ function checkBrokenLinks(content: string, themeSet: Set<string>): Set<string> {
 
 /**
  * Check 2: Is a theme orphaned?
- * A theme is an orphan if it has no inbound links AND no outbound links.
+ * A theme is an orphan if it has no inbound links AND no outbound links (excluding self-links).
  */
 function checkOrphan(theme: string, content: string, backlinks: Map<string, string[]>): boolean {
   // Check inbound links
@@ -116,10 +116,9 @@ function checkOrphan(theme: string, content: string, backlinks: Map<string, stri
     return false; // has inbound links, not an orphan
   }
 
-  // Check outbound links
-  const linkRegex = /\[\[([^\]]+)\]\]/g;
-  const hasOutboundLinks = linkRegex.test(content);
-  if (hasOutboundLinks) {
+  // Check outbound links (excluding self-links)
+  const links = [...content.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]).filter(t => t !== theme);
+  if (links.length > 0) {
     return false; // has outbound links, not an orphan
   }
 

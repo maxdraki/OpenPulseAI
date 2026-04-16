@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault } from "../core/dist/vault.js";
+import { Vault, writeTheme } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -118,10 +118,15 @@ app.post("/api/approve-update", async (req, res) => {
     const update = JSON.parse(raw);
     const finalContent = editedContent ?? update.proposedContent;
 
-    // Write to warm theme file
-    const now = new Date().toISOString();
-    const warmContent = `---\ntheme: ${update.theme}\nlastUpdated: ${now}\n---\n\n${finalContent}\n`;
-    await writeFile(join(warmDir, `${update.theme}.md`), warmContent, "utf-8");
+    // Write to warm theme file — use writeTheme to preserve type, sources, created, related
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
+    await writeTheme(vault, update.theme, finalContent, {
+      type: update.type,
+      sources: update.sources,
+      related: update.related,
+      created: update.created,
+    });
 
     // Remove pending file
     await rm(pendingPath);

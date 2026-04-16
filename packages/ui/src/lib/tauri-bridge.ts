@@ -275,11 +275,20 @@ export interface OrchestratorDreamPipeline {
   collectorsCompletedToday: string[];
 }
 
+export interface OrchestratorLintPipeline {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: { time: string; days: string[] };
+}
+
 export interface OrchestratorStatus {
   running: boolean;
   lastHeartbeat: string;
   collectors: Record<string, OrchestratorCollector>;
   dreamPipeline: OrchestratorDreamPipeline;
+  lintPipeline?: OrchestratorLintPipeline;
 }
 
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {

@@ -39,6 +39,9 @@ export async function buildBacklinks(vault: Vault): Promise<Map<string, string[]
     for (const match of matches) {
       const target = match[1];
 
+      // Skip self-links
+      if (target === theme) continue;
+
       // Skip duplicates within the same theme
       if (seenLinks.has(target)) {
         continue;

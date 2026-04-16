@@ -55,6 +55,9 @@ export interface PendingUpdate {
   status: "pending" | "approved" | "rejected" | "edited";
   batchId?: string; // groups updates from same dream run
   type?: ThemeType;              // for new themes — drives template selection
+  sources?: string[];            // rolled-up source entry IDs from ^[src:] markers
+  related?: string[];            // related theme names
+  created?: string;              // ISO 8601 — set on first synthesis
   lintFix?: "stubs" | "orphans"; // marks lint-fix batches
 }
 

@@ -605,16 +605,18 @@ export class Orchestrator {
   private async runLint(): Promise<void> {
     const lp = this.state.lintPipeline;
     if (lp.running) return;
+    const startedAt = new Date().toISOString();
     lp.running = true;
     await saveState(this.vaultRoot, this.state);
     try {
       await vaultLog("info", "[orchestrator] Running lint pipeline");
       await this.callbacks.runLintPipeline();
-      lp.lastRun = new Date().toISOString();
+      lp.lastRun = startedAt;
       lp.lastResult = "success";
       delete lp.lastError;
       await vaultLog("info", "[orchestrator] Lint pipeline succeeded");
     } catch (err) {
+      lp.lastRun = startedAt;   // record even on failure
       lp.lastResult = "error";
       lp.lastError = String(err);
       await vaultLog("error", "[orchestrator] Lint pipeline failed", String(err));

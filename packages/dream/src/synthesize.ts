@@ -11,7 +11,7 @@ import {
   listThemes,
 } from "@openpulse/core";
 import { loadSchema } from "./schema.js";
-import { entryId } from "./provenance.js";
+import { entryId, extractSources } from "./provenance.js";
 
 export async function synthesizeToPending(
   vault: Vault,
@@ -103,6 +103,9 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       temperature: 0.1,
     });
 
+    // Roll up ^[src:] markers into the sources field
+    const rolledUpSources = extractSources(proposedContent);
+
     const update: PendingUpdate = {
       id: randomUUID(),
       theme,
@@ -113,6 +116,7 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       status: "pending",
       batchId,
       type: pageType,
+      sources: rolledUpSources.length > 0 ? rolledUpSources : undefined,
     };
 
     const filename = `${update.id}.json`;
