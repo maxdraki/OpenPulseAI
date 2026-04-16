@@ -4,7 +4,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "openpulse-dream": "dist/index.js"
+    "openpulse-dream": "dist/index.js",
+    "openpulse-lint": "dist/lint-cli.js"
   },
   "scripts": {
     "build": "tsc",
