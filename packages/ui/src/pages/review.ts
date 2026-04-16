@@ -150,12 +150,16 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   const badge = document.createElement("span");
   badge.className = "pending-theme-badge";
   badge.textContent = update.theme;
+  const typeBadge = document.createElement("span");
+  typeBadge.className = `pending-type-badge type-${(update as any).type ?? "project"}`;
+  typeBadge.textContent = (update as any).type ?? "project";
   const date = document.createElement("span");
   date.className = "pending-date";
   date.textContent = new Date(update.createdAt).toLocaleDateString("en-GB", {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   });
   header.appendChild(badge);
+  header.appendChild(typeBadge);
   header.appendChild(date);
 
   // Proposed content label

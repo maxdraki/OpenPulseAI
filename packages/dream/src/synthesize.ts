@@ -9,6 +9,7 @@ import {
   type ThemeType,
   readTheme,
   listThemes,
+  vaultLog,
 } from "@openpulse/core";
 import { loadSchema } from "./schema.js";
 import { entryId, extractSources } from "./provenance.js";
@@ -103,8 +104,12 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       temperature: 0.1,
     });
 
-    // Roll up ^[src:] markers into the sources field
+    // Roll up ^[src:] markers and merge with existing sources
     const rolledUpSources = extractSources(proposedContent);
+    if (rolledUpSources.length === 0) {
+      await vaultLog("warn", `No provenance markers in synthesis for "${theme}" — LLM may have ignored ^[src:] instruction`);
+    }
+    const mergedSources = [...new Set([...(existing?.sources ?? []), ...rolledUpSources])];
 
     const update: PendingUpdate = {
       id: randomUUID(),
@@ -116,7 +121,9 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       status: "pending",
       batchId,
       type: pageType,
-      sources: rolledUpSources.length > 0 ? rolledUpSources : undefined,
+      sources: mergedSources.length > 0 ? mergedSources : undefined,
+      related: existing?.related,
+      created: existing?.created ?? new Date().toISOString(),
     };
 
     const filename = `${update.id}.json`;

@@ -374,6 +374,21 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
+.pending-type-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm, 4px);
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.type-project    { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.type-concept    { background: color-mix(in srgb, #8b5cf6 15%, transparent); color: #8b5cf6; }
+.type-entity     { background: color-mix(in srgb, #f59e0b 15%, transparent); color: #d97706; }
+.type-source-summary { background: color-mix(in srgb, #10b981 15%, transparent); color: #059669; }
+
 a.wiki-link {
   color: var(--accent);
   text-decoration: none;

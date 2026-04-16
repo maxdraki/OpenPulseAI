@@ -32,12 +32,19 @@ export async function handleChatWithPulse(
     const { randomUUID } = await import("node:crypto");
 
     const proposedName = fileMatch[1].trim().toLowerCase().replace(/\s+/g, "-");
-    // Last assistant message is the answer to file
-    const lastAnswer = session.messages.filter((m) => m.role === "assistant").at(-1)?.content ?? "";
-    // Strip the file-this-answer offer from the answer text
-    const cleanAnswer = lastAnswer.replace(/_This answer draws.*$/s, "").trim();
+    // Find the last assistant message that contained a file-this-answer offer — that's
+    // the answer we want to capture, not a subsequent follow-up reply.
+    const assistantMessages = session.messages.filter((m) => m.role === "assistant");
+    const sourceMessage = [...assistantMessages].reverse().find((m) => m.content.includes("_This answer draws")) ??
+      assistantMessages.at(-1);
+    const cleanAnswer = (sourceMessage?.content ?? "").replace(/_This answer draws.*$/s, "").trim();
 
-    const proposedContent = `## Definition\n\n${cleanAnswer}\n\n## Key Claims\n\n## Related Concepts\n\n## Sources\n`;
+    // Build sources list from themes consulted in this session
+    const sourcesSection = session.themesConsulted.length > 0
+      ? `\n\n## Sources\n\nDerived from: ${session.themesConsulted.map(t => `[[${t}]]`).join(", ")}`
+      : "\n\n## Sources\n";
+
+    const proposedContent = `## Definition\n\n${cleanAnswer}\n\n## Key Claims\n\n## Related Concepts\n${sourcesSection}\n`;
     const update = {
       id: randomUUID(),
       theme: proposedName,
@@ -48,6 +55,7 @@ export async function handleChatWithPulse(
       status: "pending" as const,
       type: "concept" as const,
       batchId: new Date().toISOString(),
+      related: session.themesConsulted.length > 0 ? session.themesConsulted : undefined,
     };
 
     await writeFile(

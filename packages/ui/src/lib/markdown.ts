@@ -24,7 +24,8 @@ function preProcess(md: string, knownThemes?: Set<string>): string {
   out = out.replace(/\[\[([^\]]+)\]\]/g, (_match, name) => {
     if (knownThemes && !knownThemes.has(name)) return name;
     const href = `#themes/${encodeURIComponent(name)}`;
-    return `<a href="${href}" class="wiki-link" data-theme="${name}">${name}</a>`;
+    const safeAttr = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/>/g, "&gt;");
+    return `<a href="${href}" class="wiki-link" data-theme="${safeAttr}">${name}</a>`;
   });
 
   return out;

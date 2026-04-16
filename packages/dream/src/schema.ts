@@ -74,8 +74,9 @@ export function parseSchema(raw: string): Record<ThemeType, SchemaTemplate> {
   for (const type of types) {
     const section = raw.match(new RegExp(`### ${type}\\n([\\s\\S]*?)(?=\\n### |\\n## |$)`));
     if (!section) continue;
-    const structureLine = section[1].match(/Structure: (.+)/);
-    const rulesLine = section[1].match(/Rules: (.+)/);
+    // Match "Structure:" or "Rules:" through end of value (possibly multi-line, until next key or end of section)
+    const structureLine = section[1].match(/Structure: ([\s\S]+?)(?=\nRules:|\n###|\n##|$)/);
+    const rulesLine = section[1].match(/Rules: ([\s\S]+?)(?=\nStructure:|\n###|\n##|$)/);
     if (structureLine) templates[type] = { ...templates[type], structure: structureLine[1].trim().replace(/\\n/g, "\n") };
     if (rulesLine) templates[type] = { ...templates[type], rules: rulesLine[1].trim().replace(/\\n/g, "\n") };
   }

@@ -112,6 +112,10 @@ async function loadThemes(section: HTMLElement, backlinks: Record<string, string
       name.className = "dashboard-theme-name";
       name.textContent = theme.theme;
 
+      const typeBadge = document.createElement("span");
+      typeBadge.className = `pending-type-badge type-${(theme as any).type ?? "project"}`;
+      typeBadge.textContent = (theme as any).type ?? "project";
+
       const updated = document.createElement("span");
       updated.className = "dashboard-theme-updated";
       if (theme.lastUpdated) {
@@ -122,6 +126,7 @@ async function loadThemes(section: HTMLElement, backlinks: Record<string, string
 
       headerRow.appendChild(chevron);
       headerRow.appendChild(name);
+      headerRow.appendChild(typeBadge);
       headerRow.appendChild(updated);
 
       // Content: vault data rendered via marked library (trusted)

@@ -88,7 +88,11 @@ app.get("/api/vault-health", async (_req, res) => {
     } catch { /* ingest dir may not exist */ }
   } catch { /* hot dir may not exist */ }
 
-  const warmCount = await countFiles(warmDir, ".md");
+  // Exclude system files from warm theme count
+  const warmFiles = (await readdir(warmDir).catch(() => [] as string[])).filter(
+    (f) => f.endsWith(".md") && !f.startsWith("_") && f !== "index.md" && f !== "log.md"
+  );
+  const warmCount = warmFiles.length;
   const pendingCount = await countFiles(pendingDir, ".json");
   res.json({ hotCount, warmCount, pendingCount, vaultExists });
 });
@@ -130,6 +134,11 @@ app.post("/api/approve-update", async (req, res) => {
 
     // Remove pending file
     await rm(pendingPath);
+
+    // Rebuild index.md and _backlinks.md in the background — fire and forget
+    const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
+    execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, () => {});
+
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -369,13 +378,16 @@ app.get("/api/warm-themes", async (_req, res) => {
       // Parse frontmatter
       const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
       let lastUpdated = "";
+      let type = "project";
       if (fmMatch) {
         const luMatch = fmMatch[1].match(/lastUpdated:\s*(.+)/);
         if (luMatch) lastUpdated = luMatch[1].trim();
+        const typeMatch = fmMatch[1].match(/type:\s*(.+)/);
+        if (typeMatch) type = typeMatch[1].trim();
       }
       const content = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
 
-      themes.push({ theme: themeName, content, lastUpdated });
+      themes.push({ theme: themeName, content, lastUpdated, type });
     }
 
     themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
