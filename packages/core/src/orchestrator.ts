@@ -40,10 +40,19 @@ export interface DreamPipelineState {
   collectorsCompletedToday: string[]; // skill names
 }
 
+export interface LintPipelineState {
+  running: boolean;
+  lastRun: string | null;   // ISO 8601
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: Schedule;       // default: { time: "20:00", days: ["sun"] }
+}
+
 export interface OrchestratorState {
   lastHeartbeat: string | null; // ISO 8601
   collectors: Record<string, CollectorState>;
   dreamPipeline: DreamPipelineState;
+  lintPipeline: LintPipelineState;
 }
 
 export interface OrchestratorCallbacks {
@@ -51,6 +60,8 @@ export interface OrchestratorCallbacks {
   runCollector(skillName: string): Promise<void>;
   /** Run the Dream Pipeline. Resolves when done. */
   runDreamPipeline(): Promise<void>;
+  /** Run the Lint Pipeline. Resolves when done. */
+  runLintPipeline(): Promise<void>;
   /** Return currently known skill names. */
   getSkillNames(): Promise<string[]>;
 }
@@ -123,6 +134,12 @@ export function defaultState(): OrchestratorState {
       lastResult: "never",
       collectorsCompletedToday: [],
     },
+    lintPipeline: {
+      running: false,
+      lastRun: null,
+      lastResult: "never",
+      schedule: { time: "20:00", days: ["sun"] },
+    },
   };
 }
 
@@ -134,7 +151,12 @@ function statePath(vaultRoot: string): string {
 export async function loadState(vaultRoot: string): Promise<OrchestratorState> {
   try {
     const raw = await readFile(statePath(vaultRoot), "utf-8");
-    return JSON.parse(raw) as OrchestratorState;
+    const parsed = JSON.parse(raw) as OrchestratorState;
+    // Migrate: add lintPipeline if missing from old persisted state
+    if (!parsed.lintPipeline) {
+      parsed.lintPipeline = defaultState().lintPipeline;
+    }
+    return parsed;
   } catch {
     return defaultState();
   }
@@ -212,6 +234,9 @@ export class Orchestrator {
         this.createJobsForCollector(name, collector);
       }
     }
+
+    // Schedule the lint pipeline
+    this.scheduleLintPipeline();
 
     // 60-second heartbeat
     this.heartbeatTimer = setInterval(() => {
@@ -308,6 +333,30 @@ export class Orchestrator {
 
     await this.runCollector(target);
     return `Collector ${target} triggered`;
+  }
+
+  /** Manually trigger lint (e.g. from UI). */
+  async triggerLint(): Promise<void> {
+    await this.runLint();
+  }
+
+  /** Update the lint schedule. */
+  async updateLintSchedule(schedule: Schedule): Promise<void> {
+    this.state.lintPipeline.schedule = schedule;
+    // Reschedule
+    const existing = this.jobs.get("__lint__");
+    if (existing) {
+      for (const job of existing) job.stop();
+      this.jobs.delete("__lint__");
+    }
+    this.scheduleLintPipeline();
+    await saveState(this.vaultRoot, this.state);
+    await vaultLog("info", "[orchestrator] Updated lint schedule");
+  }
+
+  /** Get a snapshot of lint pipeline state. */
+  getLintPipelineState(): LintPipelineState {
+    return { ...this.state.lintPipeline };
   }
 
   // -------------------------------------------------------------------------
@@ -533,6 +582,45 @@ export class Orchestrator {
           await vaultLog("error", `[orchestrator] checkMissedRuns error for ${name}`, String(err));
         }
       }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: lint pipeline
+  // -------------------------------------------------------------------------
+
+  private scheduleLintPipeline(): void {
+    const lp = this.state.lintPipeline;
+    const cronExpr = scheduleToCron(lp.schedule);
+    try {
+      const job = new Cron(cronExpr, {}, async () => {
+        await this.runLint();
+      });
+      this.jobs.set("__lint__", [job]);
+    } catch (err) {
+      vaultLog("error", `[orchestrator] Bad cron for lint pipeline: ${cronExpr}`, String(err)).catch(() => {});
+    }
+  }
+
+  private async runLint(): Promise<void> {
+    const lp = this.state.lintPipeline;
+    if (lp.running) return;
+    lp.running = true;
+    await saveState(this.vaultRoot, this.state);
+    try {
+      await vaultLog("info", "[orchestrator] Running lint pipeline");
+      await this.callbacks.runLintPipeline();
+      lp.lastRun = new Date().toISOString();
+      lp.lastResult = "success";
+      delete lp.lastError;
+      await vaultLog("info", "[orchestrator] Lint pipeline succeeded");
+    } catch (err) {
+      lp.lastResult = "error";
+      lp.lastError = String(err);
+      await vaultLog("error", "[orchestrator] Lint pipeline failed", String(err));
+    } finally {
+      lp.running = false;
+      await saveState(this.vaultRoot, this.state);
     }
   }
 }

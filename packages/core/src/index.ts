@@ -26,6 +26,7 @@ export {
   type Schedule,
   type CollectorState as OrchestratorCollectorState,
   type DreamPipelineState,
+  type LintPipelineState,
   type OrchestratorState,
   type OrchestratorCallbacks,
   defaultState,
