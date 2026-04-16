@@ -12,3 +12,4 @@ src-tauri/sidecars/
 config.yaml
 vault/
 certs/
+.DS_Store
