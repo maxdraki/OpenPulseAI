@@ -60,10 +60,16 @@ async function main() {
   await server.connect(transport);
 
   const httpsServer = createHttpsServer({ key, cert }, async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    // Restrict CORS to localhost origins only — prevents malicious web pages from
+    // reading/writing the vault via a browser pointed at this port.
+    // Claude Desktop connects directly (no Origin header) so is unaffected.
+    const origin = req.headers.origin ?? "";
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);

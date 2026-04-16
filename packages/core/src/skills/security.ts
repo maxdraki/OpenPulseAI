@@ -209,6 +209,9 @@ function checkPipeToShell(body: string): ThreatFinding[] {
 }
 
 export function scanSkillForThreats(body: string, isBuiltin: boolean): ThreatReport {
+  // Builtin skills ship with the package and are version-controlled — they are
+  // trusted by design. Only user-installed skills from external repos are scanned.
+  // If you fork this project and modify builtins, review them manually.
   if (isBuiltin) {
     return { clean: true, findings: [] };
   }

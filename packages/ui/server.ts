@@ -32,7 +32,14 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
 };
 
 const app = express();
-app.use(cors());
+// Restrict CORS to localhost origins — this is a local dev server with vault access.
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow same-origin requests (no Origin header) and any localhost port.
+    if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) cb(null, true);
+    else cb(new Error("Not allowed by CORS"));
+  },
+}));
 app.use(express.json());
 
 // --- Helpers ---

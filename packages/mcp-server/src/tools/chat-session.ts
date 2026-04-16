@@ -20,7 +20,11 @@ export async function saveSession(vault: Vault, session: ChatSession): Promise<v
   await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function loadSession(vault: Vault, sessionId: string): Promise<ChatSession | null> {
+  // Validate format before using in a file path — session IDs are always UUIDs.
+  if (!UUID_RE.test(sessionId)) return null;
   try {
     const path = join(vault.sessionsDir, `${sessionId}.json`);
     const raw = await readFile(path, "utf-8");
