@@ -17,18 +17,18 @@ describe("classifyEntries", () => {
 
     const provider = mockProvider(
       JSON.stringify([
-        { index: 0, themes: ["hiring"] },
-        { index: 1, themes: ["project-auth"] },
+        { index: 0, themes: ["hiring"], type: "project" },
+        { index: 1, themes: ["project-auth"], type: "project" },
       ])
     );
 
-    const results = await classifyEntries(entries, themes, provider, "test-model");
+    const { classified } = await classifyEntries(entries, themes, provider, "test-model");
 
-    expect(results).toHaveLength(3);
-    expect(results[0].themes).toEqual(["project-auth"]);
-    expect(results[0].confidence).toBe(1.0);
-    expect(results[1].themes).toEqual(["hiring"]);
-    expect(results[2].themes).toEqual(["project-auth"]);
+    expect(classified).toHaveLength(3);
+    expect(classified[0].themes).toEqual(["project-auth"]);
+    expect(classified[0].confidence).toBe(1.0);
+    expect(classified[1].themes).toEqual(["hiring"]);
+    expect(classified[2].themes).toEqual(["project-auth"]);
   });
 
   it("skips LLM when all entries are pre-tagged", async () => {
@@ -37,11 +37,38 @@ describe("classifyEntries", () => {
     ];
     const provider = mockProvider("");
 
-    const results = await classifyEntries(entries, ["docs"], provider, "test-model");
+    const { classified } = await classifyEntries(entries, ["docs"], provider, "test-model");
 
-    expect(results[0].themes).toEqual(["docs"]);
-    expect(results[0].confidence).toBe(1.0);
+    expect(classified[0].themes).toEqual(["docs"]);
+    expect(classified[0].confidence).toBe(1.0);
     expect(provider.complete).not.toHaveBeenCalled();
+  });
+
+  it("returns proposedTypes for new themes", async () => {
+    const entries: ActivityEntry[] = [
+      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev" },
+    ];
+    const provider = mockProvider(
+      JSON.stringify([{ index: 0, themes: ["hiring"], type: "concept" }])
+    );
+
+    const { classified, proposedTypes } = await classifyEntries(entries, [], provider, "test-model");
+
+    expect(classified).toHaveLength(1);
+    expect(proposedTypes["hiring"]).toBe("concept");
+  });
+
+  it("does not include existing themes in proposedTypes", async () => {
+    const entries: ActivityEntry[] = [
+      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev" },
+    ];
+    const provider = mockProvider(
+      JSON.stringify([{ index: 0, themes: ["hiring"], type: "project" }])
+    );
+
+    const { proposedTypes } = await classifyEntries(entries, ["hiring"], provider, "test-model");
+
+    expect(proposedTypes["hiring"]).toBeUndefined();
   });
 
   describe("preFilter", () => {
@@ -55,13 +82,13 @@ describe("classifyEntries", () => {
       ];
       const provider = mockProvider("");
 
-      const results = await classifyEntries(entries, ["openpulse"], provider, "test-model");
+      const { classified } = await classifyEntries(entries, ["openpulse"], provider, "test-model");
 
       // Entry should survive (has real work lines)
-      expect(results).toHaveLength(1);
-      expect(results[0].entry.log).not.toContain("No recent activity in docs folder");
-      expect(results[0].entry.log).toContain("Committed 3 new features");
-      expect(results[0].entry.log).toContain("Updated README");
+      expect(classified).toHaveLength(1);
+      expect(classified[0].entry.log).not.toContain("No recent activity in docs folder");
+      expect(classified[0].entry.log).toContain("Committed 3 new features");
+      expect(classified[0].entry.log).toContain("Updated README");
     });
 
     it("removes entries that are entirely inactive text", async () => {
@@ -73,10 +100,10 @@ describe("classifyEntries", () => {
       ];
       const provider = mockProvider("[]");
 
-      const results = await classifyEntries(entries, [], provider, "test-model");
+      const { classified } = await classifyEntries(entries, [], provider, "test-model");
 
       // Entirely inactive entry should be filtered out
-      expect(results).toHaveLength(0);
+      expect(classified).toHaveLength(0);
     });
 
     it("passes through clean GitHub activity content", async () => {
@@ -89,11 +116,25 @@ describe("classifyEntries", () => {
       ];
       const provider = mockProvider("");
 
-      const results = await classifyEntries(entries, ["my-project"], provider, "test-model");
+      const { classified } = await classifyEntries(entries, ["my-project"], provider, "test-model");
 
-      expect(results).toHaveLength(1);
-      expect(results[0].entry.log).toContain("Pushed 2 commits to main");
-      expect(results[0].entry.log).toContain("Opened PR #42");
+      expect(classified).toHaveLength(1);
+      expect(classified[0].entry.log).toContain("Pushed 2 commits to main");
+      expect(classified[0].entry.log).toContain("Opened PR #42");
+    });
+
+    it("removes entries with only orphaned headings and no content", async () => {
+      const entries: ActivityEntry[] = [
+        {
+          timestamp: "2026-04-03T10:00:00Z",
+          log: "## Section A\n## Section B\n## Section C",
+        },
+      ];
+      const provider = mockProvider("[]");
+
+      const { classified } = await classifyEntries(entries, [], provider, "test-model");
+
+      expect(classified).toHaveLength(0);
     });
   });
 
@@ -107,12 +148,12 @@ describe("classifyEntries", () => {
       ];
       const provider = mockProvider("[]");
 
-      const results = await classifyEntries(entries, [], provider, "test-model");
+      const { classified } = await classifyEntries(entries, [], provider, "test-model");
 
-      expect(results).toHaveLength(1);
-      expect(Array.isArray(results[0].themes)).toBe(true);
-      expect(results[0].themes.length).toBeGreaterThanOrEqual(1);
-      expect(results[0].themes[0]).toBe("my-project");
+      expect(classified).toHaveLength(1);
+      expect(Array.isArray(classified[0].themes)).toBe(true);
+      expect(classified[0].themes.length).toBeGreaterThanOrEqual(1);
+      expect(classified[0].themes[0]).toBe("my-project");
     });
 
     it("finds secondary themes from existing theme names mentioned in text", async () => {
@@ -125,12 +166,12 @@ describe("classifyEntries", () => {
       const existingThemes = ["hiring", "docs", "frontend"];
       const provider = mockProvider("[]");
 
-      const results = await classifyEntries(entries, existingThemes, provider, "test-model");
+      const { classified } = await classifyEntries(entries, existingThemes, provider, "test-model");
 
-      expect(results).toHaveLength(1);
+      expect(classified).toHaveLength(1);
       // Primary tag from path + secondary from "hiring" mention
-      expect(results[0].themes).toContain("my-project");
-      expect(results[0].themes).toContain("hiring");
+      expect(classified[0].themes).toContain("my-project");
+      expect(classified[0].themes).toContain("hiring");
     });
 
     it("caps multi-tag at 3 themes per entry", async () => {
@@ -144,10 +185,25 @@ describe("classifyEntries", () => {
       const existingThemes = ["frontend", "hiring", "docs", "devops"];
       const provider = mockProvider("[]");
 
-      const results = await classifyEntries(entries, existingThemes, provider, "test-model");
+      const { classified } = await classifyEntries(entries, existingThemes, provider, "test-model");
 
-      expect(results).toHaveLength(1);
-      expect(results[0].themes.length).toBeLessThanOrEqual(3);
+      expect(classified).toHaveLength(1);
+      expect(classified[0].themes.length).toBeLessThanOrEqual(3);
+    });
+
+    it("classifies ### owner/repo heading format", async () => {
+      const entries: ActivityEntry[] = [
+        {
+          timestamp: "2026-04-03T10:00:00Z",
+          log: "### myorg/my-service\nPushed 3 commits to main branch",
+        },
+      ];
+      const provider = mockProvider("[]");
+
+      const { classified } = await classifyEntries(entries, [], provider, "test-model");
+
+      expect(classified).toHaveLength(1);
+      expect(classified[0].themes).toContain("my-service");
     });
   });
 });

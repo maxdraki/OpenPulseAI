@@ -1,4 +1,4 @@
-import type { ActivityEntry, ClassificationResult, LlmProvider } from "@openpulse/core";
+import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
 
 /**
  * Common English words that should never become theme names.
@@ -14,12 +14,52 @@ const THEME_STOPWORDS = new Set([
   "in", "on", "at", "to", "by", "of", "up", "as", "via", "per", "vs",
   // Common short words that are never project names
   "is", "it", "be", "do", "go", "no", "if", "we", "my",
+  // State/status words (frequently misclassified)
+  "closed", "open", "merged", "done", "new", "all", "recent", "latest",
+  "current", "active", "updated", "other", "main", "last", "next", "old",
+  "none", "true", "false",
 ]);
 
 /** A valid theme name is at least 3 chars and not a common stopword. */
 function isValidThemeName(name: string): boolean {
   const lower = name.toLowerCase().trim();
   return lower.length >= 3 && !THEME_STOPWORDS.has(lower);
+}
+
+const ABSENCE_LINE =
+  /no\s+(recent\s+|file\s+|pr\s+|commit\s+|modification\s+)?activity\b|no\s+commits?\b|no\s+pr\s+activity\b|no\s+(file\s+)?modifications?\b|no\s+repos?\s+configured\b|no\s+.{1,50}\s+since\s+last\s+run\b|no\s+.{1,30}\s+detected\b|no\s+changes?\b|inactive\b|nothing\s+(happened|to\s+report)\b/i;
+
+function isSubstantive(log: string): boolean {
+  return log.split("\n").some((line) => {
+    const t = line.trim();
+    if (!t || t.length < 5) return false;
+    if (t.startsWith("#")) return false;
+    if (/^[-*]\s*\*\*[^*]+\*\*:\s*$/.test(t)) return false;
+    if (/^[-*]\s*$/.test(t)) return false;
+    return true;
+  });
+}
+
+function stripOrphanedHeadings(log: string): string {
+  const lines = log.split("\n");
+  const result: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].match(/^#{1,4}\s+/)) {
+      result.push(lines[i]);
+      continue;
+    }
+    let hasContent = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      const t = lines[j].trim();
+      if (t.match(/^#{1,4}\s+/)) break;
+      if (t.length > 4 && !t.match(/^[-*]\s*\*\*[^*]+\*\*:\s*$/) && !t.match(/^[-*]\s*$/)) {
+        hasContent = true;
+        break;
+      }
+    }
+    if (hasContent) result.push(lines[i]);
+  }
+  return result.join("\n");
 }
 
 /**
@@ -29,24 +69,22 @@ function isValidThemeName(name: string): boolean {
 function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
   return entries
     .map((entry) => {
-      // Strip lines/paragraphs about inactivity
       const lines = entry.log.split("\n");
       const filtered = lines.filter((line) => {
         const lower = line.toLowerCase();
-        // Skip lines that only talk about inactivity
-        if (/no (recent |file )?activity|inactive|no changes|no modifications|no .* detected/i.test(lower) &&
+        if (ABSENCE_LINE.test(lower) &&
             !/(modified|changed|added|created|updated|committed|pushed|merged)/i.test(lower)) {
           return false;
         }
         return true;
       });
 
-      const cleanedLog = filtered.join("\n").trim();
-      if (!cleanedLog) return null;
+      const withoutOrphans = stripOrphanedHeadings(filtered.join("\n")).trim();
+      if (!withoutOrphans || !isSubstantive(withoutOrphans)) return null;
 
-      return { ...entry, log: cleanedLog };
+      return { ...entry, log: withoutOrphans };
     })
-    .filter((e): e is ActivityEntry => e !== null && e.log.length > 10);
+    .filter((e): e is ActivityEntry => e !== null);
 }
 
 /**
@@ -64,6 +102,15 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
   if (pathMatch) {
     const name = pathMatch[1].toLowerCase();
     if (isValidThemeName(name)) tags.push(name);
+  }
+
+  // 2a. "### owner/repo" heading format (github-activity multi-repo output)
+  if (tags.length === 0) {
+    const headingRepoMatch = log.match(/^###\s+[a-zA-Z0-9_.-]+\/([a-zA-Z0-9_.-]+)\s*$/m);
+    if (headingRepoMatch) {
+      const name = headingRepoMatch[1].toLowerCase();
+      if (isValidThemeName(name)) tags.push(name);
+    }
   }
 
   // 2. GitHub repo references: owner/repo — match any owner.
@@ -109,6 +156,23 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
   return tags.slice(0, 3);
 }
 
+/** Return value of classifyEntries — includes proposed page types for new themes. */
+export interface ClassifyResult {
+  classified: ClassificationResult[];
+  proposedTypes: Record<string, ThemeType>; // theme name → proposed type for new themes
+}
+
+/**
+ * Infer a page type for a theme based on the entry that introduced it.
+ * Only used for themes that don't already exist in the vault.
+ */
+function inferType(entry: ActivityEntry): ThemeType {
+  // Ingested documents become source-summary pages
+  if (entry.theme === "ingested") return "source-summary";
+  // Default: project
+  return "project";
+}
+
 /**
  * Classify entries into themes.
  *
@@ -123,24 +187,39 @@ export async function classifyEntries(
   existingThemes: string[],
   provider: LlmProvider,
   model: string
-): Promise<ClassificationResult[]> {
+): Promise<ClassifyResult> {
   // Step 1: Pre-filter noise
   const cleaned = preFilter(entries);
 
   const results: ClassificationResult[] = [];
+  const proposedTypes: Record<string, ThemeType> = {};
+  const existingThemeSet = new Set(existingThemes);
   const needsLlm: ActivityEntry[] = [];
 
   for (const entry of cleaned) {
     // Step 2: Already tagged
     if (entry.theme && entry.theme !== "auto" && entry.theme !== "ingested") {
       results.push({ entry, themes: [entry.theme], confidence: 1.0 });
+      if (!existingThemeSet.has(entry.theme)) {
+        proposedTypes[entry.theme] = inferType(entry);
+      }
       continue;
+    }
+
+    // Handle ingested entries
+    if (entry.theme === "ingested") {
+      if (!existingThemeSet.has("ingested")) {
+        proposedTypes["ingested"] = "source-summary";
+      }
     }
 
     // Step 3: Deterministic classification
     const tags = deterministicClassify(entry, existingThemes);
     if (tags) {
       results.push({ entry, themes: tags, confidence: 0.95 });
+      for (const theme of tags) {
+        if (!existingThemeSet.has(theme)) proposedTypes[theme] = inferType(entry);
+      }
       continue;
     }
 
@@ -163,14 +242,16 @@ Rules:
 - Prefer 1 theme. Only use 2 if the entry genuinely covers two distinct projects or topics.
 - Use specific project or product names as themes (e.g. "vdp", "data-pipeline", "openpulse")
 - Do NOT use collector or tool names as themes (e.g. avoid "jira", "github", "slack" — use the project name instead)
+- Do NOT use state or status words as themes (avoid "closed", "open", "merged", "done", "new", "updated", "active", "latest")
 - Reuse existing themes when relevant rather than creating new ones
-- Never use common English words (e.g. "or", "and", "the", "in", "new", "all")
+- Never use common English words (e.g. "or", "and", "the", "in")
 - Theme names must be at least 3 characters and meaningful on their own as a wiki page title
+- For each theme, also provide a type: "project" (default), "concept", "entity", or "source-summary"
 
 Entries:
 ${entriesText}
 
-Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"]}]`,
+Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "project"}]`,
         temperature: 0,
       });
 
@@ -180,14 +261,23 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"]}]`,
         jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
       }
 
-      const parsed = JSON.parse(jsonText) as Array<{ index: number; themes: string[] }>;
+      const parsed = JSON.parse(jsonText) as Array<{ index: number; themes: string[]; type?: string }>;
       const returnedIndexes = new Set<number>();
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
           const validThemes = p.themes.filter(isValidThemeName).slice(0, 3);
           const themes = validThemes.length > 0 ? validThemes : [needsLlm[p.index].source ?? "uncategorized"];
+          const inferredType = (["project", "concept", "entity", "source-summary"].includes(p.type ?? ""))
+            ? (p.type as ThemeType)
+            : "project";
           results.push({ entry: needsLlm[p.index], themes, confidence: 0.7 });
           returnedIndexes.add(p.index);
+          // Record proposed types for new themes
+          for (const theme of themes) {
+            if (!existingThemeSet.has(theme)) {
+              proposedTypes[theme] = inferredType;
+            }
+          }
         }
       }
 
@@ -209,5 +299,5 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"]}]`,
     }
   }
 
-  return results;
+  return { classified: results, proposedTypes };
 }

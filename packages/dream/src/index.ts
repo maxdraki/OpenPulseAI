@@ -31,12 +31,13 @@ async function main() {
   const themes = await listThemes(vault);
   const allThemes = [...new Set([...config.themes, ...themes])];
 
-  const classified = await classifyEntries(entries, allThemes, provider, model);
+  const { classified, proposedTypes } = await classifyEntries(entries, allThemes, provider, model);
   console.error(`[dream] Classified ${classified.length} entries.`);
 
   let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
   try {
-    pending = await synthesizeToPending(vault, classified, provider, model);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    pending = await (synthesizeToPending as any)(vault, classified, provider, model, proposedTypes);
   } catch (err) {
     console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
     await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
