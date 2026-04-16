@@ -342,6 +342,7 @@ app.get("/api/warm-themes", async (_req, res) => {
 
     for (const entry of files) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      if (entry.name.startsWith("_") || entry.name === "index.md" || entry.name === "log.md") continue;
       const raw = await readFile(join(warmDir, entry.name), "utf-8");
       const themeName = entry.name.replace(/\.md$/, "");
 
