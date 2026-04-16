@@ -169,6 +169,26 @@ app.post("/api/trigger-lint", async (_req, res) => {
   }
 });
 
+app.get("/api/backlinks", async (_req, res) => {
+  const backlinksPath = join(warmDir, "_backlinks.md");
+  try {
+    const raw = await readFile(backlinksPath, "utf-8");
+    // Parse "## [[theme]]\n- [[source]]\n..." into Record<string, string[]>
+    const result: Record<string, string[]> = {};
+    const sections = raw.split(/\n## /);
+    for (const section of sections.slice(1)) {
+      const themeMatch = section.match(/^\[\[([^\]]+)\]\]/);
+      if (!themeMatch) continue;
+      const theme = themeMatch[1];
+      const inbound = [...section.matchAll(/^- \[\[([^\]]+)\]\]/gm)].map(m => m[1]);
+      result[theme] = inbound;
+    }
+    res.json(result);
+  } catch {
+    res.json({});
+  }
+});
+
 app.get("/api/lint-report", async (_req, res) => {
   const lintPath = join(VAULT_ROOT, "vault", "warm", "_lint.md");
   try {

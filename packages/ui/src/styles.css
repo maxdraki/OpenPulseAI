@@ -374,6 +374,15 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
+.dashboard-theme-backlinks {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .stat-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

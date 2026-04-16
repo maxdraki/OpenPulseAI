@@ -1,6 +1,6 @@
 // Dashboard — stat cards + inline themes. All innerHTML usage is either static SVG
 // icons or vault content rendered through the marked library (trusted, HTML-escaped).
-import { getVaultHealth, getWarmThemes } from "../lib/tauri-bridge.js";
+import { getVaultHealth, getWarmThemes, getBacklinks } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
@@ -29,7 +29,7 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   container.appendChild(statsGrid);
   container.appendChild(themesSection);
 
-  await Promise.all([loadStats(statsGrid), loadThemes(themesSection)]);
+  await Promise.all([loadStats(statsGrid), loadThemes(themesSection, await getBacklinks())]);
 }
 
 // Static SVG strings for stat card icons (not user-supplied)
@@ -75,7 +75,7 @@ function buildStatCard(type: string, value: string, label: string, navTarget: st
   return card;
 }
 
-async function loadThemes(section: HTMLElement): Promise<void> {
+async function loadThemes(section: HTMLElement, backlinks: Record<string, string[]>): Promise<void> {
   section.textContent = "";
 
   const sectionHeader = document.createElement("h3");
@@ -127,6 +127,14 @@ async function loadThemes(section: HTMLElement): Promise<void> {
       content.className = "dashboard-theme-content md-content";
       content.style.display = "none";
       content.innerHTML = renderMarkdown(theme.content); // safe: vault content via marked
+
+      const inbound = backlinks[theme.theme] ?? [];
+      if (inbound.length > 0) {
+        const bl = document.createElement("div");
+        bl.className = "dashboard-theme-backlinks";
+        bl.textContent = `Linked from: ${inbound.map(t => `[[${t}]]`).join(", ")}`;
+        content.appendChild(bl);
+      }
 
       headerRow.addEventListener("click", () => {
         const open = content.style.display !== "none";

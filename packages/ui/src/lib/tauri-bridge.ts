@@ -175,6 +175,11 @@ export async function getWarmThemes(): Promise<WarmTheme[]> {
   return apiGet("/warm-themes");
 }
 
+export async function getBacklinks(): Promise<Record<string, string[]>> {
+  if (isTauri) return {};
+  return apiGet("/backlinks");
+}
+
 export interface SkillData {
   name: string;
   description: string;
