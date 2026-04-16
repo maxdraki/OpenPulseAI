@@ -142,6 +142,28 @@ async function loadThemes(section: HTMLElement, backlinks: Record<string, string
         chevron.textContent = open ? "\u25B8" : "\u25BE";
       });
 
+      // Wiki-link clicks: scroll to and expand the target theme card
+      content.addEventListener("click", (e) => {
+        const target = e.target as HTMLElement;
+        if (!target.classList.contains("wiki-link")) return;
+        e.preventDefault();
+        const targetTheme = target.dataset.theme;
+        const allCards = section.querySelectorAll<HTMLElement>(".dashboard-theme-card");
+        for (const c of allCards) {
+          const cardName = c.querySelector<HTMLElement>(".dashboard-theme-name")?.textContent;
+          if (cardName === targetTheme) {
+            c.scrollIntoView({ behavior: "smooth", block: "start" });
+            const cardContent = c.querySelector<HTMLElement>(".dashboard-theme-content");
+            const cardChevron = c.querySelector<HTMLElement>(".dashboard-theme-chevron");
+            if (cardContent && cardContent.style.display === "none") {
+              cardContent.style.display = "";
+              if (cardChevron) cardChevron.textContent = "\u25BE";
+            }
+            break;
+          }
+        }
+      });
+
       card.appendChild(headerRow);
       card.appendChild(content);
       section.appendChild(card);
