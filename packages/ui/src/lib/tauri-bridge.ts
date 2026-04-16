@@ -213,6 +213,7 @@ export async function fetchConfluenceSpaces(
   email: string,
   token: string
 ): Promise<Array<{ key: string; name: string }>> {
+  if (isTauri) throw new Error("Confluence space discovery is not yet available in the desktop app");
   return apiPost("/confluence-activity/spaces", { domain, email, token });
 }
 
@@ -223,6 +224,7 @@ export interface GithubRepoInfo {
 }
 
 export async function checkGithubRepo(url: string): Promise<GithubRepoInfo> {
+  if (isTauri) throw new Error("GitHub repo check is not yet available in the desktop app");
   return apiPost("/github-activity/check-repo", { url });
 }
 

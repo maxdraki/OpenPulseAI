@@ -36,7 +36,7 @@ const app = express();
 app.use(cors({
   origin: (origin, cb) => {
     // Allow same-origin requests (no Origin header) and any localhost port.
-    if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) cb(null, true);
+    if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) cb(null, true);
     else cb(new Error("Not allowed by CORS"));
   },
 }));

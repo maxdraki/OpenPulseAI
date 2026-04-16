@@ -29,8 +29,9 @@ export async function saveIngestedDocument(
   // Strip path separators and leading dots to prevent directory traversal.
   // Then verify the resolved path is still inside the ingest directory.
   const safeFilename = filename.replace(/[/\\]/g, "_").replace(/^\.+/, "_").slice(0, 255);
+  if (!safeFilename) throw new Error("Invalid filename: empty after sanitization");
   const filePath = join(vault.ingestDir, safeFilename);
-  if (!filePath.startsWith(vault.ingestDir + "/") && filePath !== vault.ingestDir) {
+  if (!filePath.startsWith(vault.ingestDir + "/")) {
     throw new Error("Invalid filename: path traversal attempt blocked");
   }
   await writeFile(filePath, content, "utf-8");
