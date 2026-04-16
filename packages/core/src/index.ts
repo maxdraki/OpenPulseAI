@@ -5,6 +5,7 @@ export type {
   ClassificationResult,
   SkillConfigField,
   ThemeDocument,
+  ThemeType,
   PendingUpdate,
   CollectorState,
   SkillDefinition,

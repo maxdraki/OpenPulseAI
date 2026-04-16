@@ -4,7 +4,11 @@ export interface ActivityEntry {
   log: string;
   theme?: string;
   source?: string; // which agent reported it
+  id?: string; // derived: "${timestamp.slice(0,10)}-${source}" — used in ^[src:...] markers
 }
+
+/** Page type drives which synthesis template is used */
+export type ThemeType = "project" | "concept" | "entity" | "source-summary";
 
 /** LLM provider identifiers */
 export type LlmProviderName = "anthropic" | "openai" | "gemini" | "mistral" | "ollama";
@@ -34,6 +38,10 @@ export interface ThemeDocument {
   path: string;
   content: string;
   lastUpdated: string; // ISO 8601
+  type?: ThemeType;    // defaults to "project" if absent
+  sources?: string[];  // entry IDs rolled up from ^[src:] markers
+  related?: string[];  // related theme names
+  created?: string;    // ISO 8601 — set on first synthesis
 }
 
 /** A pending warm update awaiting user approval */
@@ -46,6 +54,8 @@ export interface PendingUpdate {
   createdAt: string; // ISO 8601
   status: "pending" | "approved" | "rejected" | "edited";
   batchId?: string; // groups updates from same dream run
+  type?: ThemeType;              // for new themes — drives template selection
+  lintFix?: "stubs" | "orphans"; // marks lint-fix batches
 }
 
 /** Collector runtime state per source */

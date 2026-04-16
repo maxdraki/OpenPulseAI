@@ -1,24 +1,32 @@
 import { readFile, writeFile, readdir } from "node:fs/promises";
 import type { Vault } from "./vault.js";
-import type { ThemeDocument } from "./types.js";
+import type { ThemeDocument, ThemeType } from "./types.js";
+
+const VALID_THEME_TYPES = new Set<string>(["project", "concept", "entity", "source-summary"]);
 
 export async function writeTheme(
   vault: Vault,
   theme: string,
-  content: string
+  content: string,
+  meta?: {
+    type?: ThemeType;
+    sources?: string[];
+    related?: string[];
+    created?: string;
+  }
 ): Promise<void> {
   const now = new Date().toISOString();
-  const md = [
+  const fmLines = [
     "---",
     `theme: ${theme}`,
     `lastUpdated: ${now}`,
-    "---",
-    "",
-    content,
-    "",
-  ].join("\n");
-
-  await writeFile(vault.themeFilePath(theme), md, "utf-8");
+  ];
+  if (meta?.type) fmLines.push(`type: ${meta.type}`);
+  if (meta?.created) fmLines.push(`created: ${meta.created}`);
+  if (meta?.sources?.length) fmLines.push(`sources: [${meta.sources.join(", ")}]`);
+  if (meta?.related?.length) fmLines.push(`related: [${meta.related.join(", ")}]`);
+  fmLines.push("---", "", content, "");
+  await writeFile(vault.themeFilePath(theme), fmLines.join("\n"), "utf-8");
 }
 
 export async function readTheme(
@@ -53,13 +61,26 @@ function parseThemeFile(
 ): ThemeDocument {
   const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
   let lastUpdated = new Date().toISOString();
+  let type: ThemeType | undefined;
+  let sources: string[] | undefined;
+  let related: string[] | undefined;
+  let created: string | undefined;
 
   if (fmMatch) {
-    const luMatch = fmMatch[1].match(/lastUpdated:\s*(.+)/);
-    if (luMatch) lastUpdated = luMatch[1].trim();
+    const fm = fmMatch[1];
+    const lu = fm.match(/lastUpdated:\s*(.+)/);
+    if (lu) lastUpdated = lu[1].trim();
+    const t = fm.match(/type:\s*(.+)/);
+    const tVal = t?.[1].trim();
+    if (tVal && VALID_THEME_TYPES.has(tVal)) type = tVal as ThemeType;
+    const c = fm.match(/created:\s*(.+)/);
+    if (c) created = c[1].trim();
+    const src = fm.match(/sources:\s*\[([^\]]*)\]/);
+    if (src) sources = src[1].split(",").map(s => s.trim()).filter(Boolean);
+    const rel = fm.match(/related:\s*\[([^\]]*)\]/);
+    if (rel) related = rel[1].split(",").map(s => s.trim()).filter(Boolean);
   }
 
   const content = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
-
-  return { theme, path, content, lastUpdated };
+  return { theme, path, content, lastUpdated, type, sources, related, created };
 }
