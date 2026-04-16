@@ -191,3 +191,92 @@ describe("runSkill", () => {
     expect(state.entriesCollected).toBe(0);
   });
 });
+
+describe("runSkill since injection", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-since-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("uses lastRunAt as since_iso when prior state exists", async () => {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const stateDir = join(tempDir, "vault", "collector-state");
+    await mkdir(stateDir, { recursive: true });
+    const lastRunAt = "2026-01-01T10:00:00.000Z";
+    await writeFile(
+      join(stateDir, "test-skill.json"),
+      JSON.stringify({ skillName: "test-skill", lastRunAt, lastStatus: "success", entriesCollected: 1 }),
+      "utf-8"
+    );
+    const skill = makeSkill(
+      "1. Run `echo since={{since_iso}}` to show the since date",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = mockProvider("Summary.");
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    expect(prompt).toContain("since=2026-01-01T10:00:00.000Z");
+  });
+
+  it("falls back to lookback when no prior state exists", async () => {
+    const skill = makeSkill(
+      "1. Run `echo since={{since_date}}` to show the since date",
+      { location: "/fake/builtin-skills/test/SKILL.md", lookback: "24h" }
+    );
+    const provider = mockProvider("Summary.");
+    const before = new Date();
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const today = before.toISOString().slice(0, 10);
+    const yesterday = new Date(before.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const sinceMatch = prompt.match(/since=(\d{4}-\d{2}-\d{2})/);
+    expect(sinceMatch).toBeTruthy();
+    expect([today, yesterday]).toContain(sinceMatch![1]);
+  });
+
+  it("since_days is at least 1 even when lastRunAt is recent", async () => {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const stateDir = join(tempDir, "vault", "collector-state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, "test-skill.json"),
+      JSON.stringify({ skillName: "test-skill", lastRunAt: new Date().toISOString(), lastStatus: "success", entriesCollected: 1 }),
+      "utf-8"
+    );
+    const skill = makeSkill(
+      "1. Run `echo days={{since_days}}` to show days",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = mockProvider("Summary.");
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const daysMatch = prompt.match(/days=(\d+)/);
+    expect(daysMatch).toBeTruthy();
+    expect(parseInt(daysMatch![1])).toBeGreaterThanOrEqual(1);
+  });
+
+  it("since_unix is a plausible numeric timestamp", async () => {
+    const skill = makeSkill(
+      "1. Run `echo ts={{since_unix}}` to show unix timestamp",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = mockProvider("Summary.");
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const tsMatch = prompt.match(/ts=(\d+)/);
+    expect(tsMatch).toBeTruthy();
+    expect(parseInt(tsMatch![1])).toBeGreaterThan(1_000_000_000);
+  });
+});
