@@ -24,6 +24,49 @@ export async function handleChatWithPulse(
   let session = input.sessionId ? await loadSession(vault, input.sessionId) : null;
   if (!session) session = createNewSession();
 
+  // Handle "file: <page-name>" replies — create a concept page pending update
+  const fileMatch = input.message.match(/^file:\s*(.+)$/i);
+  if (fileMatch && session) {
+    const { writeFile } = await import("node:fs/promises");
+    const { join: pathJoin } = await import("node:path");
+    const { randomUUID } = await import("node:crypto");
+
+    const proposedName = fileMatch[1].trim().toLowerCase().replace(/\s+/g, "-");
+    // Last assistant message is the answer to file
+    const lastAnswer = session.messages.filter((m) => m.role === "assistant").at(-1)?.content ?? "";
+    // Strip the file-this-answer offer from the answer text
+    const cleanAnswer = lastAnswer.replace(/_This answer draws.*$/s, "").trim();
+
+    const proposedContent = `## Definition\n\n${cleanAnswer}\n\n## Key Claims\n\n## Related Concepts\n\n## Sources\n`;
+    const update = {
+      id: randomUUID(),
+      theme: proposedName,
+      proposedContent,
+      previousContent: null as null,
+      entries: [] as [],
+      createdAt: new Date().toISOString(),
+      status: "pending" as const,
+      type: "concept" as const,
+      batchId: new Date().toISOString(),
+    };
+
+    await writeFile(
+      pathJoin(vault.pendingDir, `${update.id}.json`),
+      JSON.stringify(update, null, 2),
+      "utf-8"
+    );
+
+    const confirmText = `Created pending concept page "[[${proposedName}]]". Review it in the Control Center.`;
+    session.messages.push({ role: "user", content: input.message });
+    session.messages.push({ role: "assistant", content: confirmText });
+    await saveSession(vault, session);
+
+    return {
+      content: [{ type: "text" as const, text: `${confirmText}\n\n_[session: ${session.id}]_` }],
+      sessionId: session.id,
+    };
+  }
+
   // Find relevant warm themes
   let allThemes: ThemeDocument[] | undefined;
   try {
@@ -86,11 +129,19 @@ ${context}`;
 
   const response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
 
-  session.messages.push({ role: "assistant", content: response });
+  // Count themes consulted in this turn
+  const thisCallThemes = allThemes?.map((t) => t.theme) ?? [];
+  const fileOffer = thisCallThemes.length >= 3
+    ? `\n\n_This answer draws from ${thisCallThemes.length} theme${thisCallThemes.length === 1 ? "" : "s"} (${thisCallThemes.slice(0, 3).map((n) => `[[${n}]]`).join(", ")}${thisCallThemes.length > 3 ? "…" : ""}). File it as a new concept page? Reply with \`file: <page-name>\` to create a pending concept page._`
+    : "";
+
+  const fullResponse = response + fileOffer;
+
+  session.messages.push({ role: "assistant", content: fullResponse });
   await saveSession(vault, session);
 
   return {
-    content: [{ type: "text" as const, text: `${response}\n\n_[session: ${session.id}]_` }],
+    content: [{ type: "text" as const, text: `${fullResponse}\n\n_[session: ${session.id}]_` }],
     sessionId: session.id,
   };
 }
