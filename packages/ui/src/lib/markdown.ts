@@ -17,15 +17,16 @@ marked.setOptions({
  * - Strip ^[src:...] provenance markers (they're metadata, not display content)
  */
 function preProcess(md: string, knownThemes?: Set<string>): string {
-  // Strip provenance markers ^[src:...] and ^[inferred] etc.
-  let out = md.replace(/\^\[src:[^\]]+\]/g, "").replace(/\^\[inferred\]/g, "").replace(/\^\[ambiguous\]/g, "");
+  // Strip provenance markers: ^[src:...], ^[inferred], ^[ambiguous]
+  let out = md.replace(/\^\[(?:src:[^\]]+|inferred|ambiguous)\]/g, "");
 
   // Convert [[theme-name]] to a link only if the theme exists, otherwise plain text
   out = out.replace(/\[\[([^\]]+)\]\]/g, (_match, name) => {
     if (knownThemes && !knownThemes.has(name)) return name;
     const href = `#themes/${encodeURIComponent(name)}`;
-    const safeAttr = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/>/g, "&gt;");
-    return `<a href="${href}" class="wiki-link" data-theme="${safeAttr}">${name}</a>`;
+    const safeHtml = name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const safeAttr = safeHtml.replace(/"/g, "&quot;");
+    return `<a href="${href}" class="wiki-link" data-theme="${safeAttr}">${safeHtml}</a>`;
   });
 
   return out;

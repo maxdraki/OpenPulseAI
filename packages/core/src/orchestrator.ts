@@ -156,6 +156,9 @@ export async function loadState(vaultRoot: string): Promise<OrchestratorState> {
     if (!parsed.lintPipeline) {
       parsed.lintPipeline = defaultState().lintPipeline;
     }
+    // Reset any stuck running flags — can happen if the server crashed mid-run
+    if (parsed.lintPipeline.running) parsed.lintPipeline.running = false;
+    if (parsed.dreamPipeline.running) parsed.dreamPipeline.running = false;
     return parsed;
   } catch {
     return defaultState();

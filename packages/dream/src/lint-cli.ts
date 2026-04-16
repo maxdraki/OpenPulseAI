@@ -7,6 +7,7 @@
  *   openpulse-lint --fix=stubs
  */
 
+import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -118,10 +119,14 @@ async function writeLintReport(
 // ---------------------------------------------------------------------------
 async function createStubPendingUpdates(vault: Vault, stubs: SemanticIssue[]): Promise<void> {
   if (stubs.length === 0) return;
-  const { randomUUID } = await import("node:crypto");
   const batchId = new Date().toISOString();
   for (const stub of stubs) {
-    const themeName = (stub.term ?? "unknown").toLowerCase().replace(/\s+/g, "-");
+    const themeName = (stub.term ?? "unknown").toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[\/\\]/g, "")
+      .replace(/\.\./g, "")
+      .replace(/^[-_.]+/, "")
+      .slice(0, 100);
     const proposedContent = `## Definition\n\nTODO: Define "${stub.term}".\n\n## Key Claims\n\n- _(to be filled in)_\n\n## Related Concepts\n\n## Sources\n`;
     const update = {
       id: randomUUID(),

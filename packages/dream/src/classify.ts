@@ -28,14 +28,17 @@ function isValidThemeName(name: string): boolean {
 
 const ABSENCE_LINE =
   /no\s+(recent\s+|file\s+|pr\s+|commit\s+|modification\s+)?activity\b|no\s+commits?\b|no\s+pr\s+activity\b|no\s+(file\s+)?modifications?\b|no\s+repos?\s+configured\b|no\s+.{1,50}\s+since\s+last\s+run\b|no\s+.{1,30}\s+detected\b|no\s+changes?\b|inactive\b|nothing\s+(happened|to\s+report)\b/i;
+const HEADING_RE = /^#{1,4}\s+/;
+const LABEL_ONLY_RE = /^[-*]\s*\*\*[^*]+\*\*:\s*$/;
+const EMPTY_BULLET_RE = /^[-*]\s*$/;
 
 function isSubstantive(log: string): boolean {
   return log.split("\n").some((line) => {
     const t = line.trim();
     if (!t || t.length < 5) return false;
     if (t.startsWith("#")) return false;
-    if (/^[-*]\s*\*\*[^*]+\*\*:\s*$/.test(t)) return false;
-    if (/^[-*]\s*$/.test(t)) return false;
+    if (LABEL_ONLY_RE.test(t)) return false;
+    if (EMPTY_BULLET_RE.test(t)) return false;
     return true;
   });
 }
@@ -44,15 +47,15 @@ function stripOrphanedHeadings(log: string): string {
   const lines = log.split("\n");
   const result: string[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].match(/^#{1,4}\s+/)) {
+    if (!HEADING_RE.test(lines[i])) {
       result.push(lines[i]);
       continue;
     }
     let hasContent = false;
     for (let j = i + 1; j < lines.length; j++) {
       const t = lines[j].trim();
-      if (t.match(/^#{1,4}\s+/)) break;
-      if (t.length > 4 && !t.match(/^[-*]\s*\*\*[^*]+\*\*:\s*$/) && !t.match(/^[-*]\s*$/)) {
+      if (HEADING_RE.test(t)) break;
+      if (t.length > 4 && !LABEL_ONLY_RE.test(t) && !EMPTY_BULLET_RE.test(t)) {
         hasContent = true;
         break;
       }

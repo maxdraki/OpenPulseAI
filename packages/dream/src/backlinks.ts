@@ -13,55 +13,30 @@ import { listThemes, readTheme } from "@openpulse/core";
  */
 export async function buildBacklinks(vault: Vault): Promise<Map<string, string[]>> {
   const backlinks = new Map<string, string[]>();
-
-  // Get all theme names
   const themes = await listThemes(vault);
 
-  // Pre-populate the map with empty arrays for every known theme
   for (const theme of themes) {
     backlinks.set(theme, []);
   }
 
-  // Regex to extract [[wiki-link]] references
-  const linkRegex = /\[\[([^\]]+)\]\]/g;
-
-  // Process each theme
   for (const theme of themes) {
     const doc = await readTheme(vault, theme);
-    if (!doc) {
-      continue;
-    }
+    if (!doc) continue;
 
-    // Extract all links from the content
-    const matches = doc.content.matchAll(linkRegex);
     const seenLinks = new Set<string>();
 
-    for (const match of matches) {
+    for (const match of doc.content.matchAll(/\[\[([^\]]+)\]\]/g)) {
       const target = match[1];
-
-      // Skip self-links
-      if (target === theme) continue;
-
-      // Skip duplicates within the same theme
-      if (seenLinks.has(target)) {
-        continue;
-      }
+      if (target === theme || seenLinks.has(target)) continue;
       seenLinks.add(target);
 
-      // Ensure the target exists in the map (even if it's a broken link)
       if (!backlinks.has(target)) {
         backlinks.set(target, []);
       }
-
-      // Add the current theme to the target's inbound links
-      const inboundLinks = backlinks.get(target)!;
-      if (!inboundLinks.includes(theme)) {
-        inboundLinks.push(theme);
-      }
+      backlinks.get(target)!.push(theme);
     }
   }
 
-  // Sort inbound links for each theme alphabetically
   for (const links of backlinks.values()) {
     links.sort();
   }
@@ -79,26 +54,18 @@ export async function writeBacklinksFile(
   vault: Vault,
   backlinks: Map<string, string[]>
 ): Promise<void> {
-  // Sort themes alphabetically
   const sortedThemes = Array.from(backlinks.keys()).sort();
-
-  // Generate the markdown content
   const date = new Date().toISOString().slice(0, 10);
-  const lines: string[] = [
-    "# Backlinks",
-    "",
-    `Generated: ${date}`,
-    "",
-  ];
+  const lines: string[] = ["# Backlinks", "", `Generated: ${date}`, ""];
 
   for (const theme of sortedThemes) {
-    const inboundLinks = backlinks.get(theme) || [];
+    const inbound = backlinks.get(theme) ?? [];
     lines.push(`## [[${theme}]]`);
 
-    if (inboundLinks.length === 0) {
+    if (inbound.length === 0) {
       lines.push("_No inbound links._");
     } else {
-      for (const link of inboundLinks) {
+      for (const link of inbound) {
         lines.push(`- [[${link}]]`);
       }
     }
@@ -106,8 +73,5 @@ export async function writeBacklinksFile(
     lines.push("");
   }
 
-  // Write the file
-  const content = lines.join("\n");
-  const filePath = join(vault.warmDir, "_backlinks.md");
-  await writeFile(filePath, content, "utf-8");
+  await writeFile(join(vault.warmDir, "_backlinks.md"), lines.join("\n"), "utf-8");
 }

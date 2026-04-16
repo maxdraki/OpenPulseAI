@@ -92,16 +92,9 @@ export async function runStructuralChecks(vault: Vault): Promise<StructuralIssue
  */
 function checkBrokenLinks(content: string, themeSet: Set<string>): Set<string> {
   const brokenLinks = new Set<string>();
-  const linkRegex = /\[\[([^\]]+)\]\]/g;
-
-  let match;
-  while ((match = linkRegex.exec(content)) !== null) {
-    const target = match[1];
-    if (!themeSet.has(target)) {
-      brokenLinks.add(target);
-    }
+  for (const match of content.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    if (!themeSet.has(match[1])) brokenLinks.add(match[1]);
   }
-
   return brokenLinks;
 }
 
@@ -110,20 +103,11 @@ function checkBrokenLinks(content: string, themeSet: Set<string>): Set<string> {
  * A theme is an orphan if it has no inbound links AND no outbound links (excluding self-links).
  */
 function checkOrphan(theme: string, content: string, backlinks: Map<string, string[]>): boolean {
-  // Check inbound links
-  const inboundLinks = backlinks.get(theme) || [];
-  if (inboundLinks.length > 0) {
-    return false; // has inbound links, not an orphan
-  }
+  const inbound = backlinks.get(theme) ?? [];
+  if (inbound.length > 0) return false;
 
-  // Check outbound links (excluding self-links)
-  const links = [...content.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]).filter(t => t !== theme);
-  if (links.length > 0) {
-    return false; // has outbound links, not an orphan
-  }
-
-  // No inbound, no outbound
-  return true;
+  const outbound = [...content.matchAll(/\[\[([^\]]+)\]\]/g)].some((m) => m[1] !== theme);
+  return !outbound;
 }
 
 /**
@@ -185,21 +169,12 @@ function checkStale(theme: string, lastUpdated: string): StructuralIssue | null 
  * Check 5: Are there duplicate ### YYYY-MM-DD headings?
  */
 function checkDuplicateDates(theme: string, content: string): StructuralIssue | null {
-  const dateRegex = /^###\s+(\d{4}-\d{2}-\d{2})\b/gm;
   const seenDates = new Set<string>();
-
-  let match;
-  while ((match = dateRegex.exec(content)) !== null) {
-    const dateString = match[1];
-    if (seenDates.has(dateString)) {
-      return {
-        type: "duplicate-date",
-        theme,
-        detail: `Duplicate dated section: ### ${dateString}`,
-      };
+  for (const match of content.matchAll(/^###\s+(\d{4}-\d{2}-\d{2})\b/gm)) {
+    if (seenDates.has(match[1])) {
+      return { type: "duplicate-date", theme, detail: `Duplicate dated section: ### ${match[1]}` };
     }
-    seenDates.add(dateString);
+    seenDates.add(match[1]);
   }
-
   return null;
 }

@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
 import { readAllThemes, readTheme } from "@openpulse/core";
@@ -26,12 +27,13 @@ export async function handleChatWithPulse(
 
   // Handle "file: <page-name>" replies — create a concept page pending update
   const fileMatch = input.message.match(/^file:\s*(.+)$/i);
-  if (fileMatch && session) {
-    const { writeFile } = await import("node:fs/promises");
-    const { join: pathJoin } = await import("node:path");
-    const { randomUUID } = await import("node:crypto");
-
-    const proposedName = fileMatch[1].trim().toLowerCase().replace(/\s+/g, "-");
+  if (fileMatch) {
+    const proposedName = fileMatch[1].trim().toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[\/\\]/g, "")
+      .replace(/\.\./g, "")
+      .replace(/^[-_.]+/, "")
+      .slice(0, 100);
     // Find the last assistant message that contained a file-this-answer offer — that's
     // the answer we want to capture, not a subsequent follow-up reply.
     const assistantMessages = session.messages.filter((m) => m.role === "assistant");
@@ -59,7 +61,7 @@ export async function handleChatWithPulse(
     };
 
     await writeFile(
-      pathJoin(vault.pendingDir, `${update.id}.json`),
+      join(vault.pendingDir, `${update.id}.json`),
       JSON.stringify(update, null, 2),
       "utf-8"
     );
@@ -140,7 +142,7 @@ ${context}`;
   // Count themes consulted in this turn
   const thisCallThemes = allThemes?.map((t) => t.theme) ?? [];
   const fileOffer = thisCallThemes.length >= 3
-    ? `\n\n_This answer draws from ${thisCallThemes.length} theme${thisCallThemes.length === 1 ? "" : "s"} (${thisCallThemes.slice(0, 3).map((n) => `[[${n}]]`).join(", ")}${thisCallThemes.length > 3 ? "…" : ""}). File it as a new concept page? Reply with \`file: <page-name>\` to create a pending concept page._`
+    ? `\n\n_This answer draws from ${thisCallThemes.length} themes (${thisCallThemes.slice(0, 3).map((n) => `[[${n}]]`).join(", ")}${thisCallThemes.length > 3 ? "…" : ""}). File it as a new concept page? Reply with \`file: <page-name>\` to create a pending concept page._`
     : "";
 
   const fullResponse = response + fileOffer;

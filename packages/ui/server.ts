@@ -103,9 +103,13 @@ app.get("/api/pending-updates", async (_req, res) => {
     const updates = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const content = await readFile(join(pendingDir, file), "utf-8");
-      const update = JSON.parse(content);
-      if (update.status === "pending") updates.push(update);
+      try {
+        const content = await readFile(join(pendingDir, file), "utf-8");
+        const update = JSON.parse(content);
+        if (update.status === "pending") updates.push(update);
+      } catch (e) {
+        console.error("[server] Failed to parse pending update:", file, e);
+      }
     }
     updates.sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt));
     res.json(updates);
@@ -116,6 +120,7 @@ app.get("/api/pending-updates", async (_req, res) => {
 
 app.post("/api/approve-update", async (req, res) => {
   const { id, editedContent } = req.body;
+  if (!id || !/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
   const pendingPath = join(pendingDir, `${id}.json`);
   try {
     const raw = await readFile(pendingPath, "utf-8");
@@ -137,7 +142,9 @@ app.post("/api/approve-update", async (req, res) => {
 
     // Rebuild index.md and _backlinks.md in the background — fire and forget
     const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
-    execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, () => {});
+    execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+      if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
+    });
 
     res.json({ ok: true });
   } catch (e: any) {
@@ -147,6 +154,7 @@ app.post("/api/approve-update", async (req, res) => {
 
 app.post("/api/reject-update", async (req, res) => {
   const { id } = req.body;
+  if (!id || !/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
   try {
     await rm(join(pendingDir, `${id}.json`));
     res.json({ ok: true });

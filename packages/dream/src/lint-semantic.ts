@@ -1,5 +1,5 @@
 import type { Vault, LlmProvider } from "@openpulse/core";
-import { listThemes, readTheme } from "@openpulse/core";
+import { listThemes, readTheme, vaultLog } from "@openpulse/core";
 
 /**
  * Semantic issue found via LLM analysis.
@@ -44,23 +44,12 @@ export async function findStubCandidates(
     const content = doc.content;
     const seenInThisTheme = new Set<string>();
 
-    // Extract backtick-wrapped identifiers
-    const backtickRegex = /`([a-zA-Z][a-zA-Z0-9_-]{2,})`/g;
-    let match: RegExpExecArray | null;
-    while ((match = backtickRegex.exec(content)) !== null) {
-      const term = match[1];
-      if (!themeSet.has(term.toLowerCase())) {
-        seenInThisTheme.add(term);
-      }
+    // Extract backtick-wrapped identifiers and CamelCase terms
+    for (const match of content.matchAll(/`([a-zA-Z][a-zA-Z0-9_-]{2,})`/g)) {
+      if (!themeSet.has(match[1].toLowerCase())) seenInThisTheme.add(match[1]);
     }
-
-    // Extract CamelCase terms
-    const camelCaseRegex = /\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b/g;
-    while ((match = camelCaseRegex.exec(content)) !== null) {
-      const term = match[1];
-      if (!themeSet.has(term.toLowerCase())) {
-        seenInThisTheme.add(term);
-      }
+    for (const match of content.matchAll(/\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b/g)) {
+      if (!themeSet.has(match[1].toLowerCase())) seenInThisTheme.add(match[1]);
     }
 
     // Increment count for each unique term seen in this theme
@@ -108,7 +97,8 @@ If no terms deserve pages, return [].`;
       detail: item.reason,
       count: item.count,
     }));
-  } catch {
+  } catch (err) {
+    await vaultLog("error", "findStubCandidates: LLM call or JSON parse failed", String(err));
     return [];
   }
 }
@@ -134,12 +124,9 @@ export async function findContradictions(
 
   // Extract [[link]] targets per theme
   const themeLinks = new Map<string, Set<string>>();
-  const linkRegex = /\[\[([^\]]+)\]\]/g;
   for (const [name, content] of themeContents) {
     const targets = new Set<string>();
-    let match: RegExpExecArray | null;
-    const re = new RegExp(linkRegex.source, linkRegex.flags);
-    while ((match = re.exec(content)) !== null) {
+    for (const match of content.matchAll(/\[\[([^\]]+)\]\]/g)) {
       targets.add(match[1]);
     }
     themeLinks.set(name, targets);
@@ -159,16 +146,8 @@ export async function findContradictions(
       const linksA = themeLinks.get(nameA) ?? new Set<string>();
       const linksB = themeLinks.get(nameB) ?? new Set<string>();
 
-      // Check if they share at least one link target
-      let shared = false;
-      for (const target of linksA) {
-        if (linksB.has(target)) {
-          shared = true;
-          break;
-        }
-      }
-
-      if (shared) {
+      const hasSharedLink = [...linksA].some((target) => linksB.has(target));
+      if (hasSharedLink) {
         pairs.push({
           a: nameA,
           b: nameB,
@@ -214,7 +193,8 @@ If no contradictions, return [].`;
       themes: item.themes,
       detail: item.detail,
     }));
-  } catch {
+  } catch (err) {
+    await vaultLog("error", "findContradictions: LLM call or JSON parse failed", String(err));
     return [];
   }
 }

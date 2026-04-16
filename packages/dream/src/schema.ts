@@ -1,7 +1,6 @@
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Vault } from "@openpulse/core";
-import type { ThemeType } from "@openpulse/core";
+import type { Vault, ThemeType } from "@openpulse/core";
 
 export interface SchemaTemplate {
   structure: string; // section headings for this type
@@ -54,7 +53,10 @@ export async function loadSchema(vault: Vault): Promise<Record<ThemeType, Schema
   try {
     const raw = await readFile(join(vault.warmDir, "_schema.md"), "utf-8");
     return parseSchema(raw);
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[schema] Failed to load _schema.md, using defaults:", err);
+    }
     return { ...DEFAULT_TEMPLATES };
   }
 }
@@ -63,7 +65,8 @@ export async function seedSchema(vault: Vault): Promise<void> {
   const path = join(vault.warmDir, "_schema.md");
   try {
     await stat(path); // already exists — do nothing
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; // unexpected error
     await writeFile(path, DEFAULT_SCHEMA_CONTENT, "utf-8");
   }
 }
