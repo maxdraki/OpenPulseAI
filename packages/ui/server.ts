@@ -569,8 +569,7 @@ app.post("/api/logs", async (req, res) => {
   }
 });
 
-// Clean logs older than 30 days on startup and daily
-// Ensure logs dir exists at startup, clean old logs daily
+// Ensure logs dir exists; clean logs older than 30 days on startup and daily
 mkdir(logsDir, { recursive: true }).catch(() => {});
 cleanOldLogs();
 setInterval(cleanOldLogs, 24 * 60 * 60 * 1000);
@@ -761,7 +760,7 @@ app.post("/api/confluence-activity/spaces", async (req, res) => {
 
 // --- GitHub repo access check ---
 
-const GITHUB_HOSTNAME = /^[\w][\w.-]*\.[a-zA-Z]{2,}$/;
+const VALID_HOSTNAME = /^[\w][\w.-]*\.[a-zA-Z]{2,}$/;
 // Matches: https://host/owner/repo[.git][/anything]
 const GITHUB_URL = /^https?:\/\/([\w.-]+)\/([\w.-]+\/[\w.-]+?)(?:\.git)?(\/.*)?$/;
 
@@ -773,7 +772,7 @@ app.post("/api/github-activity/check-repo", async (req, res) => {
   if (!match) return res.status(400).json({ error: "Not a valid GitHub repo URL" });
 
   const [, host, repoPath] = match;
-  if (host !== "github.com" && !GITHUB_HOSTNAME.test(host)) {
+  if (host !== "github.com" && !VALID_HOSTNAME.test(host)) {
     return res.status(400).json({ error: "Invalid hostname in URL" });
   }
 

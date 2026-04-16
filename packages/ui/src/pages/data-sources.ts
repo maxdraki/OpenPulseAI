@@ -65,6 +65,10 @@ const MANUAL_FIX: Record<string, string> = {
   "env: GEMINI_API_KEY": "Set in Settings page or: export GEMINI_API_KEY=your_key",
 };
 
+function isSensitiveKey(key: string): boolean {
+  return key.includes("token") || key.endsWith("_key") || key === "key" || key.includes("secret") || key.includes("password");
+}
+
 // Module-level reference so renderSkillCard can trigger a reload
 let loadSkills: (() => Promise<void>) | null = null;
 
@@ -185,10 +189,11 @@ function renderSpacePicker(row: HTMLElement, configFields: HTMLElement, savedKey
       status.textContent = `${selectedKeys.size} space(s) selected \u2014 ${allSpaces.length} available`;
       status.style.color = "var(--text-tertiary)";
     } catch (e: any) {
-      const msg = e.message?.includes("401") ? "Authentication failed \u2014 check credentials"
-        : e.message?.includes("timed out") ? "Connection timed out"
-        : "Could not reach Confluence";
-      status.textContent = msg;
+      const msg = e.message ?? "";
+      let friendly = "Could not reach Confluence";
+      if (msg.includes("401")) friendly = "Authentication failed \u2014 check credentials";
+      else if (msg.includes("timed out")) friendly = "Connection timed out";
+      status.textContent = friendly;
       status.style.color = "var(--danger)";
     } finally {
       discoverBtn.classList.remove("loading");
@@ -291,12 +296,12 @@ function renderRepoUrlInput(row: HTMLElement, savedUrls: string): void {
       status.style.color = "var(--success)";
     } catch (e: any) {
       const msg = e.message ?? "";
-      const friendly = msg.includes("404") || msg.includes("not found") ? "Repo not found or no access \u2014 check gh auth login"
-        : msg.includes("401") || msg.includes("authentication") ? "Not authenticated \u2014 run: gh auth login"
-        : msg.includes("503") ? "gh CLI not found \u2014 install from cli.github.com"
-        : msg.includes("valid GitHub") ? "Not a valid GitHub repo URL"
-        : msg.includes("timed out") ? "Connection timed out"
-        : "Could not check repo access";
+      let friendly = "Could not check repo access";
+      if (msg.includes("404") || msg.includes("not found")) friendly = "Repo not found or no access \u2014 check gh auth login";
+      else if (msg.includes("401") || msg.includes("authentication")) friendly = "Not authenticated \u2014 run: gh auth login";
+      else if (msg.includes("503")) friendly = "gh CLI not found \u2014 install from cli.github.com";
+      else if (msg.includes("valid GitHub")) friendly = "Not a valid GitHub repo URL";
+      else if (msg.includes("timed out")) friendly = "Connection timed out";
       status.textContent = friendly;
       status.style.color = "var(--danger)";
     } finally {
@@ -505,7 +510,7 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
           const fields: FormField[] = configFields.map((f) => ({
             key: f.key,
             label: f.label,
-            type: f.key.includes("token") || f.key.endsWith("_key") || f.key === "key" || f.key.includes("secret") || f.key.includes("password") ? "password" : "text",
+            type: isSensitiveKey(f.key) ? "password" : "text",
           }));
           formDialog(
             `Connect ${ds.name}`,
@@ -791,8 +796,7 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           const input = document.createElement("input");
           input.className = "form-input";
           input.style.fontSize = "0.82rem";
-          const isSensitive = field.key.includes("token") || field.key.endsWith("_key") || field.key === "key" || field.key.includes("secret") || field.key.includes("password");
-          input.type = isSensitive ? "password" : "text";
+          input.type = isSensitiveKey(field.key) ? "password" : "text";
           input.placeholder = field.default ?? "";
           input.value = savedConfig[field.key] ?? field.default ?? "";
           input.dataset.configKey = field.key;
@@ -962,7 +966,6 @@ function renderSkillCard(skill: SkillData): HTMLElement {
     });
     card.appendChild(removeBtn);
   }
-
 
   return card;
 }
