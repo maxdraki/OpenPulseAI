@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog, readTheme } from "@openpulse/core";
 import type { ActivityEntry } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
@@ -34,8 +35,55 @@ async function main() {
   const themes = await listThemes(vault);
   const allThemes = [...new Set([...config.themes, ...themes])];
 
-  const { classified, proposedTypes } = await classifyEntries(entries, allThemes, provider, model);
+  const { classified, proposedTypes, conceptCandidates, orphanCandidates, themeMergeProposals } =
+    await classifyEntries(entries, allThemes, provider, model);
   console.error(`[dream] Classified ${classified.length} entries.`);
+
+  // Persist concept candidates — merge with existing file
+  const conceptCandidatesPath = join(vault.warmDir, "_concept-candidates.json");
+  let existingConcepts: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
+  try {
+    const raw = await readFile(conceptCandidatesPath, "utf-8");
+    existingConcepts = JSON.parse(raw);
+  } catch { /* fresh file */ }
+  for (const [term, data] of Object.entries(conceptCandidates)) {
+    if (existingConcepts[term]) {
+      existingConcepts[term].count += data.count;
+      existingConcepts[term].sources = [...new Set([...existingConcepts[term].sources, ...data.sources])];
+    } else {
+      existingConcepts[term] = data;
+    }
+  }
+  await writeFile(conceptCandidatesPath, JSON.stringify(existingConcepts, null, 2), "utf-8");
+
+  // Persist orphan candidates — append to existing array
+  if (orphanCandidates.length > 0) {
+    const orphanPath = join(vault.warmDir, "_orphan-candidates.json");
+    let existingOrphans: typeof orphanCandidates = [];
+    try {
+      const raw = await readFile(orphanPath, "utf-8");
+      existingOrphans = JSON.parse(raw);
+    } catch { /* fresh file */ }
+    await writeFile(orphanPath, JSON.stringify([...existingOrphans, ...orphanCandidates], null, 2), "utf-8");
+  }
+
+  // Theme merge proposals → pending updates
+  for (const proposal of themeMergeProposals) {
+    const id = randomUUID();
+    const pendingUpdate = {
+      id,
+      theme: proposal.proposed,
+      proposedContent: `## Merge proposal\n\nProposed merge: [[${proposal.proposed}]] → [[${proposal.canonical}]]\nReason: ${proposal.reason}\n\nApproving this pending update will rewrite links and delete the source theme.`,
+      previousContent: null,
+      entries: [],
+      createdAt: new Date().toISOString(),
+      status: "pending" as const,
+      batchId: new Date().toISOString(),
+      lintFix: "merge" as const,
+      related: [proposal.canonical],
+    };
+    await writeFile(join(vault.pendingDir, `${id}.json`), JSON.stringify(pendingUpdate, null, 2), "utf-8");
+  }
 
   let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
   try {

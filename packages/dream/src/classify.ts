@@ -1,4 +1,5 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
+import { canonicalizeThemes } from "./canonicalize.js";
 
 /**
  * Common English words that should never become theme names.
@@ -375,11 +376,28 @@ Respond with ONLY a JSON array:
     }
   }
 
+  // Canonicalization: collect all theme names in classified results, redirect to existing canonical names
+  const allProposed = [...new Set(results.flatMap((r) => r.themes))];
+  const canonicalization = await canonicalizeThemes(allProposed, existingThemes, provider, model);
+
+  // Apply redirects (silent merges): rewrite theme names in classified results
+  for (const r of results) {
+    r.themes = r.themes.map((t) => canonicalization.redirects[t] ?? t);
+  }
+
+  // Apply redirects to proposedTypes: move type info from source → canonical, delete source key
+  for (const [from, to] of Object.entries(canonicalization.redirects)) {
+    if (proposedTypes[from] && !proposedTypes[to]) {
+      proposedTypes[to] = proposedTypes[from];
+    }
+    delete proposedTypes[from];
+  }
+
   return {
     classified: results,
     proposedTypes,
     conceptCandidates: conceptCandidatesMap,
     orphanCandidates: orphanCandidatesList,
-    themeMergeProposals: [],    // populated in Task 8
+    themeMergeProposals: canonicalization.proposals,
   };
 }
