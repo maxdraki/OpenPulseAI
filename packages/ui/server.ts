@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme } from "../core/dist/index.js";
+import { Vault, writeTheme, mergeThemes } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -127,15 +127,44 @@ app.post("/api/approve-update", async (req, res) => {
     const update = JSON.parse(raw);
     const finalContent = editedContent ?? update.proposedContent;
 
-    // Write to warm theme file — use writeTheme to preserve type, sources, created, related
     const vault = new Vault(VAULT_ROOT);
     await vault.init();
-    await writeTheme(vault, update.theme, finalContent, {
-      type: update.type,
-      sources: update.sources,
-      related: update.related,
-      created: update.created,
-    });
+
+    // Route by sub-kind
+    const related: string[] = Array.isArray(update.related) ? update.related : [];
+    if (update.lintFix === "merge" && related[0]) {
+      await mergeThemes(vault, update.theme, related[0]);
+    } else if (update.lintFix === "delete") {
+      await mergeThemes(vault, update.theme, null);
+    } else if (update.lintFix === "rename" && related[0]) {
+      await mergeThemes(vault, update.theme, related[0], { rename: true });
+    } else if (update.schemaEvolution || update.theme === "_schema") {
+      // Write to vault/warm/_schema.md instead of a normal theme file
+      const schemaPath = join(warmDir, "_schema.md");
+      await writeFile(schemaPath, finalContent, "utf-8");
+    } else {
+      // Normal dream-update (or any other sub-kind): write to warm theme file,
+      // preserving type, sources, created, related
+      await writeTheme(vault, update.theme, finalContent, {
+        type: update.type,
+        sources: update.sources,
+        related: update.related,
+        created: update.created,
+      });
+
+      // Size check for dream-pipeline project updates: enqueue compaction if
+      // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
+      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+        const sectionCount = (finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
+        if (sectionCount > 14 && update.type === "project") {
+          await orchestrator.enqueueForCompaction([update.theme]);
+          // Fire-and-forget immediate run for responsiveness
+          orchestrator.triggerCompact([update.theme]).catch((err: unknown) => {
+            console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
+          });
+        }
+      }
+    }
 
     // Remove pending file
     await rm(pendingPath);
@@ -180,6 +209,26 @@ app.post("/api/trigger-dream", async (_req, res) => {
 app.post("/api/trigger-lint", async (_req, res) => {
   try {
     await orchestrator.triggerLint();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/trigger-compact", async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.themes) ? req.body.themes : [];
+    const themes = raw.filter((t: unknown) => typeof t === "string" && SAFE_NAME.test(t as string));
+    await orchestrator.triggerCompact(themes.length > 0 ? themes : undefined);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/trigger-schema-evolve", async (_req, res) => {
+  try {
+    await orchestrator.triggerSchemaEvolve();
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
@@ -918,11 +967,20 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
       timeout: 120000,
     });
   },
-  async runCompactionPipeline(_themes?: string[]): Promise<void> {
-    /* implemented in Task 16 */
+  async runCompactionPipeline(themes?: string[]): Promise<void> {
+    const compactBin = join(process.cwd(), "..", "dream", "dist", "compact-cli.js");
+    const args = [compactBin, ...(themes ?? [])];
+    await execFileAsync("node", args, {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 300000,
+    });
   },
   async runSchemaEvolutionPipeline(): Promise<void> {
-    /* implemented in Task 16 */
+    const schemaBin = join(process.cwd(), "..", "dream", "dist", "schema-evolve-cli.js");
+    await execFileAsync("node", [schemaBin], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 300000,
+    });
   },
   async getSkillNames(): Promise<string[]> {
     const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
