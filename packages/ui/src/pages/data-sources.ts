@@ -730,9 +730,35 @@ function renderSkillCard(skill: SkillData): HTMLElement {
 
           const addBtn = document.createElement("button");
           addBtn.className = "skill-path-add btn btn-sm";
-          addBtn.textContent = "+ Add folder";
+          addBtn.textContent = "+ Browse";
 
-          // Folder picker container (hidden until "Add folder" clicked)
+          const typeBtn = document.createElement("button");
+          typeBtn.className = "skill-path-add btn btn-sm";
+          typeBtn.textContent = "+ Type path";
+
+          function addPathItem(value: string) {
+            const item = document.createElement("div");
+            item.className = "skill-path-item";
+            const inp = document.createElement("input");
+            inp.className = "form-input";
+            inp.style.fontSize = "0.82rem";
+            inp.type = "text";
+            inp.value = value;
+            inp.placeholder = "/path/to/folder";
+            const removeBtn = document.createElement("button");
+            removeBtn.className = "skill-path-remove";
+            removeBtn.textContent = "\u00d7";
+            removeBtn.title = "Remove";
+            removeBtn.addEventListener("click", () => item.remove());
+            item.appendChild(inp);
+            item.appendChild(removeBtn);
+            pathList.insertBefore(item, addBtn);
+            inp.focus();
+          }
+
+          typeBtn.addEventListener("click", () => addPathItem(""));
+
+          // Folder picker container (hidden until "Browse" clicked)
           const pickerContainer = document.createElement("div");
           pickerContainer.className = "folder-picker";
           pickerContainer.style.display = "none";
@@ -745,26 +771,12 @@ function renderSkillCard(skill: SkillData): HTMLElement {
             pickerContainer.style.display = "";
             await loadFolderPicker(pickerContainer, "~", (selectedPath) => {
               pickerContainer.style.display = "none";
-              const item = document.createElement("div");
-              item.className = "skill-path-item";
-              const inp = document.createElement("input");
-              inp.className = "form-input";
-              inp.style.fontSize = "0.82rem";
-              inp.type = "text";
-              inp.value = selectedPath;
-              inp.readOnly = true;
-              const removeBtn = document.createElement("button");
-              removeBtn.className = "skill-path-remove";
-              removeBtn.textContent = "\u00d7";
-              removeBtn.title = "Remove";
-              removeBtn.addEventListener("click", () => item.remove());
-              item.appendChild(inp);
-              item.appendChild(removeBtn);
-              pathList.insertBefore(item, addBtn);
+              addPathItem(selectedPath);
             });
           });
 
           pathList.appendChild(addBtn);
+          pathList.appendChild(typeBtn);
           pathList.appendChild(pickerContainer);
           row.appendChild(pathList);
 

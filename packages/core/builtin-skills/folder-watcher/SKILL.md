@@ -20,15 +20,25 @@ config:
 
 If the commands return NO output, write "No file modifications detected since last run." and stop. Do not speculate about what might have changed.
 
-If the commands return results, summarize ONLY the files listed in the output. For each project directory that has modified files:
-- List the specific files that changed (from the find output)
-- Describe what the files likely do based on their names and the head output
+If the commands return results, summarize ONLY the files listed in the output. Group files into sections using the following naming rules:
+
+**How to derive the section heading [ProjectName]:**
+- Look at the full path of each modified file: `<watch-root>/<rest-of-path>`
+- If the file is inside a subdirectory of the watch root (e.g. `OneDrive-RWS/Projects/DataPlatform/file.pptx`), use the **first subdirectory name** as the heading (`DataPlatform`)
+- If the file is directly in the watch root with no subdirectory (e.g. `OneDrive-RWS/file.pptx`), use the **filename without extension** as the heading (`file`)
+- For code repos under `Documents/GitHub`, the repo folder name is the project name
+- NEVER use the watch root itself (e.g. `OneDrive-RWS`, `Documents`, `Downloads`) as the heading — that is not a project name
+
+For each group:
+- List the specific files that changed (filenames only, not full paths)
+- Describe what the files likely do based on their names and any peeked content
 - Estimate the scope: small tweak, feature addition, or major refactoring
 
 RULES:
 - ONLY mention projects that appear in the find output
 - NEVER mention projects that had zero files in the output
 - NEVER invent file names or changes not shown in the command output
+- NEVER use a cloud storage folder name (OneDrive, Dropbox, iCloud, etc.) as a [ProjectName]
 - If unsure about a file's purpose, just list it without guessing
 
 ## Output Format

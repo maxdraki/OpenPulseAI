@@ -18,12 +18,21 @@ const THEME_STOPWORDS = new Set([
   "closed", "open", "merged", "done", "new", "all", "recent", "latest",
   "current", "active", "updated", "other", "main", "last", "next", "old",
   "none", "true", "false",
+  // Cloud storage / system folder names — not project names
+  "documents", "downloads", "desktop", "library", "home",
+  "onedrive", "dropbox", "icloud", "googledrive", "box",
+  "sharepoint", "teams", "github", "gitlab", "bitbucket",
 ]);
 
-/** A valid theme name is at least 3 chars and not a common stopword. */
+const CLOUD_PREFIXES = ["onedrive", "dropbox", "icloud", "googledrive", "sharepoint"];
+
+/** A valid theme name is at least 3 chars, not a stopword, and not a cloud folder variant. */
 function isValidThemeName(name: string): boolean {
   const lower = name.toLowerCase().trim();
-  return lower.length >= 3 && !THEME_STOPWORDS.has(lower);
+  if (lower.length < 3) return false;
+  if (THEME_STOPWORDS.has(lower)) return false;
+  if (CLOUD_PREFIXES.some(p => lower === p || lower.startsWith(p + "-") || lower.startsWith(p + "_"))) return false;
+  return true;
 }
 
 const ABSENCE_LINE =
