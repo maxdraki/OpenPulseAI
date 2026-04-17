@@ -58,7 +58,17 @@ export interface PendingUpdate {
   sources?: string[];            // rolled-up source entry IDs from ^[src:] markers
   related?: string[];            // related theme names
   created?: string;              // ISO 8601 — set on first synthesis
-  lintFix?: "stubs" | "orphans"; // marks lint-fix batches
+  // Sub-kind fields — at most one is set per update
+  lintFix?: "stubs" | "orphans" | "merge" | "delete" | "rename";
+  compactionType?: "scheduled" | "size";
+  schemaEvolution?: {
+    rationale: Array<{ change: string; evidence: string }>;
+    confidence: "high" | "medium" | "low";
+  };
+  querybackSource?: {
+    question: string;
+    themesConsulted: string[];
+  };
 }
 
 /** Collector runtime state per source */
