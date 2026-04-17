@@ -470,6 +470,126 @@ function buildCollectorCard(
   return card;
 }
 
+// ─── Generic pipeline card (lint / compaction / schema-evolution) ───────────
+
+interface PipelineCardState {
+  running?: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule?: { time: string; days: string[] };
+}
+
+interface PipelineCardOpts {
+  title: string;
+  state: PipelineCardState;
+  triggerPath: string;
+  triggerBody: Record<string, unknown> | null;
+  runLabel: string;
+  extraMeta?: string;
+  onDone: () => void | Promise<void>;
+}
+
+function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
+  const section = document.createElement("div");
+  section.className = "dream-section";
+  section.style.marginTop = "1rem";
+  section.style.borderTop = "1px solid var(--border)";
+  section.style.paddingTop = "1rem";
+
+  const header = document.createElement("div");
+  header.style.display = "flex";
+  header.style.justifyContent = "space-between";
+  header.style.alignItems = "center";
+  header.style.marginBottom = "0.5rem";
+
+  const title = document.createElement("span");
+  title.style.fontWeight = "600";
+  title.style.fontSize = "0.95rem";
+  title.textContent = opts.title;
+  header.appendChild(title);
+
+  if (opts.state.schedule) {
+    const schedInfo = document.createElement("span");
+    schedInfo.style.fontSize = "0.78rem";
+    schedInfo.style.color = "var(--text-secondary)";
+    const sched = opts.state.schedule;
+    schedInfo.textContent = `${formatDays(sched.days)} @ ${formatTime(sched.time)}`;
+    header.appendChild(schedInfo);
+  }
+  section.appendChild(header);
+
+  const meta = document.createElement("div");
+  meta.className = "schedule-meta";
+
+  const lastRunEl = document.createElement("span");
+  const lastRunLabel = document.createElement("span");
+  lastRunLabel.textContent = "Last run: ";
+  lastRunLabel.style.color = "var(--text-tertiary)";
+  lastRunEl.appendChild(lastRunLabel);
+  lastRunEl.appendChild(resultDot(opts.state.lastResult));
+  lastRunEl.appendChild(document.createTextNode(" " + relativeTime(opts.state.lastRun)));
+  meta.appendChild(lastRunEl);
+
+  if (opts.extraMeta) {
+    const extraEl = document.createElement("span");
+    extraEl.style.color = "var(--text-tertiary)";
+    extraEl.style.fontSize = "0.78rem";
+    extraEl.textContent = opts.extraMeta;
+    meta.appendChild(extraEl);
+  }
+  section.appendChild(meta);
+
+  if (opts.state.lastResult === "error" && opts.state.lastError) {
+    const errEl = document.createElement("div");
+    errEl.style.marginTop = "0.35rem";
+    errEl.style.fontSize = "0.75rem";
+    errEl.style.color = "var(--danger)";
+    errEl.style.fontFamily = "var(--font-mono)";
+    errEl.textContent = opts.state.lastError;
+    section.appendChild(errEl);
+  }
+
+  const runBtn = document.createElement("button");
+  runBtn.type = "button";
+  runBtn.className = "btn btn-ghost btn-sm";
+  runBtn.style.fontSize = "0.78rem";
+  runBtn.style.padding = "0.2rem 0.6rem";
+  runBtn.style.marginTop = "0.35rem";
+  runBtn.textContent = opts.runLabel;
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    const origLabel = runBtn.textContent;
+    runBtn.textContent = "Running…";
+    try {
+      const res = await fetch(opts.triggerPath, {
+        method: "POST",
+        headers: opts.triggerBody ? { "Content-Type": "application/json" } : {},
+        body: opts.triggerBody ? JSON.stringify(opts.triggerBody) : undefined,
+      });
+      if (!res.ok) {
+        let msg = "unknown error";
+        try {
+          const data = await res.json();
+          msg = data.error ?? msg;
+        } catch { /* ignore JSON parse */ }
+        log("error", `${opts.title} trigger failed`, msg);
+      } else {
+        log("info", `Triggered ${opts.title} run`);
+        await opts.onDone();
+      }
+    } catch (e) {
+      log("error", `Error triggering ${opts.title}`, String(e));
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = origLabel;
+    }
+  });
+  section.appendChild(runBtn);
+
+  return section;
+}
+
 // ─── Main render ─────────────────────────────────────────────────────────────
 
 let _pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -734,89 +854,54 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
     });
     dreamSection.appendChild(dreamRunBtn);
     contentEl.appendChild(dreamSection);
-  }
 
-  // ── Lint Pipeline section ──
-  const lintPipelineState = (status as any).lintPipeline;
-  if (lintPipelineState) {
-    const lintSection = document.createElement("div");
-    lintSection.className = "dream-section";
-    lintSection.style.marginTop = "1rem";
-    lintSection.style.borderTop = "1px solid var(--border)";
-    lintSection.style.paddingTop = "1rem";
-
-    const lintHeader = document.createElement("div");
-    lintHeader.style.display = "flex";
-    lintHeader.style.justifyContent = "space-between";
-    lintHeader.style.alignItems = "center";
-    lintHeader.style.marginBottom = "0.5rem";
-
-    const lintTitle = document.createElement("span");
-    lintTitle.style.fontWeight = "600";
-    lintTitle.style.fontSize = "0.95rem";
-    lintTitle.textContent = "Wiki Lint";
-
-    const schedInfo = document.createElement("span");
-    schedInfo.style.fontSize = "0.78rem";
-    schedInfo.style.color = "var(--text-secondary)";
-    const sched = lintPipelineState.schedule;
-    schedInfo.textContent = `${sched?.days?.join(", ") ?? "sun"} @ ${sched?.time ?? "20:00"}`;
-
-    lintHeader.appendChild(lintTitle);
-    lintHeader.appendChild(schedInfo);
-    lintSection.appendChild(lintHeader);
-
-    const lintMeta = document.createElement("div");
-    lintMeta.className = "schedule-meta";
-
-    const lintLastRun = document.createElement("span");
-    const lintLastLabel = document.createElement("span");
-    lintLastLabel.textContent = "Last run: ";
-    lintLastLabel.style.color = "var(--text-tertiary)";
-    lintLastRun.appendChild(lintLastLabel);
-    lintLastRun.appendChild(resultDot(lintPipelineState.lastResult));
-    lintLastRun.appendChild(document.createTextNode(" " + relativeTime(lintPipelineState.lastRun)));
-    lintMeta.appendChild(lintLastRun);
-    lintSection.appendChild(lintMeta);
-
-    if (lintPipelineState.lastResult === "error" && lintPipelineState.lastError) {
-      const errEl = document.createElement("div");
-      errEl.style.marginTop = "0.35rem";
-      errEl.style.fontSize = "0.75rem";
-      errEl.style.color = "var(--danger)";
-      errEl.style.fontFamily = "var(--font-mono)";
-      errEl.textContent = lintPipelineState.lastError;
-      lintSection.appendChild(errEl);
+    // ── Lint Pipeline section ──
+    const lintPipelineState = status.lintPipeline;
+    if (lintPipelineState) {
+      contentEl.appendChild(
+        buildPipelineCard({
+          title: "Wiki Lint",
+          state: lintPipelineState,
+          triggerPath: "/api/trigger-lint",
+          triggerBody: null,
+          runLabel: "Run Lint Now",
+          onDone: refresh,
+        }),
+      );
     }
 
-    const lintRunBtn = document.createElement("button");
-    lintRunBtn.type = "button";
-    lintRunBtn.className = "btn btn-ghost btn-sm";
-    lintRunBtn.style.fontSize = "0.78rem";
-    lintRunBtn.style.padding = "0.2rem 0.6rem";
-    lintRunBtn.style.marginTop = "0.35rem";
-    lintRunBtn.textContent = "Run Lint Now";
-    lintRunBtn.addEventListener("click", async () => {
-      lintRunBtn.disabled = true;
-      lintRunBtn.textContent = "Running…";
-      try {
-        const res = await fetch("/api/trigger-lint", { method: "POST" });
-        if (!res.ok) {
-          const data = await res.json();
-          log("error", "Lint trigger failed", data.error ?? "unknown error");
-        } else {
-          log("info", "Triggered lint pipeline run");
-          refresh();
-        }
-      } catch (e) {
-        log("error", "Error triggering lint pipeline", String(e));
-      } finally {
-        lintRunBtn.disabled = false;
-        lintRunBtn.textContent = "Run Lint Now";
-      }
-    });
-    lintSection.appendChild(lintRunBtn);
-    contentEl.appendChild(lintSection);
+    // ── Compaction Pipeline section ──
+    const compactionState = status.compactionPipeline;
+    if (compactionState) {
+      const perThemeCount = Object.keys(compactionState.perThemeLastCompacted ?? {}).length;
+      const queueCount = (compactionState.sizeQueue ?? []).length;
+      contentEl.appendChild(
+        buildPipelineCard({
+          title: "Compaction",
+          state: compactionState,
+          triggerPath: "/api/trigger-compact",
+          triggerBody: {},
+          runLabel: "Run Compaction Now",
+          extraMeta: `${perThemeCount} theme(s) tracked · queue: ${queueCount}`,
+          onDone: refresh,
+        }),
+      );
+    }
+
+    // ── Schema Evolution Pipeline section ──
+    const schemaState = status.schemaEvolutionPipeline;
+    if (schemaState) {
+      contentEl.appendChild(
+        buildPipelineCard({
+          title: "Schema Evolution",
+          state: schemaState,
+          triggerPath: "/api/trigger-schema-evolve",
+          triggerBody: null,
+          runLabel: "Run Schema Evolve Now",
+          onDone: refresh,
+        }),
+      );
+    }
   }
 
   await refresh();

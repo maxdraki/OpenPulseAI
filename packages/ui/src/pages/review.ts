@@ -77,11 +77,20 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
           day: "numeric", month: "short", year: "numeric",
           hour: "2-digit", minute: "2-digit",
         });
-        // Check if this is a lint-fix batch
-        const firstItem = batchUpdates[0] as any;
+        // Check if this is a sub-kind batch
+        const firstItem = batchUpdates[0];
         if (firstItem?.lintFix) {
-          batchLabel.textContent = `Lint Fix — ${firstItem.lintFix}: ${batchUpdates.length} stub page(s)`;
+          batchLabel.textContent = `Lint Fix — ${firstItem.lintFix}: ${batchUpdates.length} page(s)`;
           batchLabel.style.color = "var(--warning, #d97706)";
+        } else if (firstItem?.compactionType) {
+          batchLabel.textContent = `Compaction (${firstItem.compactionType}): ${batchUpdates.length} theme(s)`;
+          batchLabel.style.color = "var(--warning, #d97706)";
+        } else if (firstItem?.schemaEvolution) {
+          batchLabel.textContent = `Schema Evolution (${firstItem.schemaEvolution.confidence}): ${batchUpdates.length} change(s)`;
+          batchLabel.style.color = "var(--warning, #d97706)";
+        } else if (firstItem?.querybackSource) {
+          batchLabel.textContent = `From chat: ${batchUpdates.length} theme(s)`;
+          batchLabel.style.color = "var(--accent, #2563eb)";
         } else {
           batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
         }
@@ -140,6 +149,33 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
   }
 }
 
+interface SubKindBadgeSpec {
+  cls: string;
+  text: string;
+}
+
+function subKindBadge(update: PendingUpdate): SubKindBadgeSpec | null {
+  if (update.compactionType) {
+    return { cls: "type-compact", text: `Compaction (${update.compactionType})` };
+  }
+  if (update.schemaEvolution) {
+    return { cls: "type-schema", text: `Schema (${update.schemaEvolution.confidence})` };
+  }
+  if (update.querybackSource) {
+    return { cls: "type-chat", text: "From chat" };
+  }
+  if (update.lintFix) {
+    const label =
+      update.lintFix === "merge"   ? "Lint merge"  :
+      update.lintFix === "delete"  ? "Lint delete" :
+      update.lintFix === "rename"  ? "Lint rename" :
+      update.lintFix === "orphans" ? "Lint orphan" :
+      update.lintFix === "stubs"   ? "Lint stub"   : `Lint ${update.lintFix}`;
+    return { cls: "type-lint", text: label };
+  }
+  return null;
+}
+
 function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   const card = document.createElement("div");
   card.className = "pending-card";
@@ -160,6 +196,16 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   });
   header.appendChild(badge);
   header.appendChild(typeBadge);
+
+  // Sub-kind badge (compaction / schema / queryback / lint-fix)
+  const subKind = subKindBadge(update);
+  if (subKind) {
+    const subKindEl = document.createElement("span");
+    subKindEl.className = `pending-type-badge ${subKind.cls}`;
+    subKindEl.textContent = subKind.text;
+    header.appendChild(subKindEl);
+  }
+
   header.appendChild(date);
 
   // Proposed content label
