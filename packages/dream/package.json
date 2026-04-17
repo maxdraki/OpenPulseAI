@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "bin": {
     "openpulse-dream": "dist/index.js",
-    "openpulse-lint": "dist/lint-cli.js"
+    "openpulse-lint": "dist/lint-cli.js",
+    "openpulse-compact": "dist/compact-cli.js"
   },
   "scripts": {
     "build": "tsc",
