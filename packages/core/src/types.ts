@@ -111,4 +111,10 @@ export interface ChatSession {
   themesConsulted: string[];
   createdAt: string;      // ISO 8601
   lastActivity: string;   // ISO 8601
+  pendingFile?: {
+    name: string;
+    content: string;
+    question: string;
+    themesConsulted: string[];
+  };
 }
