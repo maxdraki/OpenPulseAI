@@ -13,6 +13,7 @@ import {
 } from "@openpulse/core";
 import { loadSchema } from "./schema.js";
 import { entryId, extractSources } from "./provenance.js";
+import { buildBacklinks } from "./backlinks.js";
 
 export async function synthesizeToPending(
   vault: Vault,
@@ -41,6 +42,9 @@ export async function synthesizeToPending(
     ...(await listThemes(vault)),
   ])];
 
+  // Load backlinks once for the whole run (shared by all themes in this batch)
+  const backlinks = await buildBacklinks(vault);
+
   const pending: PendingUpdate[] = [];
 
   for (const [theme, items] of byTheme) {
@@ -62,6 +66,25 @@ export async function synthesizeToPending(
       : "";
 
     const otherThemes = allThemeNames.filter((t) => t !== theme);
+
+    const inbound = backlinks.get(theme) ?? [];
+
+    // Themes sharing at least one source with this theme's existing content
+    const sharedSources = existing?.sources ?? [];
+    const sharingThemes: string[] = [];
+    if (sharedSources.length > 0) {
+      for (const name of allThemeNames) {
+        if (name === theme) continue;
+        const other = await readTheme(vault, name);
+        if (!other?.sources) continue;
+        if (other.sources.some((s) => sharedSources.includes(s))) sharingThemes.push(name);
+      }
+    }
+
+    const backlinkContext = [
+      inbound.length > 0 ? `This theme is linked from: ${inbound.map((t) => `[[${t}]]`).join(", ")}` : "",
+      sharingThemes.length > 0 ? `Themes that share sources with this one: ${sharingThemes.map((t) => `[[${t}]]`).join(", ")}` : "",
+    ].filter(Boolean).join("\n");
 
     const existingTokenEstimate = Math.ceil((existing?.content ?? "").length / 4);
     const maxTokens = Math.min(4096, Math.max(1024, existingTokenEstimate + 1024));
@@ -85,7 +108,7 @@ ${provenanceBlock}
 
 Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries and existing content above. Remove anything you cannot trace back to a specific source. If you are unsure whether something is real, leave it out.
 
-Other themes in the wiki: ${otherThemes.join(", ")}. Where content relates to another theme, add [[theme-name]] links.
+Other themes in the wiki: ${otherThemes.join(", ")}.${backlinkContext ? "\n\nContext for cross-references:\n" + backlinkContext + "\nWhen your update mentions content related to these themes, add [[wiki-links]]." : " Where content relates to another theme, add [[theme-name]] links."}
 
 Return ONLY the Markdown content, no fences or explanations.`,
       systemPrompt: `You are a work journal assistant. Your goal is to maintain an accurate, up-to-date status page for a specific project or topic. The user relies on these status pages to quickly understand what's happening across their projects.
