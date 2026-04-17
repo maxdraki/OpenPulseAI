@@ -263,3 +263,20 @@ describe("classifyEntries", () => {
     });
   });
 });
+
+describe("classifyEntries — orphan candidates", () => {
+  it("exposes orphanCandidates array (currently empty at default 0.7 confidence)", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["newtheme"], type: "project" }]),
+    } as any;
+    const entry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some meaningful activity with enough substantive lines so it survives preFilter. Line two. Line three. Line four. Line five. Committed changes.",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.orphanCandidates).toEqual([]);
+    // The entry goes to classified because 0.7 >= 0.5 threshold
+    expect(result.classified.length).toBeGreaterThan(0);
+  });
+});

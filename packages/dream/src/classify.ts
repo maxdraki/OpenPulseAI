@@ -225,6 +225,8 @@ export async function classifyEntries(
   const results: ClassificationResult[] = [];
   const proposedTypes: Record<string, ThemeType> = {};
   const conceptCandidatesMap: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
+  const orphanCandidatesList: ClassifyResult["orphanCandidates"] = [];
+  const ORPHAN_CONF_THRESHOLD = 0.5;
   const nowIso = new Date().toISOString();
   const existingThemeSet = new Set(existingThemes);
   const needsLlm: ActivityEntry[] = [];
@@ -313,15 +315,31 @@ Respond with ONLY a JSON array:
           const inferredType = (["project", "concept", "entity", "source-summary"].includes(p.type ?? ""))
             ? (p.type as ThemeType)
             : "project";
-          results.push({ entry: needsLlm[p.index], themes, confidence: 0.7 });
-          returnedIndexes.add(p.index);
-          // Record proposed types for new themes
-          for (const theme of themes) {
-            if (!existingThemeSet.has(theme)) {
-              proposedTypes[theme] = inferredType;
+          const llmConfidence = 0.7;
+
+          // If confidence is low AND all themes are new (no match to existing), route to orphan candidates
+          const anyExisting = themes.some((t) => existingThemeSet.has(t));
+          if (!anyExisting && llmConfidence < ORPHAN_CONF_THRESHOLD) {
+            orphanCandidatesList.push({
+              entryTimestamp: needsLlm[p.index].timestamp,
+              source: needsLlm[p.index].source,
+              log: needsLlm[p.index].log,
+              proposedThemes: themes,
+              confidence: llmConfidence,
+              deferredAt: new Date().toISOString(),
+            });
+            returnedIndexes.add(p.index);
+          } else {
+            results.push({ entry: needsLlm[p.index], themes, confidence: llmConfidence });
+            returnedIndexes.add(p.index);
+            for (const theme of themes) {
+              if (!existingThemeSet.has(theme)) {
+                proposedTypes[theme] = inferredType;
+              }
             }
           }
-          // Accumulate concept candidates suggested by the LLM
+
+          // Accumulate concept candidates suggested by the LLM (regardless of routing)
           if (Array.isArray(p.concept_candidates)) {
             for (const raw of p.concept_candidates) {
               const term = String(raw).trim();
@@ -361,7 +379,7 @@ Respond with ONLY a JSON array:
     classified: results,
     proposedTypes,
     conceptCandidates: conceptCandidatesMap,
-    orphanCandidates: [],       // populated in Task 6
+    orphanCandidates: orphanCandidatesList,
     themeMergeProposals: [],    // populated in Task 8
   };
 }
