@@ -918,6 +918,12 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
       timeout: 120000,
     });
   },
+  async runCompactionPipeline(_themes?: string[]): Promise<void> {
+    /* implemented in Task 16 */
+  },
+  async runSchemaEvolutionPipeline(): Promise<void> {
+    /* implemented in Task 16 */
+  },
   async getSkillNames(): Promise<string[]> {
     const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
     const userDir = join(VAULT_ROOT, "skills");

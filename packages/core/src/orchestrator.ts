@@ -48,11 +48,31 @@ export interface LintPipelineState {
   schedule: Schedule;       // default: { time: "20:00", days: ["sun"] }
 }
 
+export interface CompactionPipelineState {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: Schedule;
+  perThemeLastCompacted: Record<string, string>;
+  sizeQueue: string[];
+}
+
+export interface SchemaEvolutionPipelineState {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: Schedule;
+}
+
 export interface OrchestratorState {
   lastHeartbeat: string | null; // ISO 8601
   collectors: Record<string, CollectorState>;
   dreamPipeline: DreamPipelineState;
   lintPipeline: LintPipelineState;
+  compactionPipeline: CompactionPipelineState;
+  schemaEvolutionPipeline: SchemaEvolutionPipelineState;
 }
 
 export interface OrchestratorCallbacks {
@@ -62,6 +82,10 @@ export interface OrchestratorCallbacks {
   runDreamPipeline(): Promise<void>;
   /** Run the Lint Pipeline. Resolves when done. */
   runLintPipeline(): Promise<void>;
+  /** Run the Compaction Pipeline (optionally for specific themes). Resolves when done. */
+  runCompactionPipeline(themes?: string[]): Promise<void>;
+  /** Run the Schema Evolution Pipeline. Resolves when done. */
+  runSchemaEvolutionPipeline(): Promise<void>;
   /** Return currently known skill names. */
   getSkillNames(): Promise<string[]>;
 }
@@ -124,6 +148,7 @@ export function scheduleToCron(schedule: Schedule): string {
 
 /** Returns a fresh default OrchestratorState. */
 export function defaultState(): OrchestratorState {
+  const allDays = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
   return {
     lastHeartbeat: null,
     collectors: {},
@@ -140,6 +165,20 @@ export function defaultState(): OrchestratorState {
       lastResult: "never",
       schedule: { time: "20:00", days: ["sun"] },
     },
+    compactionPipeline: {
+      running: false,
+      lastRun: null,
+      lastResult: "never",
+      schedule: { time: "04:00", days: allDays },
+      perThemeLastCompacted: {},
+      sizeQueue: [],
+    },
+    schemaEvolutionPipeline: {
+      running: false,
+      lastRun: null,
+      lastResult: "never",
+      schedule: { time: "05:00", days: allDays },
+    },
   };
 }
 
@@ -151,15 +190,22 @@ function statePath(vaultRoot: string): string {
 export async function loadState(vaultRoot: string): Promise<OrchestratorState> {
   try {
     const raw = await readFile(statePath(vaultRoot), "utf-8");
-    const parsed = JSON.parse(raw) as OrchestratorState;
-    // Migrate: add lintPipeline if missing from old persisted state
-    if (!parsed.lintPipeline) {
-      parsed.lintPipeline = defaultState().lintPipeline;
-    }
+    const parsed = JSON.parse(raw) as Partial<OrchestratorState>;
+    const defaults = defaultState();
+    const merged: OrchestratorState = {
+      lastHeartbeat: parsed.lastHeartbeat ?? defaults.lastHeartbeat,
+      collectors: parsed.collectors ?? defaults.collectors,
+      dreamPipeline: parsed.dreamPipeline ?? defaults.dreamPipeline,
+      lintPipeline: parsed.lintPipeline ?? defaults.lintPipeline,
+      compactionPipeline: parsed.compactionPipeline ?? defaults.compactionPipeline,
+      schemaEvolutionPipeline: parsed.schemaEvolutionPipeline ?? defaults.schemaEvolutionPipeline,
+    };
     // Reset any stuck running flags — can happen if the server crashed mid-run
-    if (parsed.lintPipeline.running) parsed.lintPipeline.running = false;
-    if (parsed.dreamPipeline.running) parsed.dreamPipeline.running = false;
-    return parsed;
+    if (merged.lintPipeline.running) merged.lintPipeline.running = false;
+    if (merged.dreamPipeline.running) merged.dreamPipeline.running = false;
+    if (merged.compactionPipeline.running) merged.compactionPipeline.running = false;
+    if (merged.schemaEvolutionPipeline.running) merged.schemaEvolutionPipeline.running = false;
+    return merged;
   } catch {
     return defaultState();
   }
@@ -240,6 +286,8 @@ export class Orchestrator {
 
     // Schedule the lint pipeline
     this.scheduleLintPipeline();
+    this.scheduleCompactionPipeline();
+    this.scheduleSchemaEvolutionPipeline();
 
     // 60-second heartbeat
     this.heartbeatTimer = setInterval(() => {
@@ -627,5 +675,129 @@ export class Orchestrator {
       lp.running = false;
       await saveState(this.vaultRoot, this.state);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: compaction pipeline
+  // -------------------------------------------------------------------------
+
+  private scheduleCompactionPipeline(): void {
+    const cp = this.state.compactionPipeline;
+    const cronExpr = scheduleToCron(cp.schedule);
+    try {
+      const job = new Cron(cronExpr, {}, async () => {
+        await this.runCompact();
+      });
+      this.jobs.set("__compact__", [job]);
+    } catch (err) {
+      vaultLog("error", `[orchestrator] Bad cron for compaction: ${cronExpr}`, String(err)).catch(() => {});
+    }
+  }
+
+  private async runCompact(themes?: string[]): Promise<void> {
+    const cp = this.state.compactionPipeline;
+    if (cp.running) return;
+    const startedAt = new Date().toISOString();
+    cp.running = true;
+    await saveState(this.vaultRoot, this.state);
+    try {
+      await vaultLog("info", `[orchestrator] Running compaction pipeline${themes ? ` (themes: ${themes.join(",")})` : ""}`);
+      await this.callbacks.runCompactionPipeline(themes);
+      cp.lastRun = startedAt;
+      cp.lastResult = "success";
+      delete cp.lastError;
+      await vaultLog("info", "[orchestrator] Compaction pipeline succeeded");
+    } catch (err) {
+      cp.lastRun = startedAt;
+      cp.lastResult = "error";
+      cp.lastError = String(err);
+      await vaultLog("error", "[orchestrator] Compaction pipeline failed", String(err));
+    } finally {
+      cp.running = false;
+      await saveState(this.vaultRoot, this.state);
+    }
+  }
+
+  /** Manually trigger compaction, optionally for specific themes. */
+  async triggerCompact(themes?: string[]): Promise<void> {
+    await this.runCompact(themes);
+  }
+
+  /** Append themes to the size queue; caller may then invoke triggerCompact. */
+  async enqueueForCompaction(themes: string[]): Promise<void> {
+    const cp = this.state.compactionPipeline;
+    for (const t of themes) {
+      if (!cp.sizeQueue.includes(t)) cp.sizeQueue.push(t);
+    }
+    await saveState(this.vaultRoot, this.state);
+  }
+
+  getCompactionPipelineState(): CompactionPipelineState {
+    return JSON.parse(JSON.stringify(this.state.compactionPipeline));
+  }
+
+  async updateCompactionSchedule(schedule: Schedule): Promise<void> {
+    this.state.compactionPipeline.schedule = schedule;
+    const existing = this.jobs.get("__compact__");
+    if (existing) { for (const j of existing) j.stop(); this.jobs.delete("__compact__"); }
+    this.scheduleCompactionPipeline();
+    await saveState(this.vaultRoot, this.state);
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: schema-evolution pipeline
+  // -------------------------------------------------------------------------
+
+  private scheduleSchemaEvolutionPipeline(): void {
+    const sp = this.state.schemaEvolutionPipeline;
+    const cronExpr = scheduleToCron(sp.schedule);
+    try {
+      const job = new Cron(cronExpr, {}, async () => {
+        await this.runSchemaEvolve();
+      });
+      this.jobs.set("__schema_evolve__", [job]);
+    } catch (err) {
+      vaultLog("error", `[orchestrator] Bad cron for schema-evolve: ${cronExpr}`, String(err)).catch(() => {});
+    }
+  }
+
+  private async runSchemaEvolve(): Promise<void> {
+    const sp = this.state.schemaEvolutionPipeline;
+    if (sp.running) return;
+    const startedAt = new Date().toISOString();
+    sp.running = true;
+    await saveState(this.vaultRoot, this.state);
+    try {
+      await vaultLog("info", "[orchestrator] Running schema-evolve pipeline");
+      await this.callbacks.runSchemaEvolutionPipeline();
+      sp.lastRun = startedAt;
+      sp.lastResult = "success";
+      delete sp.lastError;
+      await vaultLog("info", "[orchestrator] Schema-evolve pipeline succeeded");
+    } catch (err) {
+      sp.lastRun = startedAt;
+      sp.lastResult = "error";
+      sp.lastError = String(err);
+      await vaultLog("error", "[orchestrator] Schema-evolve pipeline failed", String(err));
+    } finally {
+      sp.running = false;
+      await saveState(this.vaultRoot, this.state);
+    }
+  }
+
+  async triggerSchemaEvolve(): Promise<void> {
+    await this.runSchemaEvolve();
+  }
+
+  getSchemaEvolutionPipelineState(): SchemaEvolutionPipelineState {
+    return JSON.parse(JSON.stringify(this.state.schemaEvolutionPipeline));
+  }
+
+  async updateSchemaEvolutionSchedule(schedule: Schedule): Promise<void> {
+    this.state.schemaEvolutionPipeline.schedule = schedule;
+    const existing = this.jobs.get("__schema_evolve__");
+    if (existing) { for (const j of existing) j.stop(); this.jobs.delete("__schema_evolve__"); }
+    this.scheduleSchemaEvolutionPipeline();
+    await saveState(this.vaultRoot, this.state);
   }
 }
