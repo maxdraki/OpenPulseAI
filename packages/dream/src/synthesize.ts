@@ -9,6 +9,7 @@ import {
   type ThemeType,
   readTheme,
   listThemes,
+  stripCodeFences,
   vaultLog,
 } from "@openpulse/core";
 import { loadSchema } from "./schema.js";
@@ -38,9 +39,7 @@ Return ONLY a JSON array: [{"claim": "...", "sourceId": "${sourceId}", "confiden
 Return [] if the entry has no relevant facts.`;
   try {
     const response = await provider.complete({ model, prompt, temperature: 0 });
-    let jsonText = response.trim();
-    if (jsonText.startsWith("```")) jsonText = jsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-    const parsed = JSON.parse(jsonText);
+    const parsed = JSON.parse(stripCodeFences(response));
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((x): x is { claim: string; sourceId: string; confidence: "high" | "medium" | "low" } =>
       x && typeof x.claim === "string" && typeof x.sourceId === "string");

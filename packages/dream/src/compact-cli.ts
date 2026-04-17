@@ -4,13 +4,36 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   Vault, loadConfig, createProvider, initLogger, vaultLog,
-  listThemes, readTheme,
+  listThemes, readTheme, stripCodeFences,
 } from "@openpulse/core";
-import type { LlmProvider, PendingUpdate } from "@openpulse/core";
+import type { LlmProvider, PendingUpdate, ThemeDocument, ThemeType } from "@openpulse/core";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const VERBATIM_LIMIT = 14;
 const SKIP_DAYS = 7;
+
+/** Build a scheduled-compaction PendingUpdate preserving the source doc's metadata. */
+function buildCompactionUpdate(doc: ThemeDocument, theme: string, type: ThemeType | undefined, proposedContent: string): PendingUpdate {
+  return {
+    id: randomUUID(),
+    theme,
+    proposedContent,
+    previousContent: doc.content,
+    entries: [],
+    createdAt: new Date().toISOString(),
+    status: "pending",
+    batchId: new Date().toISOString(),
+    type,
+    compactionType: "scheduled",
+    sources: doc.sources,
+    related: doc.related,
+    created: doc.created,
+  };
+}
+
+async function writePending(vault: Vault, update: PendingUpdate): Promise<void> {
+  await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
+}
 
 export interface DatedSection { date: string; body: string; }
 
@@ -82,9 +105,7 @@ Return JSON: {"current_status": "...", "history": "..."}`,
 
   let parsed: { current_status: string; history: string };
   try {
-    let jsonText = response.trim();
-    if (jsonText.startsWith("```")) jsonText = jsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-    parsed = JSON.parse(jsonText);
+    parsed = JSON.parse(stripCodeFences(response));
   } catch {
     await vaultLog("warn", `[compact] LLM parse failed for ${theme}`);
     return false;
@@ -93,22 +114,7 @@ Return JSON: {"current_status": "...", "history": "..."}`,
   const verbatimText = verbatim.map((s) => `### ${s.date}\n${s.body}`).join("\n\n");
   const newContent = `## Current Status\n${parsed.current_status.trim()}\n\n## Activity Log\n\n${verbatimText}\n\n## History\n${parsed.history.trim()}\n`;
 
-  const update: PendingUpdate = {
-    id: randomUUID(),
-    theme,
-    proposedContent: newContent,
-    previousContent: doc.content,
-    entries: [],
-    createdAt: new Date().toISOString(),
-    status: "pending",
-    batchId: new Date().toISOString(),
-    type: "project",
-    compactionType: "scheduled",
-    sources: doc.sources,
-    related: doc.related,
-    created: doc.created,
-  };
-  await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
+  await writePending(vault, buildCompactionUpdate(doc, theme, "project", newContent));
   return true;
 }
 
@@ -138,22 +144,7 @@ Rewrite the page. Prefer newer facts where they contradict older ones. Preserve 
 Return ONLY the Markdown content, no fences.`,
   });
 
-  const update: PendingUpdate = {
-    id: randomUUID(),
-    theme,
-    proposedContent: response,
-    previousContent: doc.content,
-    entries: [],
-    createdAt: new Date().toISOString(),
-    status: "pending",
-    batchId: new Date().toISOString(),
-    type: doc.type,
-    compactionType: "scheduled",
-    sources: doc.sources,
-    related: doc.related,
-    created: doc.created,
-  };
-  await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
+  await writePending(vault, buildCompactionUpdate(doc, theme, doc.type, response));
   return true;
 }
 

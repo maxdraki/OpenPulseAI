@@ -21,6 +21,7 @@ import {
   initLogger,
   vaultLog,
   listThemes,
+  sanitizeThemeSlug,
 } from "@openpulse/core";
 import { runStructuralChecks, type StructuralIssue } from "./lint-structural.js";
 import { findStubCandidates, findContradictions, type SemanticIssue } from "./lint-semantic.js";
@@ -238,12 +239,7 @@ async function createStubPendingUpdates(vault: Vault, stubs: SemanticIssue[]): P
   if (stubs.length === 0) return;
   const batchId = new Date().toISOString();
   for (const stub of stubs) {
-    const themeName = (stub.term ?? "unknown").toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[\/\\]/g, "")
-      .replace(/\.\./g, "")
-      .replace(/^[-_.]+/, "")
-      .slice(0, 100);
+    const themeName = sanitizeThemeSlug(stub.term ?? "unknown");
     const proposedContent = `## Definition\n\nTODO: Define "${stub.term}".\n\n## Key Claims\n\n- _(to be filled in)_\n\n## Related Concepts\n\n## Sources\n`;
     const update = {
       id: randomUUID(),
@@ -276,13 +272,7 @@ async function createStubsFromConceptCandidates(vault: Vault): Promise<void> {
     const frequent = Object.entries(map).filter(([, v]) => v.count >= 3);
     const batchId = new Date().toISOString();
     for (const [term] of frequent) {
-      const themeName = term
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[\/\\]/g, "")
-        .replace(/\.\./g, "")
-        .replace(/^[-_.]+/, "")
-        .slice(0, 100);
+      const themeName = sanitizeThemeSlug(term);
       if (!themeName) continue;  // skip if sanitization zeroed it out
       const update = {
         id: randomUUID(),

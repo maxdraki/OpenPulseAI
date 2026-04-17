@@ -1,5 +1,5 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
-import { vaultLog } from "@openpulse/core";
+import { stripCodeFences, vaultLog } from "@openpulse/core";
 import { canonicalizeThemes } from "./canonicalize.js";
 
 /**
@@ -298,12 +298,7 @@ Respond with ONLY a JSON array:
       });
 
       // Strip markdown fences that LLMs sometimes add
-      let jsonText = responseText.trim();
-      if (jsonText.startsWith("```")) {
-        jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-      }
-
-      const parsed = JSON.parse(jsonText) as Array<{
+      const parsed = JSON.parse(stripCodeFences(responseText)) as Array<{
         index: number;
         themes: string[];
         type?: string;

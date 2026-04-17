@@ -1,4 +1,5 @@
 import type { LlmProvider } from "@openpulse/core";
+import { stripCodeFences } from "@openpulse/core";
 
 export interface CanonicalizationResult {
   redirects: Record<string, string>;
@@ -115,9 +116,7 @@ Existing: ${existing.join(", ")}
 Return ONLY a JSON array: [{"proposed": "...", "canonical": "..." | null}]
 Set canonical to null if no match.`;
       const response = await provider.complete({ model, prompt, temperature: 0 });
-      let jsonText = response.trim();
-      if (jsonText.startsWith("```")) jsonText = jsonText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-      const parsed = JSON.parse(jsonText) as Array<{ proposed: string; canonical: string | null }>;
+      const parsed = JSON.parse(stripCodeFences(response)) as Array<{ proposed: string; canonical: string | null }>;
       for (const item of parsed) {
         if (item.canonical && existing.includes(item.canonical)) {
           proposals.push({ proposed: item.proposed, canonical: item.canonical, reason: "llm" });

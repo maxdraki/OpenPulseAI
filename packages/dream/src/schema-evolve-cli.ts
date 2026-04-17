@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
-  Vault, loadConfig, createProvider, initLogger, vaultLog, listThemes, readTheme,
+  Vault, loadConfig, createProvider, initLogger, vaultLog, listThemes, readTheme, stripCodeFences,
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeType } from "@openpulse/core";
 
@@ -71,9 +71,7 @@ If no changes warranted, proposed_schema_content must be null.`;
     confidence: "high" | "medium" | "low";
   };
   try {
-    let j = response.trim();
-    if (j.startsWith("```")) j = j.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-    parsed = JSON.parse(j);
+    parsed = JSON.parse(stripCodeFences(response));
   } catch {
     await vaultLog("warn", "[schema-evolve] LLM parse failed");
     return false;

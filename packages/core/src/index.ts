@@ -19,6 +19,7 @@ export { loadConfig, DEFAULT_CONFIG } from "./config.js";
 export type { LlmProvider, CompletionParams } from "./llm/provider.js";
 export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";
+export { stripCodeFences } from "./llm/strip-fences.js";
 export { initLogger, vaultLog } from "./logger.js";
 export type { LogLevel, LogEntry } from "./logger.js";
 export {
@@ -42,3 +43,4 @@ export { checkEligibility, type EligibilityResult } from "./skills/eligibility.j
 export { runSkillByName, runDueSkills } from "./skills/run.js";
 export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./skills/security.js";
 export { mergeThemes, isSafeThemeName } from "./merge-themes.js";
+export { sanitizeThemeSlug } from "./theme-slug.js";

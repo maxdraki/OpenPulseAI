@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
-import { readAllThemes, readTheme } from "@openpulse/core";
+import type { PendingUpdate, Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
+import { readAllThemes, readTheme, sanitizeThemeSlug, stripCodeFences } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
 import { searchWarmFiles } from "../search.js";
 
@@ -51,9 +51,7 @@ Return ONLY JSON:
 }
 All fields null if verdict is "no".`,
     });
-    let j = response.trim();
-    if (j.startsWith("```")) j = j.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-    const parsed = JSON.parse(j) as JudgeResult;
+    const parsed = JSON.parse(stripCodeFences(response)) as JudgeResult;
     if (!["yes", "no", "maybe"].includes(parsed.verdict)) {
       return { verdict: "no", proposed_name: null, one_line_definition: null, refined_content: null };
     }
@@ -61,15 +59,6 @@ All fields null if verdict is "no".`,
   } catch {
     return { verdict: "no", proposed_name: null, one_line_definition: null, refined_content: null };
   }
-}
-
-function sanitizeSlug(name: string): string {
-  return name.trim().toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[\/\\]/g, "")
-    .replace(/\.\./g, "")
-    .replace(/^[-_.]+/, "")
-    .slice(0, 100);
 }
 
 export async function handleChatWithPulse(
@@ -83,18 +72,18 @@ export async function handleChatWithPulse(
 
   // If the user replies "file: yes" and session has a stashed pending file (from a "maybe"
   // judge verdict on the previous turn), create the pending concept update now.
-  if (session && /^file:\s*yes\b/i.test(input.message) && session.pendingFile) {
+  if (/^file:\s*yes\b/i.test(input.message) && session.pendingFile) {
     const pf = session.pendingFile;
-    const update = {
+    const update: PendingUpdate = {
       id: randomUUID(),
       theme: pf.name,
       proposedContent: pf.content,
-      previousContent: null as null,
-      entries: [] as [],
+      previousContent: null,
+      entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId: new Date().toISOString(),
-      type: "concept" as const,
+      type: "concept",
       related: pf.themesConsulted.length > 0 ? pf.themesConsulted : undefined,
       querybackSource: { question: pf.question, themesConsulted: pf.themesConsulted },
     };
@@ -177,26 +166,26 @@ ${context}`;
   let response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
 
   // Themes actually consulted in THIS turn (not cumulative across session).
-  const thisCallThemes = allThemes?.map((t) => t.theme) ?? [];
+  const thisCallThemes = allThemes.map((t) => t.theme);
 
   // Query-back: judge + refine when ≥ 2 themes consulted. Cheap LLM call decides
   // whether this answer is durable knowledge worth a concept page.
-  if (thisCallThemes.length >= 2 && session) {
+  if (thisCallThemes.length >= 2) {
     const judgment = await judgeAndRefine(provider, model, input.message, response, thisCallThemes);
 
     if (judgment.verdict === "yes" && judgment.proposed_name && judgment.refined_content) {
-      const themeName = sanitizeSlug(judgment.proposed_name);
-      const update = {
+      const themeName = sanitizeThemeSlug(judgment.proposed_name);
+      const update: PendingUpdate = {
         id: randomUUID(),
         theme: themeName,
         proposedContent: judgment.refined_content,
-        previousContent: null as null,
-        entries: [] as [],
+        previousContent: null,
+        entries: [],
         createdAt: new Date().toISOString(),
-        status: "pending" as const,
+        status: "pending",
         batchId: new Date().toISOString(),
-        type: "concept" as const,
-        related: thisCallThemes.length > 0 ? thisCallThemes : undefined,
+        type: "concept",
+        related: thisCallThemes,
         querybackSource: { question: input.message, themesConsulted: thisCallThemes },
       };
       await writeFile(
@@ -206,7 +195,7 @@ ${context}`;
       );
       response += `\n\n_Filed [[${themeName}]] as a pending concept page. Review it in the Control Center._`;
     } else if (judgment.verdict === "maybe" && judgment.proposed_name && judgment.refined_content) {
-      const slug = sanitizeSlug(judgment.proposed_name);
+      const slug = sanitizeThemeSlug(judgment.proposed_name);
       session.pendingFile = {
         name: slug,
         content: judgment.refined_content,
