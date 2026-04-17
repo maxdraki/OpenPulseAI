@@ -71,6 +71,22 @@ describe("classifyEntries", () => {
     expect(proposedTypes["hiring"]).toBeUndefined();
   });
 
+  it("accumulates concept candidates from LLM response", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["myproject"], type: "project", concept_candidates: ["barrier-pattern", "wiki-maturity"] }]),
+    } as any;
+    const entry: ActivityEntry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some activity about committed changes to myproject. Line two here. Line three here. Line four here. Line five here.",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.conceptCandidates["barrier-pattern"]).toBeDefined();
+    expect(result.conceptCandidates["barrier-pattern"].count).toBe(1);
+    expect(result.conceptCandidates["barrier-pattern"].sources).toContain("github-activity");
+    expect(result.conceptCandidates["wiki-maturity"]).toBeDefined();
+  });
+
   describe("preFilter", () => {
     it("strips lines with 'no activity' / 'inactive' / 'no changes' but keeps lines with actual work", async () => {
       const entries: ActivityEntry[] = [

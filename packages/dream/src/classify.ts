@@ -176,7 +176,21 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
 /** Return value of classifyEntries — includes proposed page types for new themes. */
 export interface ClassifyResult {
   classified: ClassificationResult[];
-  proposedTypes: Record<string, ThemeType>; // theme name → proposed type for new themes
+  proposedTypes: Record<string, ThemeType>;
+  conceptCandidates: Record<string, { count: number; sources: string[]; firstSeen: string }>;
+  orphanCandidates: Array<{
+    entryTimestamp: string;
+    source?: string;
+    log: string;
+    proposedThemes: string[];
+    confidence: number;
+    deferredAt: string;
+  }>;
+  themeMergeProposals: Array<{
+    proposed: string;
+    canonical: string;
+    reason: "levenshtein" | "prefix" | "llm";
+  }>;
 }
 
 /**
@@ -210,6 +224,8 @@ export async function classifyEntries(
 
   const results: ClassificationResult[] = [];
   const proposedTypes: Record<string, ThemeType> = {};
+  const conceptCandidatesMap: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
+  const nowIso = new Date().toISOString();
   const existingThemeSet = new Set(existingThemes);
   const needsLlm: ActivityEntry[] = [];
 
@@ -268,7 +284,12 @@ Rules:
 Entries:
 ${entriesText}
 
-Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "project"}]`,
+For each entry also identify 0-3 "concept_candidates" — terms, patterns, or entities
+that appear prominently in the entry and might deserve their own wiki page (e.g.
+"barrier-pattern", "wiki-maturity"). These are suggestions, not themes.
+
+Respond with ONLY a JSON array:
+[{"index": 0, "themes": ["name1"], "type": "project", "concept_candidates": ["term-a", "term-b"]}]`,
         temperature: 0,
       });
 
@@ -278,7 +299,12 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
         jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
       }
 
-      const parsed = JSON.parse(jsonText) as Array<{ index: number; themes: string[]; type?: string }>;
+      const parsed = JSON.parse(jsonText) as Array<{
+        index: number;
+        themes: string[];
+        type?: string;
+        concept_candidates?: string[];
+      }>;
       const returnedIndexes = new Set<number>();
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
@@ -293,6 +319,21 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
           for (const theme of themes) {
             if (!existingThemeSet.has(theme)) {
               proposedTypes[theme] = inferredType;
+            }
+          }
+          // Accumulate concept candidates suggested by the LLM
+          if (Array.isArray(p.concept_candidates)) {
+            for (const raw of p.concept_candidates) {
+              const term = String(raw).trim();
+              if (!term || !isValidThemeName(term)) continue;
+              const source = needsLlm[p.index].source ?? "unknown";
+              const existing = conceptCandidatesMap[term];
+              if (existing) {
+                existing.count += 1;
+                if (!existing.sources.includes(source)) existing.sources.push(source);
+              } else {
+                conceptCandidatesMap[term] = { count: 1, sources: [source], firstSeen: nowIso };
+              }
             }
           }
         }
@@ -316,5 +357,11 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
     }
   }
 
-  return { classified: results, proposedTypes };
+  return {
+    classified: results,
+    proposedTypes,
+    conceptCandidates: conceptCandidatesMap,
+    orphanCandidates: [],       // populated in Task 6
+    themeMergeProposals: [],    // populated in Task 8
+  };
 }
