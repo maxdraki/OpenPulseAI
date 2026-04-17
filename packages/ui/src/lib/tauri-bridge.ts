@@ -17,6 +17,17 @@ export interface PendingUpdate {
   createdAt: string;
   status: string;
   batchId?: string;
+  // Sub-kind fields — at most one is set per update
+  lintFix?: "stubs" | "orphans" | "merge" | "delete" | "rename";
+  compactionType?: "scheduled" | "size";
+  schemaEvolution?: {
+    rationale: Array<{ change: string; evidence: string }>;
+    confidence: "high" | "medium" | "low";
+  };
+  querybackSource?: {
+    question: string;
+    themesConsulted: string[];
+  };
 }
 
 // Detect Tauri runtime — exported for use by logger.ts
@@ -288,12 +299,32 @@ export interface OrchestratorLintPipeline {
   schedule: { time: string; days: string[] };
 }
 
+export interface OrchestratorCompactionPipeline {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: { time: string; days: string[] };
+  perThemeLastCompacted: Record<string, string>;
+  sizeQueue: string[];
+}
+
+export interface OrchestratorSchemaEvolutionPipeline {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: { time: string; days: string[] };
+}
+
 export interface OrchestratorStatus {
   running: boolean;
   lastHeartbeat: string;
   collectors: Record<string, OrchestratorCollector>;
   dreamPipeline: OrchestratorDreamPipeline;
   lintPipeline?: OrchestratorLintPipeline;
+  compactionPipeline?: OrchestratorCompactionPipeline;
+  schemaEvolutionPipeline?: OrchestratorSchemaEvolutionPipeline;
 }
 
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {

@@ -388,6 +388,11 @@ body {
 .type-concept    { background: color-mix(in srgb, #8b5cf6 15%, transparent); color: #8b5cf6; }
 .type-entity     { background: color-mix(in srgb, #f59e0b 15%, transparent); color: #d97706; }
 .type-source-summary { background: color-mix(in srgb, #10b981 15%, transparent); color: #059669; }
+/* Sub-kind badges (compaction / schema evolution / queryback / lint-fix) */
+.type-compact    { background: color-mix(in srgb, #0ea5e9 18%, transparent); color: #0369a1; }
+.type-schema     { background: color-mix(in srgb, #ec4899 18%, transparent); color: #be185d; }
+.type-chat       { background: color-mix(in srgb, #6366f1 18%, transparent); color: #4338ca; }
+.type-lint       { background: color-mix(in srgb, #d97706 18%, transparent); color: #b45309; }
 
 a.wiki-link {
   color: var(--accent);

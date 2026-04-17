@@ -1,4 +1,6 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
+import { stripCodeFences, vaultLog } from "@openpulse/core";
+import { canonicalizeThemes } from "./canonicalize.js";
 
 /**
  * Common English words that should never become theme names.
@@ -94,6 +96,20 @@ function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
       const withoutOrphans = stripOrphanedHeadings(filtered.join("\n")).trim();
       if (!withoutOrphans || !isSubstantive(withoutOrphans)) return null;
 
+      // Entry-level drop: if we have fewer than 5 substantive lines and no activity tokens, it's noise.
+      const substantiveCount = withoutOrphans.split("\n").filter((line) => {
+        const t = line.trim();
+        if (!t || t.length < 5) return false;
+        if (t.startsWith("#")) return false;
+        if (LABEL_ONLY_RE.test(t)) return false;
+        if (EMPTY_BULLET_RE.test(t)) return false;
+        return true;
+      }).length;
+      const ACTIVITY_TOKEN_RE = /(modified|changed|added|created|updated|committed|pushed|merged|commit|PR |pull|issue|#\d+)/i;
+      if (substantiveCount < 5 && !ACTIVITY_TOKEN_RE.test(withoutOrphans)) {
+        return null;
+      }
+
       return { ...entry, log: withoutOrphans };
     })
     .filter((e): e is ActivityEntry => e !== null);
@@ -171,7 +187,21 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
 /** Return value of classifyEntries — includes proposed page types for new themes. */
 export interface ClassifyResult {
   classified: ClassificationResult[];
-  proposedTypes: Record<string, ThemeType>; // theme name → proposed type for new themes
+  proposedTypes: Record<string, ThemeType>;
+  conceptCandidates: Record<string, { count: number; sources: string[]; firstSeen: string }>;
+  orphanCandidates: Array<{
+    entryTimestamp: string;
+    source?: string;
+    log: string;
+    proposedThemes: string[];
+    confidence: number;
+    deferredAt: string;
+  }>;
+  themeMergeProposals: Array<{
+    proposed: string;
+    canonical: string;
+    reason: "levenshtein" | "prefix" | "llm";
+  }>;
 }
 
 /**
@@ -205,6 +235,10 @@ export async function classifyEntries(
 
   const results: ClassificationResult[] = [];
   const proposedTypes: Record<string, ThemeType> = {};
+  const conceptCandidatesMap: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
+  const orphanCandidatesList: ClassifyResult["orphanCandidates"] = [];
+  const ORPHAN_CONF_THRESHOLD = 0.5;
+  const nowIso = new Date().toISOString();
   const existingThemeSet = new Set(existingThemes);
   const needsLlm: ActivityEntry[] = [];
 
@@ -263,17 +297,22 @@ Rules:
 Entries:
 ${entriesText}
 
-Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "project"}]`,
+For each entry also identify 0-3 "concept_candidates" — terms, patterns, or entities
+that appear prominently in the entry and might deserve their own wiki page (e.g.
+"barrier-pattern", "wiki-maturity"). These are suggestions, not themes.
+
+Respond with ONLY a JSON array:
+[{"index": 0, "themes": ["name1"], "type": "project", "concept_candidates": ["term-a", "term-b"]}]`,
         temperature: 0,
       });
 
       // Strip markdown fences that LLMs sometimes add
-      let jsonText = responseText.trim();
-      if (jsonText.startsWith("```")) {
-        jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-      }
-
-      const parsed = JSON.parse(jsonText) as Array<{ index: number; themes: string[]; type?: string }>;
+      const parsed = JSON.parse(stripCodeFences(responseText)) as Array<{
+        index: number;
+        themes: string[];
+        type?: string;
+        concept_candidates?: string[];
+      }>;
       const returnedIndexes = new Set<number>();
       for (const p of parsed) {
         if (p.index >= 0 && p.index < needsLlm.length) {
@@ -282,12 +321,42 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
           const inferredType = (["project", "concept", "entity", "source-summary"].includes(p.type ?? ""))
             ? (p.type as ThemeType)
             : "project";
-          results.push({ entry: needsLlm[p.index], themes, confidence: 0.7 });
-          returnedIndexes.add(p.index);
-          // Record proposed types for new themes
-          for (const theme of themes) {
-            if (!existingThemeSet.has(theme)) {
-              proposedTypes[theme] = inferredType;
+          const anyExisting = themes.some((t) => existingThemeSet.has(t));
+          const llmConfidence = anyExisting ? 0.7 : 0.4;
+          // If confidence is low AND all themes are new (no match to existing), route to orphan candidates
+          if (!anyExisting && llmConfidence < ORPHAN_CONF_THRESHOLD) {
+            orphanCandidatesList.push({
+              entryTimestamp: needsLlm[p.index].timestamp,
+              source: needsLlm[p.index].source,
+              log: needsLlm[p.index].log,
+              proposedThemes: themes,
+              confidence: llmConfidence,
+              deferredAt: new Date().toISOString(),
+            });
+            returnedIndexes.add(p.index);
+          } else {
+            results.push({ entry: needsLlm[p.index], themes, confidence: llmConfidence });
+            returnedIndexes.add(p.index);
+            for (const theme of themes) {
+              if (!existingThemeSet.has(theme)) {
+                proposedTypes[theme] = inferredType;
+              }
+            }
+          }
+
+          // Accumulate concept candidates suggested by the LLM (regardless of routing)
+          if (Array.isArray(p.concept_candidates)) {
+            for (const raw of p.concept_candidates) {
+              const term = String(raw).trim();
+              if (!term || !isValidThemeName(term)) continue;
+              const source = needsLlm[p.index].source ?? "unknown";
+              const existing = conceptCandidatesMap[term];
+              if (existing) {
+                existing.count += 1;
+                if (!existing.sources.includes(source)) existing.sources.push(source);
+              } else {
+                conceptCandidatesMap[term] = { count: 1, sources: [source], firstSeen: nowIso };
+              }
             }
           }
         }
@@ -301,6 +370,7 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
       }
     } catch (err) {
       console.error("[classify] LLM classification failed:", err);
+      await vaultLog("error", "[classify] LLM classification failed, routing entries to uncategorized", String(err));
       for (const entry of needsLlm) {
         results.push({
           entry,
@@ -311,5 +381,28 @@ Respond with ONLY a JSON array: [{"index": 0, "themes": ["name1"], "type": "proj
     }
   }
 
-  return { classified: results, proposedTypes };
+  // Canonicalization: collect all theme names in classified results, redirect to existing canonical names
+  const allProposed = [...new Set(results.flatMap((r) => r.themes))];
+  const canonicalization = await canonicalizeThemes(allProposed, existingThemes, provider, model);
+
+  // Apply redirects (silent merges): rewrite theme names in classified results
+  for (const r of results) {
+    r.themes = r.themes.map((t) => canonicalization.redirects[t] ?? t);
+  }
+
+  // Apply redirects to proposedTypes: move type info from source → canonical, delete source key
+  for (const [from, to] of Object.entries(canonicalization.redirects)) {
+    if (proposedTypes[from] && !proposedTypes[to]) {
+      proposedTypes[to] = proposedTypes[from];
+    }
+    delete proposedTypes[from];
+  }
+
+  return {
+    classified: results,
+    proposedTypes,
+    conceptCandidates: conceptCandidatesMap,
+    orphanCandidates: orphanCandidatesList,
+    themeMergeProposals: canonicalization.proposals,
+  };
 }

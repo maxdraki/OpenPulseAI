@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
@@ -108,5 +108,139 @@ describe("synthesizeToPending", () => {
         prompt: expect.stringContaining("Other themes in the wiki"),
       })
     );
+  });
+
+  it("runs two LLM calls per entry for concept pages (pass 1 + pass 2)", async () => {
+    const provider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce('[{"claim":"X is a pattern","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce(
+          "## Definition\nX is a pattern. ^[src:2026-04-17-github-activity]\n## Key Claims\n## Related Concepts\n## Sources"
+        ),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: {
+          timestamp: "2026-04-17T00:00:00Z",
+          log: "X is a pattern used in Y.",
+          source: "github-activity",
+        },
+        themes: ["x-pattern"],
+        confidence: 0.95,
+      },
+    ];
+
+    const pending = await synthesizeToPending(
+      vault,
+      classified,
+      provider,
+      "gpt",
+      { "x-pattern": "concept" }
+    );
+
+    expect(provider.complete).toHaveBeenCalledTimes(2);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].proposedContent).toContain("X is a pattern");
+
+    const facts = await readFile(
+      join(vault.warmDir, "_facts", "x-pattern.jsonl"),
+      "utf-8"
+    );
+    expect(facts).toContain("X is a pattern");
+    expect(facts).toContain("2026-04-17-github-activity");
+  });
+
+  it("runs two LLM calls per entry for entity pages (pass 1 + pass 2)", async () => {
+    const provider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce('[{"claim":"Alice is an engineer","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce(
+          "## Overview\nAlice is an engineer. ^[src:2026-04-17-github-activity]\n## Interactions\n## Sources"
+        ),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: {
+          timestamp: "2026-04-17T00:00:00Z",
+          log: "Met with Alice about the project.",
+          source: "github-activity",
+        },
+        themes: ["alice"],
+        confidence: 0.95,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", { alice: "entity" });
+
+    expect(provider.complete).toHaveBeenCalledTimes(2);
+
+    const facts = await readFile(
+      join(vault.warmDir, "_facts", "alice.jsonl"),
+      "utf-8"
+    );
+    expect(facts).toContain("Alice is an engineer");
+  });
+
+  it("skips two-pass for project type (single LLM call)", async () => {
+    const provider = {
+      complete: vi
+        .fn()
+        .mockResolvedValue(
+          "## Current Status\nProgress.\n## Activity Log\n### 2026-04-17\n- Change."
+        ),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: {
+          timestamp: "2026-04-17T00:00:00Z",
+          log: "Did something",
+          source: "github-activity",
+        },
+        themes: ["my-project"],
+        confidence: 0.95,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", {
+      "my-project": "project",
+    });
+
+    expect(provider.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes 'No durable claims yet.'-style output gracefully when pass 1 returns []", async () => {
+    const provider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce("[]")
+        .mockResolvedValueOnce(
+          "## Definition\nNo durable claims yet.\n## Key Claims\n## Related Concepts\n## Sources"
+        ),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: {
+          timestamp: "2026-04-17T00:00:00Z",
+          log: "Ambient mention with no facts.",
+          source: "github-activity",
+        },
+        themes: ["empty-concept"],
+        confidence: 0.9,
+      },
+    ];
+
+    const pending = await synthesizeToPending(
+      vault,
+      classified,
+      provider,
+      "gpt",
+      { "empty-concept": "concept" }
+    );
+
+    expect(provider.complete).toHaveBeenCalledTimes(2);
+    expect(pending[0].proposedContent).toContain("No durable claims yet");
   });
 });

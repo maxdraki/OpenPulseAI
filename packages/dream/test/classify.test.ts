@@ -9,9 +9,9 @@ function mockProvider(responseText: string): LlmProvider {
 describe("classifyEntries", () => {
   it("classifies entries using LLM provider", async () => {
     const entries: ActivityEntry[] = [
-      { timestamp: "2026-04-03T10:00:00Z", log: "Refactored login page", theme: "project-auth" },
-      { timestamp: "2026-04-03T11:00:00Z", log: "Posted job listing for senior dev" },
-      { timestamp: "2026-04-03T12:00:00Z", log: "Fixed JWT token refresh bug" },
+      { timestamp: "2026-04-03T10:00:00Z", log: "Refactored login page; updated auth middleware", theme: "project-auth" },
+      { timestamp: "2026-04-03T11:00:00Z", log: "Posted job listing for senior dev; updated hiring board" },
+      { timestamp: "2026-04-03T12:00:00Z", log: "Fixed JWT token refresh bug; committed to auth repo" },
     ];
     const themes = ["project-auth", "hiring"];
 
@@ -46,13 +46,15 @@ describe("classifyEntries", () => {
 
   it("returns proposedTypes for new themes", async () => {
     const entries: ActivityEntry[] = [
-      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev" },
+      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev; updated hiring board and anchored the work in existing-anchor" },
     ];
     const provider = mockProvider(
-      JSON.stringify([{ index: 0, themes: ["hiring"], type: "concept" }])
+      JSON.stringify([{ index: 0, themes: ["existing-anchor", "hiring"], type: "concept" }])
     );
 
-    const { classified, proposedTypes } = await classifyEntries(entries, [], provider, "test-model");
+    // Pass an existing theme so the LLM-proposed entry stays in classified
+    // (the orphan router sends entries with entirely-new themes to orphanCandidates instead)
+    const { classified, proposedTypes } = await classifyEntries(entries, ["existing-anchor"], provider, "test-model");
 
     expect(classified).toHaveLength(1);
     expect(proposedTypes["hiring"]).toBe("concept");
@@ -69,6 +71,22 @@ describe("classifyEntries", () => {
     const { proposedTypes } = await classifyEntries(entries, ["hiring"], provider, "test-model");
 
     expect(proposedTypes["hiring"]).toBeUndefined();
+  });
+
+  it("accumulates concept candidates from LLM response", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["myproject"], type: "project", concept_candidates: ["barrier-pattern", "wiki-maturity"] }]),
+    } as any;
+    const entry: ActivityEntry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some activity about committed changes to myproject. Line two here. Line three here. Line four here. Line five here.",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.conceptCandidates["barrier-pattern"]).toBeDefined();
+    expect(result.conceptCandidates["barrier-pattern"].count).toBe(1);
+    expect(result.conceptCandidates["barrier-pattern"].sources).toContain("github-activity");
+    expect(result.conceptCandidates["wiki-maturity"]).toBeDefined();
   });
 
   describe("preFilter", () => {
@@ -205,5 +223,77 @@ describe("classifyEntries", () => {
       expect(classified).toHaveLength(1);
       expect(classified[0].themes).toContain("my-service");
     });
+  });
+
+  describe("classifyEntries — entry-level preFilter drop", () => {
+    it("drops entries that have fewer than 5 substantive lines and no activity tokens", async () => {
+      const entry: ActivityEntry = {
+        timestamp: "2026-04-17T00:00:00Z",
+        log: "## Status\n- **Repo:** foo\n- inactive\n",
+        source: "github-activity",
+      };
+      const provider = mockProvider("[]");
+      const result = await classifyEntries([entry], [], provider, "gpt");
+      expect(result.classified).toHaveLength(0);
+    });
+
+    it("keeps entries with commit/PR/merge tokens even if short", async () => {
+      const entry: ActivityEntry = {
+        timestamp: "2026-04-17T00:00:00Z",
+        log: "Merged PR #47\nCommit abc123",
+        source: "github-activity",
+      };
+      const provider = mockProvider("[]");
+      const result = await classifyEntries([entry], [], provider, "gpt");
+      // Short entries with activity tokens survive preFilter; may still be filtered later, but not dropped here
+      // This test just verifies preFilter itself does not drop them
+      // Since mockProvider returns [], classifyEntries might route them to uncategorized — we just check they weren't silently zeroed by preFilter
+      // We assert either classified has them OR the mock LLM path returned a record for them
+      const totalRoutedEntries = result.classified.length;
+      expect(totalRoutedEntries).toBeGreaterThan(0);
+    });
+
+    it("keeps entries with enough substantive lines even without activity tokens", async () => {
+      const entry: ActivityEntry = {
+        timestamp: "2026-04-17T00:00:00Z",
+        log: "Line one has content.\nLine two has content.\nLine three has content.\nLine four has content.\nLine five has content.",
+        source: "folder-watcher",
+      };
+      const provider = mockProvider("[]");
+      const result = await classifyEntries([entry], [], provider, "gpt");
+      expect(result.classified.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("classifyEntries — orphan candidates", () => {
+  it("routes LLM-only entries with entirely-new themes to orphanCandidates (confidence < 0.5)", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["brand-new-theme"], type: "project" }]),
+    } as any;
+    const entry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some meaningful activity with enough substantive lines so it survives preFilter. Line two. Line three. Line four. Line five. Committed changes.",
+      source: "github-activity",
+    };
+    // No existing themes — so the proposed theme has no anchor
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.orphanCandidates.length).toBe(1);
+    expect(result.orphanCandidates[0].proposedThemes).toContain("brand-new-theme");
+    expect(result.classified.length).toBe(0);
+  });
+
+  it("keeps LLM entries in classified when at least one theme matches existing", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["existing-theme", "new-theme"], type: "project" }]),
+    } as any;
+    const entry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some meaningful activity with enough substantive lines so it survives preFilter. Line two. Line three. Line four. Line five. Committed changes.",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], ["existing-theme"], provider, "gpt");
+    expect(result.orphanCandidates.length).toBe(0);
+    expect(result.classified.length).toBe(1);
   });
 });

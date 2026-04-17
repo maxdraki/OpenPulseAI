@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
-import { readAllThemes, readTheme } from "@openpulse/core";
+import type { PendingUpdate, Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
+import { readAllThemes, readTheme, sanitizeThemeSlug, stripCodeFences } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
 import { searchWarmFiles } from "../search.js";
 
@@ -16,6 +16,51 @@ export interface ChatWithPulseResult {
   sessionId: string;
 }
 
+interface JudgeResult {
+  verdict: "yes" | "no" | "maybe";
+  proposed_name: string | null;
+  one_line_definition: string | null;
+  refined_content: string | null;
+}
+
+async function judgeAndRefine(
+  provider: LlmProvider,
+  model: string,
+  question: string,
+  answer: string,
+  themesConsulted: string[],
+): Promise<JudgeResult> {
+  try {
+    const response = await provider.complete({
+      model,
+      temperature: 0,
+      prompt: `Question: ${question}
+
+Answer: ${answer}
+
+Themes consulted: ${themesConsulted.join(", ")}
+
+Is this answer durable, reusable knowledge worth a wiki concept page, or ephemeral Q&A?
+
+Return ONLY JSON:
+{
+  "verdict": "yes" | "no" | "maybe",
+  "proposed_name": <kebab-case slug> | null,
+  "one_line_definition": <string> | null,
+  "refined_content": <full concept-page markdown with "## Definition", "## Key Claims", "## Related Concepts", "## Sources" sections> | null
+}
+All fields null if verdict is "no".`,
+    });
+    const parsed = JSON.parse(stripCodeFences(response)) as JudgeResult;
+    if (!["yes", "no", "maybe"].includes(parsed.verdict)) {
+      return { verdict: "no", proposed_name: null, one_line_definition: null, refined_content: null };
+    }
+    return parsed;
+  } catch {
+    return { verdict: "no", proposed_name: null, one_line_definition: null, refined_content: null };
+  }
+}
+
 export async function handleChatWithPulse(
   vault: Vault,
   provider: LlmProvider,
@@ -25,52 +70,33 @@ export async function handleChatWithPulse(
   let session = input.sessionId ? await loadSession(vault, input.sessionId) : null;
   if (!session) session = createNewSession();
 
-  // Handle "file: <page-name>" replies — create a concept page pending update
-  const fileMatch = input.message.match(/^file:\s*(.+)$/i);
-  if (fileMatch) {
-    const proposedName = fileMatch[1].trim().toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[\/\\]/g, "")
-      .replace(/\.\./g, "")
-      .replace(/^[-_.]+/, "")
-      .slice(0, 100);
-    // Find the last assistant message that contained a file-this-answer offer — that's
-    // the answer we want to capture, not a subsequent follow-up reply.
-    const assistantMessages = session.messages.filter((m) => m.role === "assistant");
-    const sourceMessage = [...assistantMessages].reverse().find((m) => m.content.includes("_This answer draws")) ??
-      assistantMessages.at(-1);
-    const cleanAnswer = (sourceMessage?.content ?? "").replace(/_This answer draws.*$/s, "").trim();
-
-    // Build sources list from themes consulted in this session
-    const sourcesSection = session.themesConsulted.length > 0
-      ? `\n\n## Sources\n\nDerived from: ${session.themesConsulted.map(t => `[[${t}]]`).join(", ")}`
-      : "\n\n## Sources\n";
-
-    const proposedContent = `## Definition\n\n${cleanAnswer}\n\n## Key Claims\n\n## Related Concepts\n${sourcesSection}\n`;
-    const update = {
+  // If the user replies "file: yes" and session has a stashed pending file (from a "maybe"
+  // judge verdict on the previous turn), create the pending concept update now.
+  if (/^file:\s*yes\b/i.test(input.message) && session.pendingFile) {
+    const pf = session.pendingFile;
+    const update: PendingUpdate = {
       id: randomUUID(),
-      theme: proposedName,
-      proposedContent,
-      previousContent: null as null,
-      entries: [] as [],
+      theme: pf.name,
+      proposedContent: pf.content,
+      previousContent: null,
+      entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
-      type: "concept" as const,
+      status: "pending",
       batchId: new Date().toISOString(),
-      related: session.themesConsulted.length > 0 ? session.themesConsulted : undefined,
+      type: "concept",
+      related: pf.themesConsulted.length > 0 ? pf.themesConsulted : undefined,
+      querybackSource: { question: pf.question, themesConsulted: pf.themesConsulted },
     };
-
     await writeFile(
       join(vault.pendingDir, `${update.id}.json`),
       JSON.stringify(update, null, 2),
-      "utf-8"
+      "utf-8",
     );
-
-    const confirmText = `Created pending concept page "[[${proposedName}]]". Review it in the Control Center.`;
+    session.pendingFile = undefined;
+    const confirmText = `Filed [[${pf.name}]] as a pending concept page. Review it in the Control Center.`;
     session.messages.push({ role: "user", content: input.message });
     session.messages.push({ role: "assistant", content: confirmText });
     await saveSession(vault, session);
-
     return {
       content: [{ type: "text" as const, text: `${confirmText}\n\n_[session: ${session.id}]_` }],
       sessionId: session.id,
@@ -137,21 +163,55 @@ Answer questions based ONLY on the knowledge below. Be concise and accurate. If 
 
 ${context}`;
 
-  const response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
+  let response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
 
-  // Count themes consulted in this turn
-  const thisCallThemes = allThemes?.map((t) => t.theme) ?? [];
-  const fileOffer = thisCallThemes.length >= 3
-    ? `\n\n_This answer draws from ${thisCallThemes.length} themes (${thisCallThemes.slice(0, 3).map((n) => `[[${n}]]`).join(", ")}${thisCallThemes.length > 3 ? "…" : ""}). File it as a new concept page? Reply with \`file: <page-name>\` to create a pending concept page._`
-    : "";
+  // Themes actually consulted in THIS turn (not cumulative across session).
+  const thisCallThemes = allThemes.map((t) => t.theme);
 
-  const fullResponse = response + fileOffer;
+  // Query-back: judge + refine when ≥ 2 themes consulted. Cheap LLM call decides
+  // whether this answer is durable knowledge worth a concept page.
+  if (thisCallThemes.length >= 2) {
+    const judgment = await judgeAndRefine(provider, model, input.message, response, thisCallThemes);
 
-  session.messages.push({ role: "assistant", content: fullResponse });
+    if (judgment.verdict === "yes" && judgment.proposed_name && judgment.refined_content) {
+      const themeName = sanitizeThemeSlug(judgment.proposed_name);
+      const update: PendingUpdate = {
+        id: randomUUID(),
+        theme: themeName,
+        proposedContent: judgment.refined_content,
+        previousContent: null,
+        entries: [],
+        createdAt: new Date().toISOString(),
+        status: "pending",
+        batchId: new Date().toISOString(),
+        type: "concept",
+        related: thisCallThemes,
+        querybackSource: { question: input.message, themesConsulted: thisCallThemes },
+      };
+      await writeFile(
+        join(vault.pendingDir, `${update.id}.json`),
+        JSON.stringify(update, null, 2),
+        "utf-8",
+      );
+      response += `\n\n_Filed [[${themeName}]] as a pending concept page. Review it in the Control Center._`;
+    } else if (judgment.verdict === "maybe" && judgment.proposed_name && judgment.refined_content) {
+      const slug = sanitizeThemeSlug(judgment.proposed_name);
+      session.pendingFile = {
+        name: slug,
+        content: judgment.refined_content,
+        question: input.message,
+        themesConsulted: thisCallThemes,
+      };
+      response += `\n\n_This looks like durable knowledge. Reply \`file: yes\` to save as [[${slug}]]._`;
+    }
+    // verdict === "no": do nothing (no noise in response)
+  }
+
+  session.messages.push({ role: "assistant", content: response });
   await saveSession(vault, session);
 
   return {
-    content: [{ type: "text" as const, text: `${fullResponse}\n\n_[session: ${session.id}]_` }],
+    content: [{ type: "text" as const, text: `${response}\n\n_[session: ${session.id}]_` }],
     sessionId: session.id,
   };
 }

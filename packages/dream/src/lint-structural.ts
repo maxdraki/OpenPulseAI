@@ -2,12 +2,21 @@ import { readFile } from "node:fs/promises";
 import type { Vault } from "@openpulse/core";
 import { listThemes, readTheme } from "@openpulse/core";
 import { buildBacklinks } from "./backlinks.js";
+import { findFuzzyMatches } from "./canonicalize.js";
 
 /**
  * Structural issue found in a theme file.
  */
 export interface StructuralIssue {
-  type: "broken-link" | "orphan" | "schema-noncompliant" | "stale" | "duplicate-date";
+  type:
+    | "broken-link"
+    | "orphan"
+    | "schema-noncompliant"
+    | "stale"
+    | "duplicate-date"
+    | "low-value"
+    | "duplicate-theme"
+    | "low-provenance";
   theme: string;   // the theme with the issue
   detail: string;  // human-readable description
   target?: string; // for broken-link: the missing link target
@@ -82,7 +91,18 @@ export async function runStructuralChecks(vault: Vault): Promise<StructuralIssue
     if (duplicateDateIssue) {
       issues.push(duplicateDateIssue);
     }
+
+    // Check 6: Low-value page
+    const lowValueIssue = checkLowValue(theme, doc.content);
+    if (lowValueIssue) issues.push(lowValueIssue);
+
+    // Check 8: Low provenance
+    const lowProv = checkLowProvenance(theme, doc.content);
+    if (lowProv) issues.push(lowProv);
   }
+
+  // Check 7: Duplicate themes (pair-wise, done outside per-theme loop)
+  issues.push(...checkDuplicateThemes(themeNames));
 
   return issues;
 }
@@ -175,6 +195,66 @@ function checkDuplicateDates(theme: string, content: string): StructuralIssue | 
       return { type: "duplicate-date", theme, detail: `Duplicate dated section: ### ${match[1]}` };
     }
     seenDates.add(match[1]);
+  }
+  return null;
+}
+
+/**
+ * Check 6: Low-value page.
+ * Flags a theme when content is too short, or when all provenance markers
+ * refer to a single source AND the page has only a handful of bullets.
+ */
+function checkLowValue(theme: string, content: string): StructuralIssue | null {
+  if (content.length < 250) {
+    return { type: "low-value", theme, detail: `Content is only ${content.length} chars (< 250)` };
+  }
+  const srcMatches = [...content.matchAll(/\^\[src:([^\]]+)\]/g)].map((m) => m[1]);
+  const uniqueSources = new Set(srcMatches);
+  const bulletCount = content.split("\n").filter((l) => /^[-*]\s/.test(l.trim())).length;
+  if (srcMatches.length > 0 && uniqueSources.size === 1 && bulletCount <= 3) {
+    return {
+      type: "low-value",
+      theme,
+      detail: `All ${srcMatches.length} citations point to a single source "${[...uniqueSources][0]}" and only ${bulletCount} bullets`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Check 7: Duplicate-theme detection (pair-wise).
+ * Uses `findFuzzyMatches` to locate near-duplicate theme names
+ * (Levenshtein ≤ 2 or shared-prefix ≥ 6).
+ */
+function checkDuplicateThemes(themeNames: string[]): StructuralIssue[] {
+  const pairs = findFuzzyMatches(themeNames);
+  return pairs.map(({ a, b, reason }) => ({
+    type: "duplicate-theme" as const,
+    theme: a,
+    detail: `Near-duplicate of [[${b}]] (${reason})`,
+    target: b,
+  }));
+}
+
+/**
+ * Check 8: Low-provenance.
+ * Flags a theme when fewer than 70% of body paragraphs carry a `^[src:...]`
+ * marker. Headings and bullets are excluded.
+ */
+function checkLowProvenance(theme: string, content: string): StructuralIssue | null {
+  const paragraphs = content.split(/\n\n+/).filter((p) => {
+    const t = p.trim();
+    return t && !t.startsWith("#") && !/^[-*]\s/.test(t);
+  });
+  if (paragraphs.length === 0) return null;
+  const withProv = paragraphs.filter((p) => /\^\[src:/.test(p)).length;
+  const coverage = withProv / paragraphs.length;
+  if (coverage < 0.7) {
+    return {
+      type: "low-provenance",
+      theme,
+      detail: `${withProv} of ${paragraphs.length} paragraphs have provenance (${Math.round(coverage * 100)}%)`,
+    };
   }
   return null;
 }

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { scheduleToCron, getLocalDate, defaultState } from "../src/orchestrator.js";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { scheduleToCron, getLocalDate, defaultState, loadState } from "../src/orchestrator.js";
 
 describe("scheduleToCron", () => {
   it("converts weekday schedule to cron", () => {
@@ -36,5 +39,45 @@ describe("defaultState", () => {
     expect(state.collectors).toEqual({});
     expect(state.dreamPipeline.autoTrigger).toBe(true);
     expect(state.dreamPipeline.collectorsCompletedToday).toEqual([]);
+  });
+});
+
+describe("defaultState — new pipelines", () => {
+  it("includes compactionPipeline with empty sizeQueue and per-theme map", () => {
+    const s = defaultState();
+    expect(s.compactionPipeline).toBeDefined();
+    expect(s.compactionPipeline.running).toBe(false);
+    expect(s.compactionPipeline.sizeQueue).toEqual([]);
+    expect(s.compactionPipeline.perThemeLastCompacted).toEqual({});
+    expect(s.compactionPipeline.schedule).toEqual({ time: "04:00", days: ["sun","mon","tue","wed","thu","fri","sat"] });
+  });
+
+  it("includes schemaEvolutionPipeline with daily schedule (gating is in the CLI)", () => {
+    const s = defaultState();
+    expect(s.schemaEvolutionPipeline).toBeDefined();
+    expect(s.schemaEvolutionPipeline.running).toBe(false);
+    expect(s.schemaEvolutionPipeline.schedule).toEqual({ time: "05:00", days: ["sun","mon","tue","wed","thu","fri","sat"] });
+  });
+});
+
+describe("loadState — migration", () => {
+  it("adds compactionPipeline and schemaEvolutionPipeline when missing from persisted state", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-"));
+    const vaultDir = join(tmp, "vault");
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(
+      join(vaultDir, "orchestrator-state.json"),
+      JSON.stringify({
+        lastHeartbeat: null,
+        collectors: {},
+        dreamPipeline: { autoTrigger: true, running: false, lastRun: null, lastResult: "never", collectorsCompletedToday: [] },
+        lintPipeline: { running: false, lastRun: null, lastResult: "never", schedule: { time: "20:00", days: ["sun"] } },
+      }),
+      "utf-8"
+    );
+    const state = await loadState(tmp);
+    expect(state.compactionPipeline).toBeDefined();
+    expect(state.schemaEvolutionPipeline).toBeDefined();
+    expect(state.compactionPipeline.sizeQueue).toEqual([]);
   });
 });
