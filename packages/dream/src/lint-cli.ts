@@ -276,7 +276,14 @@ async function createStubsFromConceptCandidates(vault: Vault): Promise<void> {
     const frequent = Object.entries(map).filter(([, v]) => v.count >= 3);
     const batchId = new Date().toISOString();
     for (const [term] of frequent) {
-      const themeName = term.toLowerCase().replace(/\s+/g, "-");
+      const themeName = term
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[\/\\]/g, "")
+        .replace(/\.\./g, "")
+        .replace(/^[-_.]+/, "")
+        .slice(0, 100);
+      if (!themeName) continue;  // skip if sanitization zeroed it out
       const update = {
         id: randomUUID(),
         theme: themeName,

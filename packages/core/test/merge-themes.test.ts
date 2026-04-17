@@ -102,6 +102,19 @@ describe("mergeThemes", () => {
     expect(x).toContain("[[new]]");
   });
 
+  it("rename mode with pre-existing canonical falls back to merge-prepend (no data loss)", async () => {
+    const { root, vault } = await makeVault();
+    await writeFile(join(root, "vault", "warm", "old.md"), "---\ntheme: old\n---\nOld content.");
+    await writeFile(join(root, "vault", "warm", "new.md"), "---\ntheme: new\n---\nExisting canonical content.");
+
+    await mergeThemes(vault, "old", "new", { rename: true });
+
+    const newFile = await readFile(join(root, "vault", "warm", "new.md"), "utf-8");
+    expect(newFile).toContain("Existing canonical content");  // preserved
+    expect(newFile).toContain("Old content");                 // merged in
+    expect(newFile).toContain("Renamed from [[old]]");
+  });
+
   it("is idempotent: running twice leaves the same state", async () => {
     const { root, vault } = await makeVault();
     await writeFile(join(root, "vault", "warm", "a.md"), "---\ntheme: a\n---\nA.");

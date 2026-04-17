@@ -104,6 +104,9 @@ Return JSON: {"current_status": "...", "history": "..."}`,
     batchId: new Date().toISOString(),
     type: "project",
     compactionType: "scheduled",
+    sources: doc.sources,
+    related: doc.related,
+    created: doc.created,
   };
   await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
   return true;
@@ -146,6 +149,9 @@ Return ONLY the Markdown content, no fences.`,
     batchId: new Date().toISOString(),
     type: doc.type,
     compactionType: "scheduled",
+    sources: doc.sources,
+    related: doc.related,
+    created: doc.created,
   };
   await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
   return true;

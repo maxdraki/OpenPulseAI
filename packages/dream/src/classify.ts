@@ -1,4 +1,5 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
+import { vaultLog } from "@openpulse/core";
 import { canonicalizeThemes } from "./canonicalize.js";
 
 /**
@@ -316,10 +317,9 @@ Respond with ONLY a JSON array:
           const inferredType = (["project", "concept", "entity", "source-summary"].includes(p.type ?? ""))
             ? (p.type as ThemeType)
             : "project";
-          const llmConfidence = 0.7;
-
-          // If confidence is low AND all themes are new (no match to existing), route to orphan candidates
           const anyExisting = themes.some((t) => existingThemeSet.has(t));
+          const llmConfidence = anyExisting ? 0.7 : 0.4;
+          // If confidence is low AND all themes are new (no match to existing), route to orphan candidates
           if (!anyExisting && llmConfidence < ORPHAN_CONF_THRESHOLD) {
             orphanCandidatesList.push({
               entryTimestamp: needsLlm[p.index].timestamp,
@@ -366,6 +366,7 @@ Respond with ONLY a JSON array:
       }
     } catch (err) {
       console.error("[classify] LLM classification failed:", err);
+      await vaultLog("error", "[classify] LLM classification failed, routing entries to uncategorized", String(err));
       for (const entry of needsLlm) {
         results.push({
           entry,

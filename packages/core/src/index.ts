@@ -41,4 +41,4 @@ export { isDue, loadCollectorState, saveCollectorState } from "./skills/schedule
 export { checkEligibility, type EligibilityResult } from "./skills/eligibility.js";
 export { runSkillByName, runDueSkills } from "./skills/run.js";
 export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./skills/security.js";
-export { mergeThemes } from "./merge-themes.js";
+export { mergeThemes, isSafeThemeName } from "./merge-themes.js";

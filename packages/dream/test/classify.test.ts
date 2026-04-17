@@ -46,13 +46,15 @@ describe("classifyEntries", () => {
 
   it("returns proposedTypes for new themes", async () => {
     const entries: ActivityEntry[] = [
-      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev; updated hiring board" },
+      { timestamp: "2026-04-03T10:00:00Z", log: "Posted job listing for senior dev; updated hiring board and anchored the work in existing-anchor" },
     ];
     const provider = mockProvider(
-      JSON.stringify([{ index: 0, themes: ["hiring"], type: "concept" }])
+      JSON.stringify([{ index: 0, themes: ["existing-anchor", "hiring"], type: "concept" }])
     );
 
-    const { classified, proposedTypes } = await classifyEntries(entries, [], provider, "test-model");
+    // Pass an existing theme so the LLM-proposed entry stays in classified
+    // (the orphan router sends entries with entirely-new themes to orphanCandidates instead)
+    const { classified, proposedTypes } = await classifyEntries(entries, ["existing-anchor"], provider, "test-model");
 
     expect(classified).toHaveLength(1);
     expect(proposedTypes["hiring"]).toBe("concept");
@@ -265,18 +267,33 @@ describe("classifyEntries", () => {
 });
 
 describe("classifyEntries — orphan candidates", () => {
-  it("exposes orphanCandidates array (currently empty at default 0.7 confidence)", async () => {
+  it("routes LLM-only entries with entirely-new themes to orphanCandidates (confidence < 0.5)", async () => {
     const provider = {
-      complete: async () => JSON.stringify([{ index: 0, themes: ["newtheme"], type: "project" }]),
+      complete: async () => JSON.stringify([{ index: 0, themes: ["brand-new-theme"], type: "project" }]),
     } as any;
     const entry = {
       timestamp: "2026-04-17T00:00:00Z",
       log: "Some meaningful activity with enough substantive lines so it survives preFilter. Line two. Line three. Line four. Line five. Committed changes.",
       source: "github-activity",
     };
+    // No existing themes — so the proposed theme has no anchor
     const result = await classifyEntries([entry], [], provider, "gpt");
-    expect(result.orphanCandidates).toEqual([]);
-    // The entry goes to classified because 0.7 >= 0.5 threshold
-    expect(result.classified.length).toBeGreaterThan(0);
+    expect(result.orphanCandidates.length).toBe(1);
+    expect(result.orphanCandidates[0].proposedThemes).toContain("brand-new-theme");
+    expect(result.classified.length).toBe(0);
+  });
+
+  it("keeps LLM entries in classified when at least one theme matches existing", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["existing-theme", "new-theme"], type: "project" }]),
+    } as any;
+    const entry = {
+      timestamp: "2026-04-17T00:00:00Z",
+      log: "Some meaningful activity with enough substantive lines so it survives preFilter. Line two. Line three. Line four. Line five. Committed changes.",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], ["existing-theme"], provider, "gpt");
+    expect(result.orphanCandidates.length).toBe(0);
+    expect(result.classified.length).toBe(1);
   });
 });

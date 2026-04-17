@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme, mergeThemes } from "../core/dist/index.js";
+import { Vault, writeTheme, mergeThemes, isSafeThemeName } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -126,6 +126,15 @@ app.post("/api/approve-update", async (req, res) => {
     const raw = await readFile(pendingPath, "utf-8");
     const update = JSON.parse(raw);
     const finalContent = editedContent ?? update.proposedContent;
+
+    // Guard against path-traversal or malformed theme names in pending updates.
+    // Exempt "_schema" meta-theme which uses a leading underscore by design.
+    if (update.theme !== "_schema" && !isSafeThemeName(update.theme)) {
+      return res.status(400).json({ ok: false, error: "Unsafe theme name in pending update" });
+    }
+    if (update.related?.[0] && !isSafeThemeName(update.related[0])) {
+      return res.status(400).json({ ok: false, error: "Unsafe related theme name" });
+    }
 
     const vault = new Vault(VAULT_ROOT);
     await vault.init();

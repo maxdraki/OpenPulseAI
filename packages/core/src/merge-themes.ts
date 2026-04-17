@@ -2,6 +2,15 @@ import { readFile, writeFile, unlink, readdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import type { Vault } from "./vault.js";
 
+/** Enforce safe theme names: alphanumerics, hyphens, underscores only; no path separators or ".." */
+export function isSafeThemeName(name: string): boolean {
+  if (!name || typeof name !== "string") return false;
+  if (name.length > 100) return false;
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(name)) return false;
+  if (name === "." || name === ".." || name.includes("..")) return false;
+  return true;
+}
+
 /**
  * Merge, rename, or delete a theme.
  *
@@ -22,6 +31,13 @@ export async function mergeThemes(
   canonical: string | null,
   opts: { rename?: boolean } = {}
 ): Promise<void> {
+  if (!isSafeThemeName(source)) {
+    throw new Error(`Unsafe source theme name: ${JSON.stringify(source)}`);
+  }
+  if (canonical !== null && !isSafeThemeName(canonical)) {
+    throw new Error(`Unsafe canonical theme name: ${JSON.stringify(canonical)}`);
+  }
+
   const warmDir = vault.warmDir;
   const factsDir = join(warmDir, "_facts");
   const srcPath = join(warmDir, `${source}.md`);
@@ -42,8 +58,17 @@ export async function mergeThemes(
 
       if (opts.rename) {
         // rename mode: move source file content whole to canonical
-        const renamed = renameInFrontmatter(srcRaw, source, canonical);
-        await writeFile(canonPath, renamed, "utf-8");
+        if (canonExists) {
+          // Canonical already exists — fall back to merge-prepend to avoid data loss
+          const canonRaw = await readFile(canonPath, "utf-8");
+          const today = new Date().toISOString().slice(0, 10);
+          const dated = `\n### Renamed from [[${source}]] on ${today}\n\n${srcBody.trim()}\n`;
+          const merged = insertAfterFrontmatter(canonRaw, dated);
+          await writeFile(canonPath, merged, "utf-8");
+        } else {
+          const renamed = renameInFrontmatter(srcRaw, source, canonical);
+          await writeFile(canonPath, renamed, "utf-8");
+        }
       } else if (canonExists) {
         // merge mode: prepend dated section to canonical content
         const canonRaw = await readFile(canonPath, "utf-8");
