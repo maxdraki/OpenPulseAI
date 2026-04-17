@@ -85,6 +85,20 @@ function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
       const withoutOrphans = stripOrphanedHeadings(filtered.join("\n")).trim();
       if (!withoutOrphans || !isSubstantive(withoutOrphans)) return null;
 
+      // Entry-level drop: if we have fewer than 5 substantive lines and no activity tokens, it's noise.
+      const substantiveCount = withoutOrphans.split("\n").filter((line) => {
+        const t = line.trim();
+        if (!t || t.length < 5) return false;
+        if (t.startsWith("#")) return false;
+        if (LABEL_ONLY_RE.test(t)) return false;
+        if (EMPTY_BULLET_RE.test(t)) return false;
+        return true;
+      }).length;
+      const ACTIVITY_TOKEN_RE = /(modified|changed|added|created|updated|committed|pushed|merged|commit|PR |pull|issue|#\d+)/i;
+      if (substantiveCount < 5 && !ACTIVITY_TOKEN_RE.test(withoutOrphans)) {
+        return null;
+      }
+
       return { ...entry, log: withoutOrphans };
     })
     .filter((e): e is ActivityEntry => e !== null);
