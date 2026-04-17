@@ -36,6 +36,9 @@ const TYPE_LABELS: Record<StructuralIssue["type"], string> = {
   "schema-noncompliant": "Schema compliance issues",
   stale: "Stale themes",
   "duplicate-date": "Duplicate dated sections",
+  "low-value": "Low-value pages",
+  "duplicate-theme": "Near-duplicate themes",
+  "low-provenance": "Low-provenance pages",
 };
 
 // ---------------------------------------------------------------------------
@@ -71,6 +74,9 @@ async function writeLintReport(
       "schema-noncompliant",
       "stale",
       "duplicate-date",
+      "low-value",
+      "duplicate-theme",
+      "low-provenance",
     ];
 
     for (const type of orderedTypes) {

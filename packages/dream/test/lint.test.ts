@@ -479,3 +479,112 @@ describe("findContradictions", () => {
     expect(result[0].detail).toBe("Conflict found.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// runStructuralChecks — new checks (low-value, duplicate-theme, low-provenance)
+// ---------------------------------------------------------------------------
+describe("runStructuralChecks — new checks", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    ({ vault, tempDir } = await setup());
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("flags pages with content < 250 chars as low-value", async () => {
+    await writeTheme(vault, "tiny-theme", "Short body.");
+    const issues = await runStructuralChecks(vault);
+    const lowValue = issues.filter((i) => i.type === "low-value" && i.theme === "tiny-theme");
+    expect(lowValue).toHaveLength(1);
+    expect(lowValue[0].detail).toMatch(/chars/);
+  });
+
+  it("flags a long page with a single source and <=3 bullets as low-value", async () => {
+    // Padded to > 250 chars but only cites ONE source id via ^[src:...] and
+    // contains few bullets.
+    const body =
+      "This theme discusses the project overview and the state of the world ".repeat(5) +
+      "\n\n- item one ^[src:abc]\n- item two ^[src:abc]\n- item three ^[src:abc]\n";
+    await writeTheme(vault, "single-source-theme", body);
+    const issues = await runStructuralChecks(vault);
+    const lowValue = issues.filter(
+      (i) => i.type === "low-value" && i.theme === "single-source-theme"
+    );
+    expect(lowValue).toHaveLength(1);
+    expect(lowValue[0].detail).toContain("abc");
+  });
+
+  it("does not flag a long page with diverse sources as low-value", async () => {
+    const body =
+      "This theme discusses the project overview and the state of the world ".repeat(5) +
+      "\n\n- item one ^[src:abc]\n- item two ^[src:def]\n- item three ^[src:ghi]\n";
+    await writeTheme(vault, "diverse-theme", body);
+    const issues = await runStructuralChecks(vault);
+    const lowValue = issues.filter(
+      (i) => i.type === "low-value" && i.theme === "diverse-theme"
+    );
+    expect(lowValue).toHaveLength(0);
+  });
+
+  it("flags near-duplicate themes (Levenshtein)", async () => {
+    // "dream" vs "dreams" → Levenshtein distance 1
+    await writeTheme(vault, "dream", "Content about dreams ".repeat(20));
+    await writeTheme(vault, "dreams", "Content about dreams ".repeat(20));
+    const issues = await runStructuralChecks(vault);
+    const dupTheme = issues.filter((i) => i.type === "duplicate-theme");
+    expect(dupTheme.length).toBeGreaterThanOrEqual(1);
+    const match = dupTheme.find(
+      (i) =>
+        (i.theme === "dream" && i.target === "dreams") ||
+        (i.theme === "dreams" && i.target === "dream")
+    );
+    expect(match).toBeDefined();
+    expect(match?.detail).toMatch(/levenshtein|prefix/);
+  });
+
+  it("flags near-duplicate themes (shared prefix)", async () => {
+    // Shared prefix of 7+ chars — should trigger prefix-based match
+    await writeTheme(vault, "projectalpha", "Content about alpha ".repeat(20));
+    await writeTheme(vault, "projectbeta", "Content about beta ".repeat(20));
+    const issues = await runStructuralChecks(vault);
+    const dupTheme = issues.filter((i) => i.type === "duplicate-theme");
+    expect(dupTheme.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flags pages with < 70% paragraph provenance as low-provenance", async () => {
+    // 5 body paragraphs, only 2 with ^[src:] markers → 40%
+    const body = [
+      "First paragraph with citation. ^[src:one]",
+      "Second paragraph no citation here though it's long enough.",
+      "Third paragraph with citation. ^[src:two]",
+      "Fourth paragraph no citation here either.",
+      "Fifth paragraph no citation for the record.",
+    ].join("\n\n");
+    await writeTheme(vault, "sparse-prov", body);
+    const issues = await runStructuralChecks(vault);
+    const lowProv = issues.filter(
+      (i) => i.type === "low-provenance" && i.theme === "sparse-prov"
+    );
+    expect(lowProv).toHaveLength(1);
+    expect(lowProv[0].detail).toMatch(/provenance/);
+  });
+
+  it("does not flag pages with 100% provenance", async () => {
+    const body = [
+      "First paragraph. ^[src:one]",
+      "Second paragraph. ^[src:two]",
+      "Third paragraph. ^[src:three]",
+      "Fourth paragraph. ^[src:four]",
+    ].join("\n\n");
+    await writeTheme(vault, "full-prov", body);
+    const issues = await runStructuralChecks(vault);
+    const lowProv = issues.filter(
+      (i) => i.type === "low-provenance" && i.theme === "full-prov"
+    );
+    expect(lowProv).toHaveLength(0);
+  });
+});
