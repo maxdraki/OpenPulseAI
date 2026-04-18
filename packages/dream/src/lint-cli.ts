@@ -37,6 +37,59 @@ import {
 } from "@openpulse/core";
 import { runStructuralChecks, type StructuralIssue } from "./lint-structural.js";
 import { findStubCandidates, findContradictions, type SemanticIssue } from "./lint-semantic.js";
+import { ABSENCE_LINE } from "./classify.js";
+
+/** Escape regex metacharacters so a runtime string can be embedded in a pattern. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Shape of a lint-proposed pending update. Narrower than PendingUpdate — only
+ *  the fields this module writes. Kept loose to tolerate optional extras. */
+type LintPending = {
+  id: string;
+  theme: string;
+  proposedContent: string;
+  previousContent: string | null;
+  entries: unknown[];
+  createdAt: string;
+  status: "pending";
+  batchId: string;
+  lintFix: string;
+  type?: "concept";
+  related?: string[];
+  fixReason?: string;
+  fixDetail?: string;
+};
+
+async function writePendingUpdate(vault: Vault, update: LintPending): Promise<void> {
+  await writeFile(
+    join(vault.pendingDir, `${update.id}.json`),
+    JSON.stringify(update, null, 2),
+    "utf-8"
+  );
+}
+
+/** In-memory cache of warm themes to avoid re-reading the same file across
+ *  multiple fix passes within a single runLint invocation. */
+class ThemeCache {
+  private cache = new Map<string, Awaited<ReturnType<typeof readTheme>> | null>();
+  constructor(private vault: Vault) {}
+  async get(name: string) {
+    if (this.cache.has(name)) return this.cache.get(name) ?? null;
+    const doc = await readTheme(this.vault, name);
+    this.cache.set(name, doc);
+    return doc;
+  }
+  async getMany(names: string[]) {
+    const unseen = names.filter((n) => !this.cache.has(n));
+    if (unseen.length > 0) {
+      const docs = await Promise.all(unseen.map((n) => readTheme(this.vault, n)));
+      unseen.forEach((n, i) => this.cache.set(n, docs[i]));
+    }
+    return names.map((n) => this.cache.get(n) ?? null);
+  }
+}
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const fixFlag = process.argv.find((a) => a.startsWith("--fix="))?.split("=")[1] as
@@ -216,16 +269,9 @@ async function writeLintReport(
 // ---------------------------------------------------------------------------
 // createStubPendingUpdates
 // ---------------------------------------------------------------------------
-/**
- * Extract up to `n` paragraphs or sentences from `content` that mention `term`.
- * Used as context for the stub-synthesis LLM pass.
- */
+/** Extract up to `n` paragraphs from `content` that mention `term`. */
 function extractPassagesMentioning(term: string, content: string, n = 3): string[] {
-  const termPattern = new RegExp(
-    `(^|[^\\w])${term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}([^\\w]|$)`,
-    "i"
-  );
-  // Split on double newline (paragraphs) first; fall back to sentences.
+  const termPattern = new RegExp(`(^|[^\\w])${escapeRegex(term)}([^\\w]|$)`, "i");
   const paragraphs = content.split(/\n\s*\n/).filter((p) => p.trim());
   const hits: string[] = [];
   for (const para of paragraphs) {
@@ -245,20 +291,19 @@ function extractPassagesMentioning(term: string, content: string, n = 3): string
 async function synthesiseStubContent(opts: {
   term: string;
   sources: string[];
-  vault: Vault;
+  themes: ThemeCache;
   provider: LlmProvider;
   model: string;
 }): Promise<{ definition: string; keyClaims: string[] } | null> {
-  const { term, sources, vault, provider, model } = opts;
+  const { term, sources, themes, provider, model } = opts;
 
-  // Gather concrete passages mentioning the term from each source theme.
+  const docs = await themes.getMany(sources);
   const passages: Array<{ theme: string; passage: string }> = [];
-  for (const source of sources) {
-    const doc = await readTheme(vault, source);
+  for (let i = 0; i < sources.length; i++) {
+    const doc = docs[i];
     if (!doc) continue;
-    const hits = extractPassagesMentioning(term, doc.content, 2);
-    for (const hit of hits) {
-      passages.push({ theme: source, passage: hit });
+    for (const hit of extractPassagesMentioning(term, doc.content, 2)) {
+      passages.push({ theme: sources[i], passage: hit });
     }
   }
 
@@ -358,71 +403,56 @@ function buildStubContent(opts: {
 async function createStubPendingUpdates(
   vault: Vault,
   stubs: SemanticIssue[],
+  themes: ThemeCache,
   provider: LlmProvider,
   model: string
 ): Promise<void> {
   if (stubs.length === 0) return;
   const batchId = new Date().toISOString();
-  let synthesisedCount = 0;
-  let droppedCount = 0;
+  let created = 0;
+  let dropped = 0;
 
   for (const stub of stubs) {
     const term = stub.term ?? "unknown";
     const themeName = sanitizeThemeSlug(term);
     if (!themeName) continue;
 
-    // Second-pass synthesis: read source themes and build real content.
-    let synthesised: { definition: string; keyClaims: string[] } | null = null;
-    if (stub.sources && stub.sources.length > 0) {
-      synthesised = await synthesiseStubContent({
-        term,
-        sources: stub.sources,
-        vault,
-        provider,
-        model,
-      });
-    }
+    const synthesised = stub.sources?.length
+      ? await synthesiseStubContent({ term, sources: stub.sources, themes, provider, model })
+      : null;
 
-    // If synthesis returned nothing substantive, skip the stub entirely.
-    // An empty TODO page is worse than no page.
     if (!synthesised) {
-      droppedCount++;
+      dropped++;
       continue;
     }
-    synthesisedCount++;
+    created++;
 
-    const proposedContent = buildStubContent({
-      term,
-      detail: stub.detail,
-      count: stub.count,
-      sources: stub.sources,
-      synthesised,
-    });
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme: themeName,
-      proposedContent,
+      proposedContent: buildStubContent({
+        term,
+        detail: stub.detail,
+        count: stub.count,
+        sources: stub.sources,
+        synthesised,
+      }),
       previousContent: null,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      type: "concept" as const,
-      lintFix: "stubs" as const,
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+      type: "concept",
+      lintFix: "stubs",
+    });
   }
-  if (synthesisedCount > 0) {
+  if (created > 0) {
     console.error(
-      `[lint] Created ${synthesisedCount} stub pending update(s) with synthesised content` +
-        (droppedCount > 0 ? ` (${droppedCount} dropped — no substantive passages)` : "")
+      `[lint] Created ${created} stub pending update(s)` +
+        (dropped > 0 ? ` (${dropped} dropped — no substantive passages)` : "")
     );
-  } else if (droppedCount > 0) {
-    console.error(`[lint] Dropped ${droppedCount} stub candidate(s) — no substantive source passages`);
+  } else if (dropped > 0) {
+    console.error(`[lint] Dropped ${dropped} stub candidate(s) — no substantive source passages`);
   }
 }
 
@@ -431,64 +461,60 @@ async function createStubPendingUpdates(
 // ---------------------------------------------------------------------------
 async function createStubsFromConceptCandidates(
   vault: Vault,
+  themes: ThemeCache,
   provider: LlmProvider,
   model: string
 ): Promise<void> {
+  let raw: string;
   try {
-    const raw = await readFile(join(vault.warmDir, "_concept-candidates.json"), "utf-8");
-    const map = JSON.parse(raw) as Record<string, { count: number; sources: string[] }>;
-    const frequent = Object.entries(map).filter(([, v]) => v.count >= 3);
-    const batchId = new Date().toISOString();
-    let created = 0;
-    let dropped = 0;
-    for (const [term, data] of frequent) {
-      const themeName = sanitizeThemeSlug(term);
-      if (!themeName) continue;
+    raw = await readFile(join(vault.warmDir, "_concept-candidates.json"), "utf-8");
+  } catch {
+    return;
+  }
+  const map = JSON.parse(raw) as Record<string, { count: number; sources: string[] }>;
+  const frequent = Object.entries(map).filter(([, v]) => v.count >= 3);
+  const batchId = new Date().toISOString();
+  let created = 0;
+  let dropped = 0;
+  for (const [term, data] of frequent) {
+    const themeName = sanitizeThemeSlug(term);
+    if (!themeName) continue;
 
-      const synthesised = await synthesiseStubContent({
-        term,
-        sources: data.sources,
-        vault,
-        provider,
-        model,
-      });
-      if (!synthesised) {
-        dropped++;
-        continue;
-      }
-      created++;
+    const synthesised = await synthesiseStubContent({
+      term,
+      sources: data.sources,
+      themes,
+      provider,
+      model,
+    });
+    if (!synthesised) {
+      dropped++;
+      continue;
+    }
+    created++;
 
-      const proposedContent = buildStubContent({
+    await writePendingUpdate(vault, {
+      id: randomUUID(),
+      theme: themeName,
+      proposedContent: buildStubContent({
         term,
         count: data.count,
         sources: data.sources,
         synthesised,
-      });
-      const update = {
-        id: randomUUID(),
-        theme: themeName,
-        proposedContent,
-        previousContent: null,
-        entries: [],
-        createdAt: new Date().toISOString(),
-        status: "pending" as const,
-        batchId,
-        type: "concept" as const,
-        lintFix: "stubs" as const,
-      };
-      await writeFile(
-        join(vault.pendingDir, `${update.id}.json`),
-        JSON.stringify(update, null, 2),
-        "utf-8"
-      );
-    }
-    if (created > 0 || dropped > 0) {
-      console.error(
-        `[lint] Concept candidates: ${created} stub(s) created, ${dropped} dropped (no substantive passages)`
-      );
-    }
-  } catch {
-    /* ignore — no concept-candidates sidecar */
+      }),
+      previousContent: null,
+      entries: [],
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      batchId,
+      type: "concept",
+      lintFix: "stubs",
+    });
+  }
+  if (created > 0 || dropped > 0) {
+    console.error(
+      `[lint] Concept candidates: ${created} stub(s) created, ${dropped} dropped`
+    );
   }
 }
 
@@ -497,44 +523,39 @@ async function createStubsFromConceptCandidates(
 // ---------------------------------------------------------------------------
 async function createOrphanPendingUpdates(vault: Vault): Promise<void> {
   const path = join(vault.warmDir, "_orphan-candidates.json");
+  let raw: string;
   try {
-    const raw = await readFile(path, "utf-8");
-    const candidates = JSON.parse(raw) as Array<{
-      proposedThemes: string[];
-      log: string;
-      source?: string;
-      entryTimestamp: string;
-    }>;
-    const batchId = new Date().toISOString();
-    for (const c of candidates) {
-      const theme = c.proposedThemes[0] ?? c.source ?? "uncategorized";
-      const sourceId = `${c.entryTimestamp.slice(0, 10)}-${c.source ?? "unknown"}`;
-      const update = {
-        id: randomUUID(),
-        theme,
-        proposedContent: `## Current Status\n\n_(from orphaned entry, please review and edit)_\n\n${c.log.slice(0, 2000)}\n\n^[src:${sourceId}]\n`,
-        previousContent: null,
-        entries: [],
-        createdAt: new Date().toISOString(),
-        status: "pending" as const,
-        batchId,
-        lintFix: "orphans" as const,
-      };
-      await writeFile(
-        join(vault.pendingDir, `${update.id}.json`),
-        JSON.stringify(update, null, 2),
-        "utf-8"
-      );
-    }
-    if (candidates.length > 0) {
-      console.error(
-        `[lint] Created ${candidates.length} orphan pending update(s). Clearing candidates file.`
-      );
-      await writeFile(path, "[]", "utf-8");
-    }
+    raw = await readFile(path, "utf-8");
   } catch {
-    /* no candidates */
+    return;
   }
+  const candidates = JSON.parse(raw) as Array<{
+    proposedThemes: string[];
+    log: string;
+    source?: string;
+    entryTimestamp: string;
+  }>;
+  if (candidates.length === 0) return;
+  const batchId = new Date().toISOString();
+  for (const c of candidates) {
+    const theme = c.proposedThemes[0] ?? c.source ?? "uncategorized";
+    const sourceId = `${c.entryTimestamp.slice(0, 10)}-${c.source ?? "unknown"}`;
+    await writePendingUpdate(vault, {
+      id: randomUUID(),
+      theme,
+      proposedContent: `## Current Status\n\n_(from orphaned entry, please review and edit)_\n\n${c.log.slice(0, 2000)}\n\n^[src:${sourceId}]\n`,
+      previousContent: null,
+      entries: [],
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      batchId,
+      lintFix: "orphans",
+    });
+  }
+  console.error(
+    `[lint] Created ${candidates.length} orphan pending update(s). Clearing candidates file.`
+  );
+  await writeFile(path, "[]", "utf-8");
 }
 
 // ---------------------------------------------------------------------------
@@ -547,22 +568,17 @@ async function createDeletePendingUpdates(
   if (issues.length === 0) return;
   const batchId = new Date().toISOString();
   for (const i of issues) {
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme: i.theme,
       proposedContent: "",
       previousContent: null,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      lintFix: "delete" as const,
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+      lintFix: "delete",
+    });
   }
   console.error(`[lint] Created ${issues.length} delete pending update(s).`);
 }
@@ -579,23 +595,18 @@ async function createMergePendingUpdates(
   let created = 0;
   for (const i of issues) {
     if (!i.target) continue;
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme: i.theme,
       proposedContent: `## Merge proposal\n\nMerge [[${i.theme}]] → [[${i.target}]]\nReason: ${i.detail}`,
       previousContent: null,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      lintFix: "merge" as const,
+      lintFix: "merge",
       related: [i.target],
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+    });
     created += 1;
   }
   if (created > 0) console.error(`[lint] Created ${created} merge pending update(s).`);
@@ -609,23 +620,18 @@ async function createRenamePendingUpdate(
   from: string,
   to: string
 ): Promise<void> {
-  const update = {
+  await writePendingUpdate(vault, {
     id: randomUUID(),
     theme: from,
     proposedContent: `## Rename proposal\n\nRename [[${from}]] → [[${to}]]\n`,
     previousContent: null,
     entries: [],
     createdAt: new Date().toISOString(),
-    status: "pending" as const,
+    status: "pending",
     batchId: new Date().toISOString(),
-    lintFix: "rename" as const,
+    lintFix: "rename",
     related: [to],
-  };
-  await writeFile(
-    join(vault.pendingDir, `${update.id}.json`),
-    JSON.stringify(update, null, 2),
-    "utf-8"
-  );
+  });
   console.error(`[lint] Created rename pending update: ${from} → ${to}`);
 }
 
@@ -638,40 +644,35 @@ async function createRenamePendingUpdate(
 // ---------------------------------------------------------------------------
 async function createBrokenLinkPendingUpdates(
   vault: Vault,
-  issues: StructuralIssue[]
+  issues: StructuralIssue[],
+  themes: ThemeCache,
+  existingThemes: Set<string>
 ): Promise<void> {
   if (issues.length === 0) return;
 
-  const existingThemes = new Set(await listThemes(vault));
-  // Group broken-link issues by source theme
   const bySource = new Map<string, Array<{ target: string; replacement: string }>>();
-
   for (const issue of issues) {
     if (!issue.target) continue;
     const candidate = sanitizeThemeSlug(issue.target);
     if (!candidate || !existingThemes.has(candidate)) continue;
-    if (candidate === issue.target) continue; // already correct somehow
-
+    if (candidate === issue.target) continue;
     const list = bySource.get(issue.theme) ?? [];
     list.push({ target: issue.target, replacement: candidate });
     bySource.set(issue.theme, list);
   }
-
   if (bySource.size === 0) return;
 
   const batchId = new Date().toISOString();
   let created = 0;
 
   for (const [sourceTheme, fixes] of bySource) {
-    const doc = await readTheme(vault, sourceTheme);
+    const doc = await themes.get(sourceTheme);
     if (!doc) continue;
 
     let content = doc.content;
     const applied: string[] = [];
     for (const { target, replacement } of fixes) {
-      // Escape regex special chars in target
-      const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`\\[\\[${escaped}\\]\\]`, "g");
+      const re = new RegExp(`\\[\\[${escapeRegex(target)}\\]\\]`, "g");
       if (re.test(content)) {
         content = content.replace(re, `[[${replacement}]]`);
         applied.push(`${target} → ${replacement}`);
@@ -679,23 +680,18 @@ async function createBrokenLinkPendingUpdates(
     }
     if (applied.length === 0) continue;
 
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme: sourceTheme,
       proposedContent: content,
       previousContent: doc.content,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      lintFix: "broken-link" as const,
+      lintFix: "broken-link",
       fixDetail: applied.join(", "),
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+    });
     created++;
   }
 
@@ -713,39 +709,34 @@ async function createBrokenLinkPendingUpdates(
 // ---------------------------------------------------------------------------
 async function createDedupDatePendingUpdates(
   vault: Vault,
-  issues: StructuralIssue[]
+  issues: StructuralIssue[],
+  themes: ThemeCache
 ): Promise<void> {
   const relevant = issues.filter((i) => i.type === "duplicate-date");
   if (relevant.length === 0) return;
 
-  // One issue per duplicate found; deduplicate by theme
-  const themes = Array.from(new Set(relevant.map((i) => i.theme)));
+  const uniqueThemes = Array.from(new Set(relevant.map((i) => i.theme)));
   const batchId = new Date().toISOString();
   let created = 0;
 
-  for (const theme of themes) {
-    const doc = await readTheme(vault, theme);
+  for (const theme of uniqueThemes) {
+    const doc = await themes.get(theme);
     if (!doc) continue;
 
     const deduped = mergeDuplicateDates(doc.content);
-    if (deduped === doc.content) continue; // no-op guard
+    if (deduped === doc.content) continue;
 
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme,
       proposedContent: deduped,
       previousContent: doc.content,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      lintFix: "dedup-dates" as const,
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+      lintFix: "dedup-dates",
+    });
     created++;
   }
 
@@ -765,7 +756,6 @@ export function mergeDuplicateDates(content: string): string {
   const lines = content.split("\n");
   const datePattern = /^###\s+(\d{4}-\d{2}-\d{2})(.*)$/;
 
-  // First pass: locate all date-heading lines
   type Section = { date: string; headingLine: number; endLine: number };
   const sections: Section[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -774,13 +764,13 @@ export function mergeDuplicateDates(content: string): string {
       if (sections.length > 0) sections[sections.length - 1].endLine = i - 1;
       sections.push({ date: m[1], headingLine: i, endLine: lines.length - 1 });
     } else if (lines[i].match(/^##?\s/) && sections.length > 0 && sections[sections.length - 1].endLine === lines.length - 1) {
-      // Top-level heading stops the current section
+      // A top-level heading ends the current date-section, even though the
+      // section-tracking loop only looks for ### headings to open a new one.
       sections[sections.length - 1].endLine = i - 1;
     }
   }
   if (sections.length === 0) return content;
 
-  // Group sections by date
   const byDate = new Map<string, Section[]>();
   for (const s of sections) {
     const list = byDate.get(s.date) ?? [];
@@ -788,19 +778,16 @@ export function mergeDuplicateDates(content: string): string {
     byDate.set(s.date, list);
   }
 
-  // Find dates that have duplicates
   const duplicates = Array.from(byDate.entries()).filter(([, list]) => list.length > 1);
   if (duplicates.length === 0) return content;
 
-  // Build new content: keep first occurrence, append body-lines from duplicates, drop duplicate heading+body
   const dropLines = new Set<number>();
-  const appendTo = new Map<number, string[]>(); // target heading line → lines to append
+  const appendTo = new Map<number, string[]>();
 
   for (const [, list] of duplicates) {
     const [first, ...rest] = list;
     const extras: string[] = [];
     for (const dup of rest) {
-      // Body = lines after heading, through endLine
       for (let l = dup.headingLine; l <= dup.endLine; l++) {
         dropLines.add(l);
         if (l > dup.headingLine) extras.push(lines[l]);
@@ -832,7 +819,8 @@ export function mergeDuplicateDates(content: string): string {
 // ---------------------------------------------------------------------------
 async function createOrphanDeletePendingUpdates(
   vault: Vault,
-  issues: StructuralIssue[]
+  issues: StructuralIssue[],
+  themes: ThemeCache
 ): Promise<void> {
   const orphans = issues.filter((i) => i.type === "orphan");
   if (orphans.length === 0) return;
@@ -841,27 +829,21 @@ async function createOrphanDeletePendingUpdates(
   let created = 0;
 
   for (const orphan of orphans) {
-    const doc = await readTheme(vault, orphan.theme);
-    if (!doc) continue;
-    if (!isEssentiallyEmpty(doc.content)) continue;
+    const doc = await themes.get(orphan.theme);
+    if (!doc || !isEssentiallyEmpty(doc.content)) continue;
 
-    const update = {
+    await writePendingUpdate(vault, {
       id: randomUUID(),
       theme: orphan.theme,
       proposedContent: "",
       previousContent: doc.content,
       entries: [],
       createdAt: new Date().toISOString(),
-      status: "pending" as const,
+      status: "pending",
       batchId,
-      lintFix: "delete" as const,
+      lintFix: "delete",
       fixReason: "orphan with no substantive content",
-    };
-    await writeFile(
-      join(vault.pendingDir, `${update.id}.json`),
-      JSON.stringify(update, null, 2),
-      "utf-8"
-    );
+    });
     created++;
   }
 
@@ -871,8 +853,10 @@ async function createOrphanDeletePendingUpdates(
 }
 
 /**
- * A theme is "essentially empty" if its Activity Log has zero or one dated
- * sections, OR every substantive paragraph says "no activity" / "no data".
+ * True if the theme has no substantive content: ≤ 1 dated section AND its
+ * prose is either very short or dominated by `ABSENCE_LINE` "no activity"
+ * phrasing (shared with classify.ts — the same filter that drops noise
+ * entries before they reach synthesis).
  *
  * Exported for testing.
  */
@@ -880,30 +864,13 @@ export function isEssentiallyEmpty(content: string): boolean {
   const sectionCount = (content.match(/^###\s+\d{4}-\d{2}-\d{2}/gm) ?? []).length;
   if (sectionCount > 1) return false;
 
-  // Remove headings and blank lines to check remaining substance
   const meaningful = content
     .split("\n")
     .filter((l) => l.trim() && !l.match(/^#{1,4}\s/))
-    .join(" ")
-    .toLowerCase();
+    .join(" ");
 
   if (meaningful.length < 40) return true;
-
-  // Mostly-no-activity phrasing
-  const noActivityTokens = [
-    "no activity",
-    "no data",
-    "no recent activity",
-    "nothing to report",
-    "no new",
-    "no changes",
-  ];
-  const hits = noActivityTokens.reduce(
-    (n, token) => n + (meaningful.includes(token) ? 1 : 0),
-    0
-  );
-  // If the page is short AND at least one "no activity" phrase dominates, treat as empty
-  if (meaningful.length < 200 && hits >= 1) return true;
+  if (meaningful.length < 200 && ABSENCE_LINE.test(meaningful)) return true;
   return false;
 }
 
@@ -942,7 +909,8 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
   const stubs = await findStubCandidates(vault, provider, model);
   const contradictions = await findContradictions(vault, provider, model);
 
-  const themeCount = (await listThemes(vault)).length;
+  const themeNames = await listThemes(vault);
+  const themeCount = themeNames.length;
   await writeLintReport(vault, structural, stubs, contradictions, themeCount);
 
   const totalIssues = structural.length + stubs.length + contradictions.length;
@@ -957,7 +925,6 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
     themeCount,
   };
 
-  // Rename is always explicit — requires from/to.
   if (fix === "rename") {
     if (!from || !to) throw new Error("--fix=rename requires --from and --to");
     await createRenamePendingUpdate(vault, from, to);
@@ -966,13 +933,14 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
 
   if (noFix) return result;
 
-  // Default run (no fix flag) runs ALL fix modes. A specific fix=X runs only that one.
   // Each mode writes its own batch so the Review page groups them by type.
   const runAll = fix === undefined;
+  const themes = new ThemeCache(vault);
+  const existingThemes = new Set(themeNames);
 
   if (runAll || fix === "stubs") {
-    await createStubPendingUpdates(vault, stubs, provider, model);
-    await createStubsFromConceptCandidates(vault, provider, model);
+    await createStubPendingUpdates(vault, stubs, themes, provider, model);
+    await createStubsFromConceptCandidates(vault, themes, provider, model);
   }
   if (runAll || fix === "orphans") {
     await createOrphanPendingUpdates(vault);
@@ -992,19 +960,23 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
   if (runAll || fix === "broken-links") {
     await createBrokenLinkPendingUpdates(
       vault,
-      structural.filter((i) => i.type === "broken-link")
+      structural.filter((i) => i.type === "broken-link"),
+      themes,
+      existingThemes
     );
   }
   if (runAll || fix === "dedup-dates") {
     await createDedupDatePendingUpdates(
       vault,
-      structural.filter((i) => i.type === "duplicate-date")
+      structural.filter((i) => i.type === "duplicate-date"),
+      themes
     );
   }
   if (runAll || fix === "empty-orphans") {
     await createOrphanDeletePendingUpdates(
       vault,
-      structural.filter((i) => i.type === "orphan")
+      structural.filter((i) => i.type === "orphan"),
+      themes
     );
   }
 

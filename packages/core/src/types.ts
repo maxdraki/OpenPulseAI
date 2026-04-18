@@ -59,7 +59,9 @@ export interface PendingUpdate {
   related?: string[];            // related theme names
   created?: string;              // ISO 8601 — set on first synthesis
   // Sub-kind fields — at most one is set per update
-  lintFix?: "stubs" | "orphans" | "merge" | "delete" | "rename";
+  lintFix?: "stubs" | "orphans" | "merge" | "delete" | "rename" | "broken-link" | "dedup-dates";
+  fixReason?: string;            // optional discriminator when multiple lintFix kinds share a value (e.g., "orphan with no substantive content")
+  fixDetail?: string;            // optional human-readable detail (e.g., "aigis_v2 → aigis-v2")
   compactionType?: "scheduled" | "size";
   schemaEvolution?: {
     rationale: Array<{ change: string; evidence: string }>;

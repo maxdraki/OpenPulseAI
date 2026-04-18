@@ -37,7 +37,7 @@ function isValidThemeName(name: string): boolean {
   return true;
 }
 
-const ABSENCE_LINE =
+export const ABSENCE_LINE =
   /no\s+(recent\s+|file\s+|pr\s+|commit\s+|modification\s+)?activity\b|no\s+commits?\b|no\s+pr\s+activity\b|no\s+(file\s+)?modifications?\b|no\s+repos?\s+configured\b|no\s+.{1,50}\s+since\s+last\s+run\b|no\s+.{1,30}\s+detected\b|no\s+changes?\b|inactive\b|nothing\s+(happened|to\s+report)\b/i;
 const HEADING_RE = /^#{1,4}\s+/;
 const LABEL_ONLY_RE = /^[-*]\s*\*\*[^*]+\*\*:\s*$/;
