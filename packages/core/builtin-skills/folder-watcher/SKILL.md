@@ -1,11 +1,11 @@
 ---
 name: folder-watcher
-description: Track recently modified files across your project directories and summarize what changed
+description: Track file changes and git history across your project directories since the last run
 schedule: "0 19 * * *"
 lookback: 24h
 requires:
-  bins: [find]
-setup_guide: "Add the directories you want to watch for file changes. Use the folder picker or type paths manually. Separate multiple paths with newlines."
+  bins: [find, git]
+setup_guide: "Add the directories you want to watch. Use the folder picker or type paths manually. Separate multiple paths with newlines. If a path contains multiple git repos (e.g. ~/Documents/GitHub), their git history is also collected."
 config:
   - key: watch_paths
     label: Directories to watch
@@ -15,34 +15,29 @@ config:
 
 ## Instructions
 
-1. Run `find {{watch_paths}} -maxdepth 4 \( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.rs" -o -name "*.go" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.toml" -o -name "*.css" -o -name "*.html" -o -name "*.docx" -o -name "*.xlsx" -o -name "*.pptx" -o -name "*.pdf" -o -name "*.txt" -o -name "*.csv" \) -mtime -{{since_days}} 2>/dev/null | grep -v node_modules | grep -v dist | grep -v .git | grep -v __pycache__ | grep -v target | grep -v .tsbuildinfo | sort` to find files modified since last run
-2. Run `find {{watch_paths}} -maxdepth 4 \( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.rs" -o -name "*.md" -o -name "*.txt" -o -name "*.csv" \) -mtime -{{since_days}} 2>/dev/null | grep -v node_modules | grep -v dist | grep -v .git | xargs -I{} sh -c 'echo "=== {} ===" && head -3 "{}"' 2>/dev/null | head -150` to peek at the first few lines of modified text files (skips binary Office formats)
+1. Run `find {{watch_paths}} -maxdepth 4 \( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.rs" -o -name "*.go" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.toml" -o -name "*.css" -o -name "*.html" -o -name "*.docx" -o -name "*.xlsx" -o -name "*.pptx" -o -name "*.pdf" -o -name "*.txt" -o -name "*.csv" \) -newermt "{{since_iso}}" 2>/dev/null | grep -v node_modules | grep -v dist | grep -v .git | grep -v __pycache__ | grep -v target | grep -v .tsbuildinfo | sort` to find files modified since last run (exact timestamp, not day-boundary).
+2. Run `find {{watch_paths}} -maxdepth 4 \( -name "*.ts" -o -name "*.js" -o -name "*.py" -o -name "*.rs" -o -name "*.md" -o -name "*.txt" -o -name "*.csv" \) -newermt "{{since_iso}}" 2>/dev/null | grep -v node_modules | grep -v dist | grep -v .git | xargs -I{} sh -c 'echo "=== {} ===" && head -3 "{}"' 2>/dev/null | head -150` to peek at the first few lines of modified text files.
+3. Run `for p in {{watch_paths}}; do if [ -d "$p/.git" ]; then echo "=== git: $p ==="; git -C "$p" log --since="{{since_iso}}" --name-status --pretty=format:"%h %s (%an) %ai" 2>/dev/null | head -120; else for repo in "$p"/*/; do [ -d "${repo}.git" ] || continue; rel="${repo%/}"; rel="${rel##*/}"; echo "=== git: $rel ==="; git -C "$repo" log --since="{{since_iso}}" --name-status --pretty=format:"%h %s (%an) %ai" 2>/dev/null | head -80; done; fi; done` to capture commits — including deletions and renames — inside each watched git repo.
 
-If the commands return NO output, write "No file modifications detected since last run." and stop. Do not speculate about what might have changed.
+If every command returns NO output, write "No file modifications detected since last run." and stop.
 
-If the commands return results, summarize ONLY the files listed in the output. Group files into sections using the following naming rules:
+Otherwise, summarise ONLY what appears in the output. Group findings into `### [ProjectName]` sections using these rules:
+- If a file is inside a subdirectory of a watch root, use the **first subdirectory name** (e.g. `OneDrive/Projects/DataPlatform/x.pptx` → `DataPlatform`).
+- For code repos under `Documents/GitHub`, the repo folder name is the project name.
+- The git-log output is the source of truth for commits, renames, and deletions — cite SHAs where useful.
+- NEVER use a cloud-storage or generic parent folder (OneDrive, Dropbox, iCloud, Documents, Downloads) as the heading — step one level deeper.
 
-**How to derive the section heading [ProjectName]:**
-- Look at the full path of each modified file: `<watch-root>/<rest-of-path>`
-- If the file is inside a subdirectory of the watch root (e.g. `OneDrive-RWS/Projects/DataPlatform/file.pptx`), use the **first subdirectory name** as the heading (`DataPlatform`)
-- If the file is directly in the watch root with no subdirectory (e.g. `OneDrive-RWS/file.pptx`), use the **filename without extension** as the heading (`file`)
-- For code repos under `Documents/GitHub`, the repo folder name is the project name
-- NEVER use the watch root itself (e.g. `OneDrive-RWS`, `Documents`, `Downloads`) as the heading — that is not a project name
-
-For each group:
-- List the specific files that changed (filenames only, not full paths)
-- Describe what the files likely do based on their names and any peeked content
-- Estimate the scope: small tweak, feature addition, or major refactoring
+For each project:
+- **Modified:** filenames (not full paths).
+- **Commits:** SHA + message (if git log output contained entries).
+- **Deleted / renamed:** any files `D` or `R`-marked in the git log.
+- **Scope:** small tweak, feature, refactor, etc.
 
 RULES:
-- ONLY mention projects that appear in the find output
-- NEVER mention projects that had zero files in the output
-- NEVER invent file names or changes not shown in the command output
-- NEVER use a cloud storage folder name (OneDrive, Dropbox, iCloud, etc.) as a [ProjectName]
-- If unsure about a file's purpose, just list it without guessing
+- ONLY mention projects that appear in the output of the three commands above.
+- NEVER invent files or commits not in the output.
+- If unsure about a file's purpose, list it without guessing.
 
 ## Output Format
 
-### [ProjectName]
-- **Modified:** `file1.ts`, `file2.ts`
-- **Scope:** [description]
+`### [ProjectName]` per project. Factual bullet points only.

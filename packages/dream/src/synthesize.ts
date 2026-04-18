@@ -6,9 +6,12 @@ import {
   type ClassificationResult,
   type LlmProvider,
   type PendingUpdate,
+  type ProjectStatus,
+  type ThemeDocument,
   type ThemeType,
-  readTheme,
-  listThemes,
+  PROJECT_STATUSES,
+  readAllThemes,
+  normaliseSkill,
   stripCodeFences,
   vaultLog,
 } from "@openpulse/core";
@@ -20,6 +23,31 @@ async function ensureFactsDir(vault: Vault): Promise<string> {
   const dir = join(vault.warmDir, "_facts");
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+const VALID_STATUS = new Set<ProjectStatus>(PROJECT_STATUSES);
+
+/**
+ * Parse the optional <meta>status: X\nreason: Y</meta> block emitted by the
+ * project synthesis prompt. Tolerant of missing/garbled fields — returns an
+ * empty object if nothing usable is found.
+ */
+export function parseMetaBlock(content: string): { status?: ProjectStatus; reason?: string } {
+  const match = content.match(/<meta>([\s\S]*?)<\/meta>/i);
+  if (!match) return {};
+  const body = match[1];
+  const statusMatch = body.match(/status:\s*([a-z]+)/i);
+  const reasonMatch = body.match(/reason:\s*([^\n]+)/i);
+  const rawStatus = statusMatch?.[1]?.trim().toLowerCase();
+  const out: { status?: ProjectStatus; reason?: string } = {};
+  if (rawStatus && VALID_STATUS.has(rawStatus as ProjectStatus)) out.status = rawStatus as ProjectStatus;
+  if (reasonMatch) out.reason = reasonMatch[1].trim().slice(0, 200);
+  return out;
+}
+
+/** Remove the <meta>...</meta> block (and the blank line after it) from the synthesis output. */
+export function stripMetaBlock(content: string): string {
+  return content.replace(/<meta>[\s\S]*?<\/meta>\s*/i, "").trimStart();
 }
 
 async function extractFacts(
@@ -78,11 +106,14 @@ export async function synthesizeToPending(
     }
   }
 
-  // Collect all theme names for cross-referencing
-  const allThemeNames = [...new Set([
-    ...byTheme.keys(),
-    ...(await listThemes(vault)),
-  ])];
+  // Load all warm themes once up front. The inner loop needs (a) `existing`
+  // for the theme being synthesised and (b) every other theme's `sources` to
+  // compute sharingThemes. Pre-loading replaces O(themes-in-batch × total-themes)
+  // sequential file reads with a single parallel scan.
+  const allThemes = await readAllThemes(vault);
+  const themesByName = new Map<string, ThemeDocument>();
+  for (const doc of allThemes) themesByName.set(doc.theme, doc);
+  const allThemeNames = [...new Set([...byTheme.keys(), ...themesByName.keys()])];
 
   // Load backlinks once for the whole run (shared by all themes in this batch)
   const backlinks = await buildBacklinks(vault);
@@ -90,7 +121,7 @@ export async function synthesizeToPending(
   const pending: PendingUpdate[] = [];
 
   for (const [theme, items] of byTheme) {
-    const existing = await readTheme(vault, theme);
+    const existing = themesByName.get(theme) ?? null;
 
     const pageType: ThemeType = existing?.type ?? proposedTypes?.[theme] ?? "project";
     const template = schema[pageType];
@@ -100,7 +131,7 @@ export async function synthesizeToPending(
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
     const newEntriesText = newEntries
-      .map((e) => `<entry timestamp="${e.timestamp}">\n${e.log}\n</entry>`)
+      .map((e) => `<entry timestamp="${e.timestamp}" source="${e.source ?? "unknown"}">\n${e.log}\n</entry>`)
       .join("\n");
 
     const existingSection = existing?.content
@@ -111,15 +142,16 @@ export async function synthesizeToPending(
 
     const inbound = backlinks.get(theme) ?? [];
 
-    // Themes sharing at least one source with this theme's existing content
+    // Themes sharing at least one source with this theme's existing content —
+    // resolved against the pre-loaded themesByName map (no per-theme file reads).
     const sharedSources = existing?.sources ?? [];
     const sharingThemes: string[] = [];
     if (sharedSources.length > 0) {
-      for (const name of allThemeNames) {
-        if (name === theme) continue;
-        const other = await readTheme(vault, name);
-        if (!other?.sources) continue;
-        if (other.sources.some((s) => sharedSources.includes(s))) sharingThemes.push(name);
+      const sharedSet = new Set(sharedSources);
+      for (const other of allThemes) {
+        if (other.theme === theme) continue;
+        if (!other.sources?.length) continue;
+        if (other.sources.some((s) => sharedSet.has(s))) sharingThemes.push(other.theme);
       }
     }
 
@@ -133,6 +165,16 @@ export async function synthesizeToPending(
 
     const provenanceIds = newEntries.map((e) => entryId(e.timestamp, e.source));
     const provenanceBlock = `After every factual claim, add a ^[src:entry-id] footnote. Available entry IDs:\n${newEntries.map((e, idx) => `- ${provenanceIds[idx]} (${e.timestamp.slice(0, 10)})`).join("\n")}`;
+
+    // Aggregate skills evidenced in this batch, merged with any existing tags on the theme
+    const batchSkills = items.flatMap((i) => i.skills ?? []);
+    const mergedSkills = [...new Set([...(existing?.skills ?? []), ...batchSkills])]
+      .map((s) => normaliseSkill(s))
+      .filter((s): s is string => !!s);
+
+    const skillsContext = batchSkills.length > 0
+      ? `\n\nSkills evidenced by these new entries: ${[...new Set(batchSkills)].join(", ")}. When page type is "project", reflect these under a "## Skills Demonstrated" section (bulleted, each line ending with a ^[src:...] citation to the entry that evidences it). If a skill has no direct evidence line in an entry, omit it.`
+      : "";
 
     let proposedContent: string;
 
@@ -182,6 +224,16 @@ ${backlinkContext ? "Context for cross-references:\n" + backlinkContext + "\nWhe
       });
     } else {
       // Existing single-pass path for project and source-summary
+      const statusInstruction = pageType === "project" ? `
+Lifecycle status: before the Markdown body, emit a single <meta> block with the current project status inferred from the entries. Format:
+<meta>
+status: active | paused | blocked | complete | dormant
+reason: one-line justification tied to a specific entry or existing content (under 120 chars)
+</meta>
+
+Choose "blocked" only if an entry states a blocker explicitly. "Paused" if the user deliberately set it aside. "Complete" if shipped/retired. "Dormant" if no activity has appeared for weeks. Default "active" when in doubt. This block is REQUIRED for project pages.
+` : "";
+
       proposedContent = await provider.complete({
         model,
         prompt: `You are maintaining a **${pageType}** page for "${theme}".
@@ -192,15 +244,17 @@ ${newEntriesText}
 The document structure should be:
 ${template.structure}
 
-Synthesis rules: ${template.rules}
-
+Synthesis rules: ${template.rules}${skillsContext}
+${statusInstruction}
 ${provenanceBlock}
 
 Before returning your answer, verify every repository name, PR number, issue number, and factual claim against the source entries and existing content above. Remove anything you cannot trace back to a specific source. If you are unsure whether something is real, leave it out.
 
+Source reliability: the source="..." attribute on each <entry> identifies the collector that produced it. Direct-observation sources (github-activity, google-daily-digest, folder-watcher) are authoritative for facts they directly capture. Mention-sources (e.g. an email body that names a PR, a chat message) are weaker — prefer phrasing like "mentioned in email" rather than stating mentioned facts as observed.
+
 Other themes in the wiki: ${otherThemes.join(", ")}.${backlinkContext ? "\n\nContext for cross-references:\n" + backlinkContext + "\nWhen your update mentions content related to these themes, add [[wiki-links]]." : " Where content relates to another theme, add [[theme-name]] links."}
 
-Return ONLY the Markdown content, no fences or explanations.`,
+Return ONLY the ${pageType === "project" ? "<meta> block followed by the Markdown content" : "Markdown content"}, no fences or explanations.`,
         systemPrompt: `You are a work journal assistant. Your goal is to maintain an accurate, up-to-date status page for a specific project or topic. The user relies on these status pages to quickly understand what's happening across their projects.
 
 You MUST only include information that is explicitly present in the provided activity entries or existing content. NEVER invent, fabricate, or hallucinate any data including:
@@ -216,6 +270,18 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
         maxTokens,
         temperature: 0.1,
       });
+    }
+
+    // Extract the optional <meta> status block the LLM emits for project pages.
+    // The block is stripped from the content that goes into the theme body —
+    // it lives in frontmatter instead.
+    let inferredStatus: ProjectStatus | undefined;
+    let inferredStatusReason: string | undefined;
+    if (pageType === "project") {
+      const meta = parseMetaBlock(proposedContent);
+      inferredStatus = meta.status ?? existing?.status;
+      inferredStatusReason = meta.reason ?? existing?.statusReason;
+      proposedContent = stripMetaBlock(proposedContent);
     }
 
     // Roll up ^[src:] markers and merge with existing sources
@@ -238,6 +304,9 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       sources: mergedSources.length > 0 ? mergedSources : undefined,
       related: existing?.related,
       created: existing?.created ?? new Date().toISOString(),
+      skills: mergedSkills.length > 0 ? mergedSkills : undefined,
+      projectStatus: inferredStatus,
+      projectStatusReason: inferredStatusReason,
     };
 
     const filename = `${update.id}.json`;

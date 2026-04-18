@@ -1779,3 +1779,65 @@ a.wiki-link:hover {
 .advanced-toggle:hover {
   color: var(--text-secondary);
 }
+
+/* Skills Evidence page */
+.skills-summary {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin: 0 0 1rem;
+}
+
+.skills-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.skills-table th,
+.skills-table td {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.skills-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  position: sticky;
+  top: 0;
+}
+
+.skills-table td.skill-tag code {
+  background: var(--bg-raised);
+  color: var(--accent);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+}
+
+.skills-table td.skill-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.skills-table td.skill-date {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.skills-table a.skill-theme-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.skills-table a.skill-theme-link:hover {
+  text-decoration: underline;
+}
+
+.skills-table .muted {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}

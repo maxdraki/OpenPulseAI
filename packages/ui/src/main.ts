@@ -7,6 +7,7 @@ import { renderDataSources } from "./pages/data-sources.js";
 import { renderLogs } from "./pages/logs.js";
 import { renderHelp } from "./pages/help.js";
 import { renderSchedule } from "./pages/schedule.js";
+import { renderSkillsEvidence } from "./pages/skills-evidence.js";
 import { listPendingUpdates } from "./lib/tauri-bridge.js";
 
 const content = document.getElementById("content")!;
@@ -22,6 +23,7 @@ const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   logs: renderLogs,
   help: renderHelp,
   schedule: renderSchedule,
+  "skills-evidence": renderSkillsEvidence,
 };
 
 export function navigate(page: string) {

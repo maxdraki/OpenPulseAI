@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
 import type { ClassificationResult, LlmProvider } from "@openpulse/core";
-import { synthesizeToPending } from "../src/synthesize.js";
+import { synthesizeToPending, parseMetaBlock, stripMetaBlock } from "../src/synthesize.js";
 
 function mockProvider(responseText: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(responseText) };
@@ -242,5 +242,71 @@ describe("synthesizeToPending", () => {
 
     expect(provider.complete).toHaveBeenCalledTimes(2);
     expect(pending[0].proposedContent).toContain("No durable claims yet");
+  });
+
+  it("parses LLM <meta> block into projectStatus and strips it from content", async () => {
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+        themes: ["openpulse"],
+        confidence: 0.95,
+        skills: ["typescript", "system-design"],
+      },
+    ];
+
+    const provider = mockProvider(
+      `<meta>\nstatus: blocked\nreason: waiting on design review\n</meta>\n\n## Current Status\n\nBody content.\n## Skills Demonstrated\n- typescript ^[src:2026-04-18-github-activity]\n`
+    );
+    const pending = await synthesizeToPending(vault, classified, provider, "gpt", { openpulse: "project" });
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].proposedContent.startsWith("<meta>")).toBe(false);
+    expect(pending[0].proposedContent).toContain("## Current Status");
+    expect(pending[0].projectStatus).toBe("blocked");
+    expect(pending[0].projectStatusReason).toBe("waiting on design review");
+    expect(pending[0].skills).toEqual(expect.arrayContaining(["typescript", "system-design"]));
+  });
+
+  it("tolerates a project synthesis response with no <meta> block", async () => {
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+        themes: ["plain-project"],
+        confidence: 0.95,
+      },
+    ];
+    const provider = mockProvider("## Current Status\n\nBody.\n");
+    const pending = await synthesizeToPending(vault, classified, provider, "gpt", { "plain-project": "project" });
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].projectStatus).toBeUndefined();
+    expect(pending[0].projectStatusReason).toBeUndefined();
+    expect(pending[0].proposedContent).toContain("## Current Status");
+  });
+
+  describe("parseMetaBlock / stripMetaBlock", () => {
+    it("extracts a well-formed status and reason", () => {
+      const input = `<meta>\nstatus: active\nreason: merged feature branch\n</meta>\n\n## Body\n`;
+      expect(parseMetaBlock(input)).toEqual({ status: "active", reason: "merged feature branch" });
+      expect(stripMetaBlock(input)).toBe("## Body\n");
+    });
+
+    it("ignores invalid status values", () => {
+      const input = `<meta>\nstatus: on-fire\n</meta>\n## x`;
+      expect(parseMetaBlock(input).status).toBeUndefined();
+    });
+
+    it("returns empty object when no meta present", () => {
+      expect(parseMetaBlock("## Current Status\n\nBody.")).toEqual({});
+      expect(stripMetaBlock("## Current Status\n\nBody.")).toBe("## Current Status\n\nBody.");
+    });
+
+    it("truncates overly long reason strings", () => {
+      const long = "a".repeat(300);
+      const input = `<meta>\nstatus: paused\nreason: ${long}\n</meta>\n## x`;
+      const parsed = parseMetaBlock(input);
+      expect(parsed.status).toBe("paused");
+      expect(parsed.reason?.length).toBeLessThanOrEqual(200);
+    });
   });
 });

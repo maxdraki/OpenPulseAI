@@ -104,7 +104,7 @@ const DAY_MAP: Record<string, number> = {
   sat: 6,
 };
 
-const COLLECTOR_TIMEOUT_MS = 2 * 60 * 1000;   // 2 minutes
+const COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;   // 5 minutes — pagination-heavy collectors can legitimately run longer
 const DREAM_TIMEOUT_MS     = 5 * 60 * 1000;   // 5 minutes
 
 // ---------------------------------------------------------------------------
@@ -619,15 +619,17 @@ export class Orchestrator {
           const lastRun = collector.lastRun ? new Date(collector.lastRun) : null;
 
           if (!lastRun || prev > lastRun) {
+            const gapSince = lastRun ?? prev;
+            const gapHours = Math.round(((now.getTime() - gapSince.getTime()) / 3_600_000) * 10) / 10;
             await vaultLog(
               "info",
-              `[orchestrator] Missed run detected for ${name} at ${prev.toISOString()}, running now`
+              `[orchestrator] Missed run detected for ${name} (last ran ${lastRun ? lastRun.toISOString() : "never"}, ~${gapHours}h gap), running catch-up now — collector uses lastRunAt as since, so one run covers the full gap`
             );
             // Run async — don't await here so start() returns quickly
             this.runCollector(name).catch((err) =>
               vaultLog("error", `[orchestrator] Missed-run for ${name} failed`, String(err))
             );
-            break; // one catch-up run per collector is enough
+            break; // one catch-up covers all missed slots: runner's sinceMs derives from lastRunAt
           }
         } catch (err) {
           await vaultLog("error", `[orchestrator] checkMissedRuns error for ${name}`, String(err));

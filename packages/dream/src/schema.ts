@@ -9,9 +9,9 @@ export interface SchemaTemplate {
 
 export const DEFAULT_TEMPLATES: Record<ThemeType, SchemaTemplate> = {
   project: {
-    structure: "## Current Status\n## Activity Log",
+    structure: "## Current Status\n## Activity Log\n## Skills Demonstrated",
     rules:
-      "Preserve all historical entries. Most-recent-first in Activity Log. One ### section per date. Never produce two ### sections with the same date.",
+      "Preserve all historical entries. Most-recent-first in Activity Log. One ### section per date. Never produce two ### sections with the same date. Skills Demonstrated is a bullet list of skill tags backed by evidence from activity entries (e.g. '- typescript ^[src:2026-04-18-github-activity]'). Omit the section only when no skill has evidence.",
   },
   concept: {
     structure: "## Definition\n## Key Claims\n## Related Concepts\n## Sources",
@@ -33,8 +33,8 @@ export const DEFAULT_TEMPLATES: Record<ThemeType, SchemaTemplate> = {
 export const DEFAULT_SCHEMA_CONTENT = `# Wiki Schema
 
 ### project
-Structure: ## Current Status\\n## Activity Log
-Rules: Preserve all historical entries. Most-recent-first in Activity Log. One ### section per date. Never produce two ### sections with the same date.
+Structure: ## Current Status\\n## Activity Log\\n## Skills Demonstrated
+Rules: Preserve all historical entries. Most-recent-first in Activity Log. One ### section per date. Never produce two ### sections with the same date. Skills Demonstrated is a bullet list of skill tags backed by evidence from activity entries (e.g. '- typescript ^[src:2026-04-18-github-activity]'). Omit the section only when no skill has evidence.
 
 ### concept
 Structure: ## Definition\\n## Key Claims\\n## Related Concepts\\n## Sources

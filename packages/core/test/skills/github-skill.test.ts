@@ -49,13 +49,31 @@ describe("github-activity SKILL.md", () => {
   it("contains per-repo command using github_repo_urls", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     expect(skill!.body).toContain('printf \'%s\\n\' "{{github_repo_urls}}"');
-    expect(skill!.body).toContain('gh api "repos/$repo/commits');
-    expect(skill!.body).toContain('gh api "repos/$repo/pulls');
+    expect(skill!.body).toContain('repos/$repo/commits?per_page=100&since={{since_iso}}');
+    expect(skill!.body).toContain('repos/$repo/pulls?state=all&per_page=100');
   });
 
-  it("handles enterprise repos via hostname extracted from URL", async () => {
+  it("uses --paginate to avoid dropping commits past the first page", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
-    expect(skill!.body).toContain('--hostname "$host"');
+    expect(skill!.body).toContain("--paginate");
+  });
+
+  it("handles enterprise repos via the HARG hostname flag", async () => {
+    const skill = await loadSkillFromFile(SKILL_PATH);
+    expect(skill!.body).toContain('HARG="--hostname $host"');
+    expect(skill!.body).toContain("gh api $HARG --paginate");
+  });
+
+  it("includes cross-repo activity (reviews and issue comments)", async () => {
+    const skill = await loadSkillFromFile(SKILL_PATH);
+    expect(skill!.body).toContain("reviewed-by:@me");
+    expect(skill!.body).toContain("commenter:@me");
+  });
+
+  it("preflights gh auth so silent auth failures become visible", async () => {
+    const skill = await loadSkillFromFile(SKILL_PATH);
+    expect(skill!.body).toContain("gh auth status");
+    expect(skill!.body).toMatch(/gh not authenticated/);
   });
 
   it("extracts exactly 1 shell command from the body", async () => {

@@ -171,10 +171,16 @@ export async function deleteHotEntry(id: string): Promise<void> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
+export type ProjectStatus = "active" | "paused" | "blocked" | "complete" | "dormant";
+
 export interface WarmTheme {
   theme: string;
   content: string;
   lastUpdated: string;
+  type?: string;
+  skills?: string[];
+  status?: ProjectStatus;
+  statusReason?: string;
 }
 
 export async function getHotEntries(): Promise<HotEntry[]> {

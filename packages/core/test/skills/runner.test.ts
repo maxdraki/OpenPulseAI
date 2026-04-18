@@ -279,4 +279,22 @@ describe("runSkill since injection", () => {
     expect(tsMatch).toBeTruthy();
     expect(parseInt(tsMatch![1])).toBeGreaterThan(1_000_000_000);
   });
+
+  it("exposes now_iso and now_date so skills can bound their query windows", async () => {
+    const skill = makeSkill(
+      "1. Run `echo iso={{now_iso}} date={{now_date}}` to show the now values",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = mockProvider("Summary.");
+    const before = new Date();
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const isoMatch = prompt.match(/iso=(\S+)/);
+    const dateMatch = prompt.match(/date=(\d{4}-\d{2}-\d{2})/);
+    expect(isoMatch).toBeTruthy();
+    expect(dateMatch).toBeTruthy();
+    expect(dateMatch![1]).toBe(before.toISOString().slice(0, 10));
+    expect(Date.parse(isoMatch![1])).toBeGreaterThanOrEqual(before.getTime() - 1000);
+  });
 });

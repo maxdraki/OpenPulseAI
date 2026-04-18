@@ -6,13 +6,21 @@ export type {
   SkillConfigField,
   ThemeDocument,
   ThemeType,
+  ProjectStatus,
   PendingUpdate,
   CollectorState,
   SkillDefinition,
   ChatSession,
 } from "./types.js";
+export { PROJECT_STATUSES } from "./types.js";
 export { Vault } from "./vault.js";
-export { appendActivity, saveIngestedDocument } from "./hot.js";
+export {
+  appendActivity,
+  saveIngestedDocument,
+  parseActivityBlock,
+  parseActivityBlocks,
+  type ParsedActivityBlock,
+} from "./hot.js";
 export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";
 export { archiveHotFile } from "./cold.js";
 export { loadConfig, DEFAULT_CONFIG } from "./config.js";
@@ -44,3 +52,4 @@ export { runSkillByName, runDueSkills } from "./skills/run.js";
 export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./skills/security.js";
 export { mergeThemes, isSafeThemeName } from "./merge-themes.js";
 export { sanitizeThemeSlug } from "./theme-slug.js";
+export { SEED_SKILLS, isKnownSkill, isValidSkillTag, normaliseSkill } from "./skills-taxonomy.js";

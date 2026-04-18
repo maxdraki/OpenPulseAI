@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme, mergeThemes, isSafeThemeName } from "../core/dist/index.js";
+import { Vault, writeTheme, readAllThemes, mergeThemes, isSafeThemeName, parseActivityBlocks } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -159,6 +159,9 @@ app.post("/api/approve-update", async (req, res) => {
         sources: update.sources,
         related: update.related,
         created: update.created,
+        skills: update.skills,
+        status: update.projectStatus,
+        statusReason: update.projectStatusReason,
       });
 
       // Size check for dream-pipeline project updates: enqueue compaction if
@@ -346,27 +349,10 @@ app.get("/api/hot-entries", async (_req, res) => {
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
-      const blocks = content.split(/\n---\n/).filter((b) => b.trim());
-
-      for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i];
-        const tsMatch = block.match(/^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m);
-        const themeMatch = block.match(/^\*\*Theme:\*\*\s*(.+)/m);
-        const sourceMatch = block.match(/^\*\*Source:\*\*\s*(.+)/m);
-        const logLines = block
-          .split("\n")
-          .filter((l) => !l.startsWith("## ") && !l.startsWith("**Theme:") && !l.startsWith("**Source:") && l.trim());
-
-        if (tsMatch && logLines.length > 0) {
-          entries.push({
-            id: `daily:${file}:${i}`,
-            timestamp: tsMatch[1],
-            log: logLines.join("\n").trim(),
-            theme: themeMatch?.[1],
-            source: sourceMatch?.[1],
-          });
-        }
-      }
+      const blocks = parseActivityBlocks(content);
+      blocks.forEach((block, i) => {
+        entries.push({ id: `daily:${file}:${i}`, ...block });
+      });
     }
 
     // Also scan vault/hot/ingest/ for ingested documents
@@ -432,31 +418,20 @@ app.delete("/api/hot-entries/:id", async (req, res) => {
 
 app.get("/api/warm-themes", async (_req, res) => {
   try {
-    const files = await readdir(warmDir, { withFileTypes: true });
-    const themes = [];
-
-    for (const entry of files) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      if (entry.name.startsWith("_") || entry.name === "index.md" || entry.name === "log.md") continue;
-      const raw = await readFile(join(warmDir, entry.name), "utf-8");
-      const themeName = entry.name.replace(/\.md$/, "");
-
-      // Parse frontmatter
-      const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
-      let lastUpdated = "";
-      let type = "project";
-      if (fmMatch) {
-        const luMatch = fmMatch[1].match(/lastUpdated:\s*(.+)/);
-        if (luMatch) lastUpdated = luMatch[1].trim();
-        const typeMatch = fmMatch[1].match(/type:\s*(.+)/);
-        if (typeMatch) type = typeMatch[1].trim();
-      }
-      const content = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
-
-      themes.push({ theme: themeName, content, lastUpdated, type });
-    }
-
-    themes.sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
+    const docs = await readAllThemes(vault);
+    const themes = docs
+      .map((d) => ({
+        theme: d.theme,
+        content: d.content,
+        lastUpdated: d.lastUpdated,
+        type: d.type ?? "project",
+        skills: d.skills ?? [],
+        status: d.status,
+        statusReason: d.statusReason,
+      }))
+      .sort((a, b) => b.lastUpdated.localeCompare(a.lastUpdated));
     res.json(themes);
   } catch {
     res.json([]);
