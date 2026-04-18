@@ -35,6 +35,7 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 
 // Dev API server base URL
 const API_BASE = "http://localhost:3001/api";
+export const apiBase = API_BASE;
 
 // --- Transport layer (exported for logger.ts) ---
 

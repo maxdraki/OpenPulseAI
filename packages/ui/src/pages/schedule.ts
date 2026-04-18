@@ -4,6 +4,7 @@ import {
   updateSchedule,
   triggerOrchestratorRun,
   toggleOrchestratorSchedule,
+  apiBase,
   type OrchestratorSchedule,
   type OrchestratorCollector,
   type OrchestratorStatus,
@@ -562,7 +563,7 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
     const origLabel = runBtn.textContent;
     runBtn.textContent = "Running…";
     try {
-      const res = await fetch(opts.triggerPath, {
+      const res = await fetch(`${apiBase}${opts.triggerPath}`, {
         method: "POST",
         headers: opts.triggerBody ? { "Content-Type": "application/json" } : {},
         body: opts.triggerBody ? JSON.stringify(opts.triggerBody) : undefined,
@@ -862,7 +863,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
         buildPipelineCard({
           title: "Wiki Lint",
           state: lintPipelineState,
-          triggerPath: "/api/trigger-lint",
+          triggerPath: "/trigger-lint",
           triggerBody: null,
           runLabel: "Run Lint Now",
           onDone: refresh,
@@ -879,7 +880,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
         buildPipelineCard({
           title: "Compaction",
           state: compactionState,
-          triggerPath: "/api/trigger-compact",
+          triggerPath: "/trigger-compact",
           triggerBody: {},
           runLabel: "Run Compaction Now",
           extraMeta: `${perThemeCount} theme(s) tracked · queue: ${queueCount}`,
@@ -895,7 +896,7 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
         buildPipelineCard({
           title: "Schema Evolution",
           state: schemaState,
-          triggerPath: "/api/trigger-schema-evolve",
+          triggerPath: "/trigger-schema-evolve",
           triggerBody: null,
           runLabel: "Run Schema Evolve Now",
           onDone: refresh,
