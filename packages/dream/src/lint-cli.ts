@@ -207,12 +207,63 @@ async function writeLintReport(
 // ---------------------------------------------------------------------------
 // createStubPendingUpdates
 // ---------------------------------------------------------------------------
+/**
+ * Build a seeded stub page using whatever context lint has already gathered.
+ * Leaves editable TODOs but fills in definition hint, mentions count,
+ * and backlinks from source themes.
+ */
+function buildStubContent(opts: {
+  term: string;
+  detail?: string;
+  count?: number;
+  sources?: string[];
+}): string {
+  const { term, detail, count, sources } = opts;
+  const lines: string[] = [];
+
+  lines.push(`## Definition`, ``);
+  if (detail) {
+    lines.push(`${detail}`, ``, `_(Review and rewrite — this description was auto-generated from context.)_`, ``);
+  } else {
+    lines.push(`TODO: Define "${term}".`, ``);
+  }
+
+  lines.push(`## Key Claims`, ``, `- _(to be filled in after reviewing the sources below)_`, ``);
+
+  lines.push(`## Related Concepts`, ``);
+  if (sources && sources.length > 0) {
+    for (const src of sources) {
+      lines.push(`- [[${src}]]`);
+    }
+    lines.push(``);
+  } else {
+    lines.push(`_(none yet)_`, ``);
+  }
+
+  lines.push(`## Sources`, ``);
+  if (count !== undefined && sources && sources.length > 0) {
+    lines.push(
+      `Lint surfaced this term across ${count} theme${count === 1 ? "" : "s"}: ${sources.map((s) => `[[${s}]]`).join(", ")}.`
+    );
+  } else {
+    lines.push(`_(to be filled in)_`);
+  }
+
+  return lines.join("\n") + "\n";
+}
+
 async function createStubPendingUpdates(vault: Vault, stubs: SemanticIssue[]): Promise<void> {
   if (stubs.length === 0) return;
   const batchId = new Date().toISOString();
   for (const stub of stubs) {
     const themeName = sanitizeThemeSlug(stub.term ?? "unknown");
-    const proposedContent = `## Definition\n\nTODO: Define "${stub.term}".\n\n## Key Claims\n\n- _(to be filled in)_\n\n## Related Concepts\n\n## Sources\n`;
+    if (!themeName) continue;
+    const proposedContent = buildStubContent({
+      term: stub.term ?? themeName,
+      detail: stub.detail,
+      count: stub.count,
+      sources: stub.sources,
+    });
     const update = {
       id: randomUUID(),
       theme: themeName,
@@ -243,13 +294,18 @@ async function createStubsFromConceptCandidates(vault: Vault): Promise<void> {
     const map = JSON.parse(raw) as Record<string, { count: number; sources: string[] }>;
     const frequent = Object.entries(map).filter(([, v]) => v.count >= 3);
     const batchId = new Date().toISOString();
-    for (const [term] of frequent) {
+    for (const [term, data] of frequent) {
       const themeName = sanitizeThemeSlug(term);
-      if (!themeName) continue;  // skip if sanitization zeroed it out
+      if (!themeName) continue;
+      const proposedContent = buildStubContent({
+        term,
+        count: data.count,
+        sources: data.sources,
+      });
       const update = {
         id: randomUUID(),
         theme: themeName,
-        proposedContent: `## Definition\n\nTODO: Define "${term}".\n\n## Key Claims\n\n- _(to be filled in)_\n\n## Related Concepts\n\n## Sources\n`,
+        proposedContent,
         previousContent: null,
         entries: [],
         createdAt: new Date().toISOString(),

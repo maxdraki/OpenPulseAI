@@ -743,4 +743,54 @@ describe("runLint", () => {
     expect(result).toHaveProperty("themeCount");
     expect(typeof result.themeCount).toBe("number");
   });
+
+  it("seeds stub content with detail, count, and source backlinks", async () => {
+    // Three themes that all mention MyConcept, so findStubCandidates will surface it
+    await writeTheme(vault, "theme-one", "We talk about `MyConcept` here.");
+    await writeTheme(vault, "theme-two", "Also mentions `MyConcept`.");
+    await writeTheme(vault, "theme-three", "Third mention of `MyConcept`.");
+
+    mockProvider.complete.mockResolvedValue(
+      JSON.stringify([
+        {
+          term: "MyConcept",
+          count: 3,
+          reason: "MyConcept is a recurring domain concept.",
+        },
+      ])
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const stub = pending.find((p) => p.lintFix === "stubs" && p.theme === "my-concept");
+    expect(stub).toBeDefined();
+    // Detail from the LLM should appear in the Definition section
+    expect(stub.proposedContent).toContain("MyConcept is a recurring domain concept.");
+    // Source themes should be linked as backlinks
+    expect(stub.proposedContent).toContain("[[theme-one]]");
+    expect(stub.proposedContent).toContain("[[theme-two]]");
+    expect(stub.proposedContent).toContain("[[theme-three]]");
+    // Count surfaces in the Sources section
+    expect(stub.proposedContent).toContain("3 theme");
+  });
+
+  it("PascalCase stub terms produce kebab-case theme slugs", async () => {
+    await writeTheme(vault, "a", "Uses `TypeDecorators` here.");
+    await writeTheme(vault, "b", "Also uses `TypeDecorators`.");
+    await writeTheme(vault, "c", "Third `TypeDecorators`.");
+
+    mockProvider.complete.mockResolvedValue(
+      JSON.stringify([{ term: "TypeDecorators", count: 3, reason: "Genuine concept." }])
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const stub = pending.find((p) => p.lintFix === "stubs");
+    expect(stub).toBeDefined();
+    // Slug must be kebab-case, not lowercased-concatenated
+    expect(stub.theme).toBe("type-decorators");
+    expect(stub.theme).not.toBe("typedecorators");
+  });
 });

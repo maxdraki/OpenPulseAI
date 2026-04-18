@@ -10,6 +10,7 @@ export interface SemanticIssue {
   term?: string;      // for stub-candidate: the proposed theme name
   detail: string;
   count?: number;     // for stub: how many themes mention it
+  sources?: string[]; // for stub: theme names that mention the term
 }
 
 /**
@@ -34,8 +35,8 @@ export async function findStubCandidates(
   const themeNames = await listThemes(vault);
   const themeSet = new Set(themeNames.map((n) => n.toLowerCase()));
 
-  // Count how many themes mention each term
-  const termCounts = new Map<string, number>();
+  // Track which themes mention each term
+  const termSources = new Map<string, Set<string>>();
 
   for (const themeName of themeNames) {
     const doc = await readTheme(vault, themeName);
@@ -52,31 +53,55 @@ export async function findStubCandidates(
       if (!themeSet.has(match[1].toLowerCase())) seenInThisTheme.add(match[1]);
     }
 
-    // Increment count for each unique term seen in this theme
+    // Record this theme as a source for each unique term seen in it
     for (const term of seenInThisTheme) {
-      termCounts.set(term, (termCounts.get(term) ?? 0) + 1);
+      const sources = termSources.get(term) ?? new Set<string>();
+      sources.add(themeName);
+      termSources.set(term, sources);
     }
   }
 
-  // Filter to terms with count ≥ 3
-  const frequentTerms = Array.from(termCounts.entries())
-    .filter(([, count]) => count >= 3)
-    .map(([term, count]) => ({ term, count }));
+  // Filter to terms mentioned in ≥ 3 themes
+  const frequentTerms = Array.from(termSources.entries())
+    .filter(([, sources]) => sources.size >= 3)
+    .map(([term, sources]) => ({
+      term,
+      count: sources.size,
+      sources: Array.from(sources),
+    }));
 
   if (frequentTerms.length === 0) {
     return [];
   }
 
-  const prompt = `You are reviewing a wiki for missing concept pages. The following terms appear frequently across wiki pages but don't have their own page. For each term, decide if it deserves its own wiki page.
+  const prompt = `You are reviewing a wiki for missing concept pages.
 
-Terms (with occurrence count):
-${frequentTerms.map((t) => `- "${t.term}" (${t.count} mentions)`).join("\n")}
+The wiki's purpose is to document **concepts, entities, and decisions** — not code-level implementation details.
+
+For each term below, judge whether it is a **genuine concept worth its own page** or just an **internal code symbol** (e.g. TypeScript interface, variable name, class identifier, function parameter).
+
+REJECT terms that are:
+- TypeScript interfaces, classes, enums (e.g. UserState, Config, SourceData)
+- Internal type names that only make sense in source code
+- Acronyms or identifiers without a domain meaning outside code
+- Technical plumbing (buffers, caches, contexts, handlers, registries)
+
+ACCEPT terms that are:
+- Domain concepts the user would discuss verbally with a colleague
+- Named products, features, or user-facing workflows
+- External services, protocols, or recognised design patterns
+- Recurring decisions or tradeoffs worth recording
+
+Terms (with occurrence count and source themes):
+${frequentTerms
+  .map((t) => `- "${t.term}" (${t.count} mentions in: ${t.sources.slice(0, 5).join(", ")})`)
+  .join("\n")}
 
 Existing pages: ${themeNames.join(", ")}
 
-Respond with ONLY a JSON array of terms that should become wiki pages:
-[{"term": "TermName", "count": 3, "reason": "one sentence why"}]
-If no terms deserve pages, return [].`;
+Respond with ONLY a JSON array of terms that deserve wiki pages. Be strict — default to rejecting.
+[{"term": "TermName", "count": 3, "reason": "one sentence explaining why this is a domain concept, not a code symbol"}]
+If nothing qualifies, return [].`;
 
   try {
     const response = await provider.complete({
@@ -91,11 +116,15 @@ If no terms deserve pages, return [].`;
       reason: string;
     }>;
 
+    // Attach sources to each accepted term so downstream can build backlinks
+    const sourcesByTerm = new Map(frequentTerms.map((t) => [t.term, t.sources]));
+
     return parsed.map((item) => ({
       type: "stub-candidate" as const,
       term: item.term,
       detail: item.reason,
       count: item.count,
+      sources: sourcesByTerm.get(item.term) ?? [],
     }));
   } catch (err) {
     await vaultLog("error", "findStubCandidates: LLM call or JSON parse failed", String(err));
