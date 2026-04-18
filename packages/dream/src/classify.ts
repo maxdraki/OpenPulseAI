@@ -1,5 +1,5 @@
 import type { ActivityEntry, ClassificationResult, LlmProvider, ThemeType } from "@openpulse/core";
-import { stripCodeFences, vaultLog } from "@openpulse/core";
+import { stripCodeFences, vaultLog, SEED_SKILLS, normaliseSkill } from "@openpulse/core";
 import { canonicalizeThemes } from "./canonicalize.js";
 
 /**
@@ -276,7 +276,7 @@ export async function classifyEntries(
   // LLM fallback for remaining entries
   if (needsLlm.length > 0) {
     const entriesText = needsLlm
-      .map((e, i) => `[${i}] ${e.timestamp}: ${e.log.slice(0, 300)}`)
+      .map((e, i) => `[${i}] ${e.timestamp} (source="${e.source ?? "unknown"}"): ${e.log.slice(0, 300)}`)
       .join("\n\n");
 
     try {
@@ -301,8 +301,16 @@ For each entry also identify 0-3 "concept_candidates" — terms, patterns, or en
 that appear prominently in the entry and might deserve their own wiki page (e.g.
 "barrier-pattern", "wiki-maturity"). These are suggestions, not themes.
 
+SKILLS: For each entry, identify 0-5 concrete skills DEMONSTRATED in the entry.
+Prefer tags from this seed list when they fit: ${SEED_SKILLS.join(", ")}.
+You MAY introduce new tags if no seed tag fits — new tags must be lowercase-kebab-case and describe an activity that was performed (not a general knowledge area).
+Rules:
+- Only tag a skill if there is direct evidence in the entry (e.g. a commit to a TypeScript file → "typescript"; reviewing a PR → "pr-review").
+- Do NOT tag skills inferred from project name alone.
+- Return empty array if no skill can be evidenced.
+
 Respond with ONLY a JSON array:
-[{"index": 0, "themes": ["name1"], "type": "project", "concept_candidates": ["term-a", "term-b"]}]`,
+[{"index": 0, "themes": ["name1"], "type": "project", "concept_candidates": ["term-a"], "skills": ["typescript", "pr-review"]}]`,
         temperature: 0,
       });
 
@@ -312,6 +320,7 @@ Respond with ONLY a JSON array:
         themes: string[];
         type?: string;
         concept_candidates?: string[];
+        skills?: string[];
       }>;
       const returnedIndexes = new Set<number>();
       for (const p of parsed) {
@@ -321,6 +330,9 @@ Respond with ONLY a JSON array:
           const inferredType = (["project", "concept", "entity", "source-summary"].includes(p.type ?? ""))
             ? (p.type as ThemeType)
             : "project";
+          const skillTags = Array.isArray(p.skills)
+            ? [...new Set(p.skills.map(normaliseSkill).filter((s): s is string => !!s))].slice(0, 5)
+            : [];
           const anyExisting = themes.some((t) => existingThemeSet.has(t));
           const llmConfidence = anyExisting ? 0.7 : 0.4;
           // If confidence is low AND all themes are new (no match to existing), route to orphan candidates
@@ -335,7 +347,7 @@ Respond with ONLY a JSON array:
             });
             returnedIndexes.add(p.index);
           } else {
-            results.push({ entry: needsLlm[p.index], themes, confidence: llmConfidence });
+            results.push({ entry: needsLlm[p.index], themes, confidence: llmConfidence, skills: skillTags });
             returnedIndexes.add(p.index);
             for (const theme of themes) {
               if (!existingThemeSet.has(theme)) {

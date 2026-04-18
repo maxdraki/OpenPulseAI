@@ -30,7 +30,20 @@ export interface ClassificationResult {
   entry: ActivityEntry;
   themes: string[]; // 1-3 theme tags
   confidence: number; // 0-1
+  skills?: string[]; // skill tags extracted from the entry (kebab-case); empty/absent = none detected
 }
+
+/** Lifecycle status of a project theme (absent for non-project types). */
+export type ProjectStatus = "active" | "paused" | "blocked" | "complete" | "dormant";
+
+/** Single source of truth for valid project-status values. Used for runtime validation. */
+export const PROJECT_STATUSES: readonly ProjectStatus[] = [
+  "active",
+  "paused",
+  "blocked",
+  "complete",
+  "dormant",
+];
 
 /** A warm theme file's parsed content */
 export interface ThemeDocument {
@@ -42,6 +55,9 @@ export interface ThemeDocument {
   sources?: string[];  // entry IDs rolled up from ^[src:] markers
   related?: string[];  // related theme names
   created?: string;    // ISO 8601 — set on first synthesis
+  skills?: string[];   // skill tags demonstrated by activity on this theme
+  status?: ProjectStatus;     // lifecycle status (projects only)
+  statusReason?: string;      // one-line justification for the status
 }
 
 /** A pending warm update awaiting user approval */
@@ -58,6 +74,9 @@ export interface PendingUpdate {
   sources?: string[];            // rolled-up source entry IDs from ^[src:] markers
   related?: string[];            // related theme names
   created?: string;              // ISO 8601 — set on first synthesis
+  skills?: string[];             // merged skill tags contributed by this update
+  projectStatus?: ProjectStatus; // lifecycle status — project pages only (distinct from `status` review state above)
+  projectStatusReason?: string;  // one-line justification for projectStatus
   // Sub-kind fields — at most one is set per update
   lintFix?: "stubs" | "orphans" | "merge" | "delete" | "rename" | "broken-link" | "dedup-dates";
   fixReason?: string;            // optional discriminator when multiple lintFix kinds share a value (e.g., "orphan with no substantive content")

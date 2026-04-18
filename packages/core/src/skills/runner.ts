@@ -160,6 +160,9 @@ export async function runSkill(
     since_date: sinceDate.toISOString().slice(0, 10),
     since_unix: Math.floor(sinceMs / 1000).toString(),
     since_days: Math.max(1, Math.ceil((now.getTime() - sinceMs) / 86_400_000)).toString(),
+    now_iso:    now.toISOString(),
+    now_date:   now.toISOString().slice(0, 10),
+    now_unix:   Math.floor(now.getTime() / 1000).toString(),
   };
 
   try {
@@ -213,15 +216,19 @@ export async function runSkill(
       : "(No shell commands were executed)";
 
     const systemPrompt = [
-      `You are a data collector summarising output from the "${skill.name}" skill.`,
-      `Your goal: produce a factual journal entry that captures what actually happened,`,
-      `so the user can later look back and understand their work activity.`,
+      `You are a data collector producing a journal entry from the "${skill.name}" skill.`,
       `Today's date: ${now.toISOString().slice(0, 10)}`,
       `Collecting activity since: ${sinceDate.toISOString().slice(0, 10)}${priorState?.lastRunAt ? " (last run)" : " (first run — using lookback window)"}`,
       "",
-      "The shell commands below have already been executed and their outputs are provided.",
-      "Summarise ONLY what the command output shows. If a command returned no output,",
-      "say so briefly. Never invent data that isn't in the command output.",
+      "The shell commands below have been executed and their outputs are provided.",
+      "",
+      "FIDELITY RULES (critical — downstream pipelines depend on these specifics):",
+      "- Preserve every concrete identifier verbatim: commit SHAs, PR numbers, issue numbers, release tags, file paths, repo slugs, email subjects, calendar event titles, meeting attendees.",
+      "- Preserve exact timestamps from the output (do not round to 'yesterday' or 'earlier today').",
+      "- Do not abstract specifics into categories (e.g. do NOT write 'made several backend changes' — list the SHAs and messages).",
+      "- Do not invent data that isn't in the command output.",
+      "- If a command returned no output or failed, say so plainly.",
+      "- Keep prose minimal — bullet-point facts are preferred over paragraphs.",
     ].join("\n");
 
     const prompt = [

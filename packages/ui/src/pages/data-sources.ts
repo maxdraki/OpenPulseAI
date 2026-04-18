@@ -19,7 +19,6 @@ const DATA_SOURCES = [
   { id: "gitlab-activity", name: "GitLab", description: "Merge requests, commits, issues, pipelines", icon: logo("gitlab.com") },
   { id: "todoist-activity", name: "Todoist", description: "Completed tasks, new items, upcoming due dates", icon: logo("todoist.com") },
   { id: "sentry-activity", name: "Sentry", description: "Errors, unresolved issues, regressions", icon: logo("sentry.io") },
-  { id: "weekly-rollup", name: "Weekly Rollup", description: "Synthesise themes into a weekly status", icon: "" },
 ];
 
 // Human-readable cron descriptions for common patterns

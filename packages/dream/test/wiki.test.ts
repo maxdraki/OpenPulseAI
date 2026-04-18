@@ -162,6 +162,74 @@ describe("generateIndex — grouped by type", () => {
   });
 });
 
+describe("generateIndex — projects grouped by status", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-index-status-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("renders Blocked, Paused, Active, Complete sections in that order", async () => {
+    await writeTheme(vault, "proj-blocked",  "## Current Status\nblocked here", { type: "project", status: "blocked",  statusReason: "waiting on review" });
+    await writeTheme(vault, "proj-paused",   "## Current Status\npaused",       { type: "project", status: "paused" });
+    await writeTheme(vault, "proj-active",   "## Current Status\nactive work",  { type: "project", status: "active" });
+    await writeTheme(vault, "proj-done",     "## Current Status\nshipped",      { type: "project", status: "complete" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    const blockedIdx  = index.indexOf("### Blocked");
+    const pausedIdx   = index.indexOf("### Paused");
+    const activeIdx   = index.indexOf("### Active");
+    const completeIdx = index.indexOf("### Complete");
+
+    expect(blockedIdx).toBeGreaterThan(-1);
+    expect(blockedIdx).toBeLessThan(pausedIdx);
+    expect(pausedIdx).toBeLessThan(activeIdx);
+    expect(activeIdx).toBeLessThan(completeIdx);
+
+    // Status reason annotated inline
+    expect(index).toContain("_(waiting on review)_");
+  });
+
+  it("auto-infers dormant status for projects older than 30d without an explicit status", async () => {
+    // Write a theme with lastUpdated in the distant past
+    const old = new Date(Date.now() - 60 * 86_400_000).toISOString();
+    const raw = `---\ntheme: old-proj\nlastUpdated: ${old}\ntype: project\n---\n\n## Current Status\nHistorical work.\n`;
+    await writeFile(join(vault.warmDir, "old-proj.md"), raw, "utf-8");
+
+    // Also add a fresh project to keep the index meaningful
+    await writeTheme(vault, "fresh", "## Current Status\nActive.", { type: "project", status: "active" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    expect(index).toContain("### Dormant (>30d idle)");
+    expect(index).toContain("[[old-proj]]");
+    // fresh should NOT be in the dormant section
+    const dormantSlice = index.slice(index.indexOf("### Dormant"));
+    expect(dormantSlice).not.toContain("[[fresh]]");
+  });
+
+  it("untagged projects render under Active", async () => {
+    await writeTheme(vault, "no-status", "## Current Status\nJust active.", { type: "project" });
+
+    await generateIndex(vault);
+
+    const index = await readFile(join(vault.warmDir, "index.md"), "utf-8");
+    const activeIdx = index.indexOf("### Active");
+    expect(activeIdx).toBeGreaterThan(-1);
+    expect(index.slice(activeIdx)).toContain("[[no-status]]");
+  });
+});
+
 describe("appendLog", () => {
   let vault: Vault;
   let tempDir: string;

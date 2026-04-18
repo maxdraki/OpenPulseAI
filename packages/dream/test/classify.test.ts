@@ -297,3 +297,57 @@ describe("classifyEntries — orphan candidates", () => {
     expect(result.classified.length).toBe(1);
   });
 });
+
+describe("classifyEntries — skills extraction", () => {
+  const entry = {
+    timestamp: "2026-04-17T00:00:00Z",
+    log: "Substantive line one. Line two. Line three. Line four. Line five. Committed changes to foo.ts.",
+    source: "github-activity",
+  };
+
+  it("attaches normalised skills to the ClassificationResult", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([
+          { index: 0, themes: ["existing"], type: "project", skills: ["TypeScript", "pr-review"] },
+        ]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].skills).toEqual(expect.arrayContaining(["typescript", "pr-review"]));
+  });
+
+  it("defaults skills to an empty array when the LLM omits the field", async () => {
+    const provider = {
+      complete: async () => JSON.stringify([{ index: 0, themes: ["existing"], type: "project" }]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].skills).toEqual([]);
+  });
+
+  it("tolerates a non-array skills value and yields an empty skill list", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([{ index: 0, themes: ["existing"], type: "project", skills: "typescript" }]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].skills).toEqual([]);
+  });
+
+  it("drops invalid skill tags and caps the list at 5", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([
+          {
+            index: 0,
+            themes: ["existing"],
+            type: "project",
+            skills: ["a", "", "typescript", "pr-review", "ops", "docker", "kubernetes", "system-design"],
+          },
+        ]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].skills!.length).toBeLessThanOrEqual(5);
+    // "a" is too short to be a valid tag
+    expect(result.classified[0].skills).not.toContain("a");
+  });
+});

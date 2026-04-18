@@ -2,8 +2,8 @@
 import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog, readTheme } from "@openpulse/core";
-import type { ActivityEntry } from "@openpulse/core";
+import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog, readTheme, parseActivityBlocks } from "@openpulse/core";
+import type { ActivityEntry, ProjectStatus } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
 import { synthesizeToPending } from "./synthesize.js";
 import { archiveProcessedHotFiles } from "./archive.js";
@@ -112,36 +112,10 @@ async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
 
   for (const file of files) {
     if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
-
     const content = await readFile(join(vault.hotDir, file), "utf-8");
-    const blocks = content.split(/\n---\n/).filter((b) => b.trim());
-
-    for (const block of blocks) {
-      const tsMatch = block.match(/^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m);
-      const themeMatch = block.match(/^\*\*Theme:\*\*\s*(.+)/m);
-      const sourceMatch = block.match(/^\*\*Source:\*\*\s*(.+)/m);
-      const logLines = block
-        .split("\n")
-        .filter(
-          (l) =>
-            !l.startsWith("## ") &&
-            !l.startsWith("**Theme:") &&
-            !l.startsWith("**Source:") &&
-            l.trim()
-        );
-
-      if (tsMatch && logLines.length > 0) {
-        entries.push({
-          timestamp: tsMatch[1],
-          log: logLines.join("\n").trim(),
-          theme: themeMatch?.[1],
-          source: sourceMatch?.[1],
-        });
-      }
-    }
+    entries.push(...parseActivityBlocks(content));
   }
 
-  // Also read ingested documents
   const ingestDir = join(vault.hotDir, "ingest");
   try {
     const ingestFiles = await readdir(ingestDir);
@@ -192,7 +166,27 @@ export async function generateIndex(vault: Vault): Promise<void> {
       if (summary) break;
     }
 
-    return { name, type, summary, lastUpdated: doc.lastUpdated };
+    // Auto-infer dormancy for projects that haven't been updated in >30d and
+    // don't have a status already set. Keeps the index honest without waiting
+    // for a lint pass/approval cycle. Defensively ignores malformed lastUpdated
+    // values so a bad frontmatter date can never flip everything to dormant.
+    let status = doc.status;
+    if (type === "project" && !status) {
+      const parsed = Date.parse(doc.lastUpdated);
+      if (Number.isFinite(parsed)) {
+        const ageDays = (Date.now() - parsed) / 86_400_000;
+        if (ageDays > 30) status = "dormant";
+      }
+    }
+
+    return {
+      name,
+      type,
+      summary,
+      lastUpdated: doc.lastUpdated,
+      status,
+      statusReason: doc.statusReason,
+    };
   }));
 
   const valid = themeDocs.filter((t): t is NonNullable<typeof themeDocs[0]> => t !== null);
@@ -246,16 +240,48 @@ export async function generateIndex(vault: Vault): Promise<void> {
     "source-summary": "## Sources",
   };
 
+  // Render priority: things needing attention (blocked, paused) first, then
+  // active (and untagged, which we render as "active"), then things the user
+  // has explicitly moved out of play (complete/dormant). Typing `match` against
+  // ProjectStatus | undefined means adding a new lifecycle value will trigger a
+  // compile error here if it isn't covered.
+  type StatusGroup = { status: ProjectStatus; label: string; includeUntagged?: boolean };
+  const PROJECT_GROUP_ORDER: StatusGroup[] = [
+    { status: "blocked",  label: "### Blocked" },
+    { status: "paused",   label: "### Paused" },
+    { status: "active",   label: "### Active", includeUntagged: true },
+    { status: "complete", label: "### Complete" },
+    { status: "dormant",  label: "### Dormant (>30d idle)" },
+  ];
+  const matchesGroup = (s: ProjectStatus | undefined, g: StatusGroup): boolean =>
+    s === g.status || (!s && !!g.includeUntagged);
+
   const sections: string[] = [];
   for (const [type, items] of Object.entries(byType)) {
     if (items.length === 0) continue;
     sections.push(SECTION_LABELS[type]);
-    for (const t of items) {
-      const datePart = t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : "";
-      const summaryPart = t.summary ? ` — ${t.summary}` : "";
-      sections.push(`- [[${t.name}]]${summaryPart}${datePart}`);
+
+    if (type === "project") {
+      for (const group of PROJECT_GROUP_ORDER) {
+        const matching = items.filter((t) => matchesGroup(t.status, group));
+        if (matching.length === 0) continue;
+        sections.push(group.label);
+        for (const t of matching) {
+          const datePart = t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : "";
+          const summaryPart = t.summary ? ` — ${t.summary}` : "";
+          const reasonPart = t.statusReason ? ` _(${t.statusReason})_` : "";
+          sections.push(`- [[${t.name}]]${summaryPart}${datePart}${reasonPart}`);
+        }
+        sections.push("");
+      }
+    } else {
+      for (const t of items) {
+        const datePart = t.lastUpdated ? ` (${formatDate(t.lastUpdated)})` : "";
+        const summaryPart = t.summary ? ` — ${t.summary}` : "";
+        sections.push(`- [[${t.name}]]${summaryPart}${datePart}`);
+      }
+      sections.push("");
     }
-    sections.push("");
   }
 
   const now = new Date().toISOString();
