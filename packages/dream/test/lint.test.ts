@@ -3,8 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
+import { readdir, readFile } from "node:fs/promises";
 import { runStructuralChecks } from "../src/lint-structural.js";
 import { findStubCandidates, findContradictions } from "../src/lint-semantic.js";
+import { runLint } from "../src/lint-cli.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -586,5 +588,159 @@ describe("runStructuralChecks — new checks", () => {
       (i) => i.type === "low-provenance" && i.theme === "full-prov"
     );
     expect(lowProv).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runLint — CLI orchestration
+// ---------------------------------------------------------------------------
+describe("runLint", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  const mockProvider = { complete: vi.fn() };
+
+  beforeEach(async () => {
+    ({ vault, tempDir } = await setup());
+    vi.clearAllMocks();
+    mockProvider.complete.mockResolvedValue("[]");
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function listPending(): Promise<any[]> {
+    try {
+      const files = await readdir(vault.pendingDir);
+      const results: any[] = [];
+      for (const f of files) {
+        if (!f.endsWith(".json")) continue;
+        const raw = await readFile(join(vault.pendingDir, f), "utf-8");
+        results.push(JSON.parse(raw));
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  it("always writes a report to _lint.md", async () => {
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+    const report = await readFile(join(vault.warmDir, "_lint.md"), "utf-8");
+    expect(report).toContain("# Wiki Lint");
+  });
+
+  it("default run (no fix flag) proposes pending updates for all categories", async () => {
+    // Set up findings: duplicate theme (merge), low-value theme (delete), orphan candidates
+    await writeTheme(vault, "primary", "Main content here with enough text to avoid low-value.");
+    await writeTheme(vault, "duplicate", "Merge me into [[primary]]."); // fuzzy match not needed — we inject manually
+    await writeFile(
+      join(vault.warmDir, "_orphan-candidates.json"),
+      JSON.stringify([
+        {
+          entryTimestamp: "2026-04-18T10:00:00Z",
+          source: "test",
+          proposedThemes: ["new-theme"],
+          confidence: 0.3,
+          log: "Some orphaned entry.",
+        },
+      ]),
+      "utf-8"
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    // Orphan candidate should have been promoted to a pending update
+    const orphanUpdates = pending.filter((p) => p.lintFix === "orphans");
+    expect(orphanUpdates.length).toBeGreaterThan(0);
+    expect(orphanUpdates[0].theme).toBe("new-theme");
+  });
+
+  it("--no-fix produces report but zero pending updates", async () => {
+    await writeFile(
+      join(vault.warmDir, "_orphan-candidates.json"),
+      JSON.stringify([
+        {
+          entryTimestamp: "2026-04-18T10:00:00Z",
+          source: "test",
+          proposedThemes: ["new"],
+          confidence: 0.3,
+          log: "orphan entry.",
+        },
+      ]),
+      "utf-8"
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m", noFix: true });
+
+    const pending = await listPending();
+    expect(pending).toHaveLength(0);
+    // But the report should still be written
+    const report = await readFile(join(vault.warmDir, "_lint.md"), "utf-8");
+    expect(report).toContain("# Wiki Lint");
+  });
+
+  it("--fix=stubs only proposes stub updates, not orphans or other fixes", async () => {
+    // Orphan candidate that would be promoted in default run
+    await writeFile(
+      join(vault.warmDir, "_orphan-candidates.json"),
+      JSON.stringify([
+        {
+          entryTimestamp: "2026-04-18T10:00:00Z",
+          source: "test",
+          proposedThemes: ["new"],
+          confidence: 0.3,
+          log: "orphan entry.",
+        },
+      ]),
+      "utf-8"
+    );
+    // Concept candidates file that stubs fix would process
+    await writeFile(
+      join(vault.warmDir, "_concept-candidates.json"),
+      JSON.stringify({
+        MyConcept: { count: 5, sources: ["a", "b", "c"] },
+      }),
+      "utf-8"
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m", fix: "stubs" });
+
+    const pending = await listPending();
+    // Only stubs should exist, no orphans
+    const stubs = pending.filter((p) => p.lintFix === "stubs");
+    const orphans = pending.filter((p) => p.lintFix === "orphans");
+    expect(stubs.length).toBeGreaterThan(0);
+    expect(orphans).toHaveLength(0);
+  });
+
+  it("--fix=rename requires --from and --to", async () => {
+    await expect(
+      runLint({ vault, provider: mockProvider as any, model: "m", fix: "rename" })
+    ).rejects.toThrow(/requires --from and --to/);
+  });
+
+  it("--fix=rename creates a pending rename update", async () => {
+    await runLint({
+      vault,
+      provider: mockProvider as any,
+      model: "m",
+      fix: "rename",
+      from: "old-name",
+      to: "new-name",
+    });
+    const pending = await listPending();
+    const renames = pending.filter((p) => p.lintFix === "rename");
+    expect(renames).toHaveLength(1);
+    expect(renames[0].theme).toBe("old-name");
+  });
+
+  it("returns result stats", async () => {
+    const result = await runLint({ vault, provider: mockProvider as any, model: "m" });
+    expect(result).toHaveProperty("structuralIssues");
+    expect(result).toHaveProperty("themeCount");
+    expect(typeof result.themeCount).toBe("number");
   });
 });

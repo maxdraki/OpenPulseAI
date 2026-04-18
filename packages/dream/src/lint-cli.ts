@@ -2,13 +2,19 @@
 /**
  * openpulse-lint — Wiki lint CLI entry point
  *
+ * Default run writes _lint.md AND proposes pending updates for every
+ * fixable category (stubs, orphans, merges, low-value deletions).
+ * Pass --fix=X to restrict to a single category, or --no-fix for
+ * report-only mode.
+ *
  * Usage:
- *   openpulse-lint
- *   openpulse-lint --fix=stubs
- *   openpulse-lint --fix=orphans
- *   openpulse-lint --fix=merge
- *   openpulse-lint --fix=delete-lowvalue
- *   openpulse-lint --fix=rename --from=X --to=Y
+ *   openpulse-lint                         # analyse + auto-propose all fixes
+ *   openpulse-lint --no-fix                # analyse only, no pending updates
+ *   openpulse-lint --fix=stubs             # analyse + only stub fixes
+ *   openpulse-lint --fix=orphans           # analyse + only orphan-candidate fixes
+ *   openpulse-lint --fix=merge             # analyse + only merge proposals
+ *   openpulse-lint --fix=delete-lowvalue   # analyse + only low-value deletions
+ *   openpulse-lint --fix=rename --from=X --to=Y   # explicit rename
  */
 
 import { randomUUID } from "node:crypto";
@@ -110,7 +116,6 @@ async function writeLintReport(
         const countPart = stub.count !== undefined ? ` — mentioned ${stub.count} times` : "";
         lines.push(`- "${stub.term}"${countPart}: ${stub.detail}`);
       }
-      lines.push(``, `Run \`openpulse-lint --fix=stubs\` to create stub pages as pending updates.`);
     }
 
     // Contradictions section
@@ -149,7 +154,6 @@ async function writeLintReport(
           `- ${ts} ${c.source ?? "unknown"} — proposed: ${c.proposedThemes.join(", ")}, conf ${c.confidence}`
         );
       }
-      lines.push(``, `Run \`openpulse-lint --fix=orphans\` to review and approve.`);
     }
   } catch {
     /* no orphan candidates file yet */
@@ -174,57 +178,25 @@ async function writeLintReport(
           `- "${term}" (${data.count} mentions) — sources: ${data.sources.slice(0, 3).join(", ")}`
         );
       }
-      lines.push(
-        ``,
-        `Run \`openpulse-lint --fix=stubs\` to create concept pages as pending updates.`
-      );
     }
   } catch {
     /* no concept candidates file yet */
   }
 
   // --------------------------------------------------------------------
-  // Actions footer — only when there is something actionable
+  // Actions footer — proposed fixes are written to the pending queue
+  // automatically. Surface manual-only steps here.
   // --------------------------------------------------------------------
   const hasAnyFixable =
     totalIssues > 0 || hasOrphanCandidates || hasConceptCandidates;
-  if (hasAnyFixable && totalIssues > 0) {
-    lines.push(``, `## Actions`);
-    if (stubs.length > 0 || hasConceptCandidates) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=stubs\` to create stub pages as pending updates`
-      );
-    }
-    if (hasOrphanCandidates) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=orphans\` to propose cross-references`
-      );
-    }
-    if (structural.some((i) => i.type === "low-value")) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=delete-lowvalue\` to propose deletion of low-value pages`
-      );
-    }
-    if (structural.some((i) => i.type === "duplicate-theme")) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=merge\` to propose merging duplicate themes`
-      );
-    }
+  if (hasAnyFixable) {
+    lines.push(``, `## Next steps`);
+    lines.push(`Proposed fixes have been written to the pending queue — review them on the Review page.`);
     if (contradictions.length > 0) {
-      lines.push(`- Contradictions require manual review`);
+      lines.push(`- Contradictions require manual review (no auto-fix).`);
     }
-  } else if (hasAnyFixable) {
-    // Healthy themes but sidecar candidates exist — still show actions.
-    lines.push(``, `## Actions`);
-    if (hasConceptCandidates) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=stubs\` to create concept stub pages as pending updates`
-      );
-    }
-    if (hasOrphanCandidates) {
-      lines.push(
-        `- Run \`openpulse-lint --fix=orphans\` to propose cross-references`
-      );
+    if (structural.some((i) => i.type === "broken-link")) {
+      lines.push(`- Broken cross-references require manual review (no auto-fix yet).`);
     }
   }
 
@@ -440,17 +412,27 @@ async function createRenamePendingUpdate(
 }
 
 // ---------------------------------------------------------------------------
-// main
+// runLint — testable entry point. main() just parses argv and calls this.
 // ---------------------------------------------------------------------------
-async function main(): Promise<void> {
-  const config = await loadConfig(VAULT_ROOT);
-  initLogger(VAULT_ROOT);
-  const vault = new Vault(VAULT_ROOT);
-  await vault.init();
-  const provider = createProvider(config);
-  const model = config.llm.model;
+export interface LintOptions {
+  vault: Vault;
+  provider: import("@openpulse/core").LlmProvider;
+  model: string;
+  fix?: "stubs" | "orphans" | "merge" | "delete-lowvalue" | "rename";
+  noFix?: boolean;
+  from?: string;
+  to?: string;
+}
 
-  await vaultLog("info", "Wiki lint started");
+export interface LintResult {
+  structuralIssues: number;
+  stubs: number;
+  contradictions: number;
+  themeCount: number;
+}
+
+export async function runLint(opts: LintOptions): Promise<LintResult> {
+  const { vault, provider, model, fix, noFix, from, to } = opts;
 
   const structural = await runStructuralChecks(vault);
   const stubs = await findStubCandidates(vault, provider, model);
@@ -463,36 +445,80 @@ async function main(): Promise<void> {
   console.error(
     `[lint] ${totalIssues} issue(s) found across ${themeCount} themes — see vault/warm/_lint.md`
   );
-  await vaultLog("info", `Wiki lint complete: ${totalIssues} issues`, `${themeCount} themes checked`);
 
-  // Dispatch --fix modes
-  if (fixFlag === "stubs") {
+  const result: LintResult = {
+    structuralIssues: structural.length,
+    stubs: stubs.length,
+    contradictions: contradictions.length,
+    themeCount,
+  };
+
+  // Rename is always explicit — requires from/to.
+  if (fix === "rename") {
+    if (!from || !to) throw new Error("--fix=rename requires --from and --to");
+    await createRenamePendingUpdate(vault, from, to);
+    return result;
+  }
+
+  if (noFix) return result;
+
+  // Default run (no fix flag) runs ALL fix modes. A specific fix=X runs only that one.
+  // Each mode writes its own batch so the Review page groups them by type.
+  const runAll = fix === undefined;
+
+  if (runAll || fix === "stubs") {
     await createStubPendingUpdates(vault, stubs);
     await createStubsFromConceptCandidates(vault);
-  } else if (fixFlag === "orphans") {
+  }
+  if (runAll || fix === "orphans") {
     await createOrphanPendingUpdates(vault);
-  } else if (fixFlag === "delete-lowvalue") {
+  }
+  if (runAll || fix === "delete-lowvalue") {
     await createDeletePendingUpdates(
       vault,
       structural.filter((i) => i.type === "low-value")
     );
-  } else if (fixFlag === "merge") {
+  }
+  if (runAll || fix === "merge") {
     await createMergePendingUpdates(
       vault,
       structural.filter((i) => i.type === "duplicate-theme")
     );
-  } else if (fixFlag === "rename") {
-    const from = process.argv.find((a) => a.startsWith("--from="))?.split("=")[1];
-    const to = process.argv.find((a) => a.startsWith("--to="))?.split("=")[1];
-    if (!from || !to) {
-      console.error("--fix=rename requires --from= and --to=");
-      process.exit(1);
-    }
-    await createRenamePendingUpdate(vault, from, to);
   }
+
+  return result;
 }
 
-main().catch((err) => {
-  console.error("[lint] Fatal:", err);
-  process.exit(1);
-});
+// ---------------------------------------------------------------------------
+// main — CLI entry
+// ---------------------------------------------------------------------------
+async function main(): Promise<void> {
+  const config = await loadConfig(VAULT_ROOT);
+  initLogger(VAULT_ROOT);
+  const vault = new Vault(VAULT_ROOT);
+  await vault.init();
+  const provider = createProvider(config);
+  const model = config.llm.model;
+
+  await vaultLog("info", "Wiki lint started");
+
+  const from = process.argv.find((a) => a.startsWith("--from="))?.split("=")[1];
+  const to = process.argv.find((a) => a.startsWith("--to="))?.split("=")[1];
+  const noFix = process.argv.includes("--no-fix");
+
+  const result = await runLint({ vault, provider, model, fix: fixFlag, noFix, from, to });
+  await vaultLog(
+    "info",
+    `Wiki lint complete: ${result.structuralIssues} structural issues`,
+    `${result.themeCount} themes checked`
+  );
+}
+
+// Only run main() when invoked directly, not when imported by tests.
+const invoked = import.meta.url === `file://${process.argv[1]}`;
+if (invoked) {
+  main().catch((err) => {
+    console.error("[lint] Fatal:", err);
+    process.exit(1);
+  });
+}
