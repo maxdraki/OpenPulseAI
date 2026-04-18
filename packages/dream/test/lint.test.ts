@@ -6,7 +6,7 @@ import { Vault, writeTheme } from "@openpulse/core";
 import { readdir, readFile } from "node:fs/promises";
 import { runStructuralChecks } from "../src/lint-structural.js";
 import { findStubCandidates, findContradictions } from "../src/lint-semantic.js";
-import { runLint } from "../src/lint-cli.js";
+import { runLint, mergeDuplicateDates, isEssentiallyEmpty } from "../src/lint-cli.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -683,6 +683,11 @@ describe("runLint", () => {
   });
 
   it("--fix=stubs only proposes stub updates, not orphans or other fixes", async () => {
+    // Source themes that actually contain mentions of MyConcept so synthesis can extract passages
+    await writeTheme(vault, "a", "We use MyConcept here to manage user state across requests.");
+    await writeTheme(vault, "b", "MyConcept is central to how sessions are tracked.");
+    await writeTheme(vault, "c", "Every chat thread gets its own MyConcept instance.");
+
     // Orphan candidate that would be promoted in default run
     await writeFile(
       join(vault.warmDir, "_orphan-candidates.json"),
@@ -704,6 +709,14 @@ describe("runLint", () => {
         MyConcept: { count: 5, sources: ["a", "b", "c"] },
       }),
       "utf-8"
+    );
+
+    // Second-pass synthesis returns real content
+    mockProvider.complete.mockResolvedValue(
+      JSON.stringify({
+        definition: "MyConcept tracks session state.",
+        key_claims: ["Claim one", "Claim two"],
+      })
     );
 
     await runLint({ vault, provider: mockProvider as any, model: "m", fix: "stubs" });
@@ -744,30 +757,43 @@ describe("runLint", () => {
     expect(typeof result.themeCount).toBe("number");
   });
 
-  it("seeds stub content with detail, count, and source backlinks", async () => {
-    // Three themes that all mention MyConcept, so findStubCandidates will surface it
-    await writeTheme(vault, "theme-one", "We talk about `MyConcept` here.");
-    await writeTheme(vault, "theme-two", "Also mentions `MyConcept`.");
-    await writeTheme(vault, "theme-three", "Third mention of `MyConcept`.");
-
-    mockProvider.complete.mockResolvedValue(
-      JSON.stringify([
-        {
-          term: "MyConcept",
-          count: 3,
-          reason: "MyConcept is a recurring domain concept.",
-        },
-      ])
+  it("seeds stub content with synthesised definition, key claims, and source backlinks", async () => {
+    // Three themes that all mention MyConcept with real substance
+    await writeTheme(
+      vault,
+      "theme-one",
+      "We use `MyConcept` as the core session tracking mechanism for chat threads."
     );
+    await writeTheme(vault, "theme-two", "`MyConcept` persists between calls in our storage layer.");
+    await writeTheme(vault, "theme-three", "Every `MyConcept` has a unique id and state snapshot.");
+
+    mockProvider.complete.mockImplementation(async (params: any) => {
+      if (params.prompt.includes("reviewing a wiki for missing concept pages")) {
+        return JSON.stringify([
+          { term: "MyConcept", count: 3, reason: "Recurring domain concept." },
+        ]);
+      }
+      // Second pass: synthesis
+      return JSON.stringify({
+        definition: "MyConcept tracks session state across chat threads.",
+        key_claims: [
+          "MyConcept has a unique id",
+          "MyConcept persists between calls",
+          "MyConcept snapshots state",
+        ],
+      });
+    });
 
     await runLint({ vault, provider: mockProvider as any, model: "m" });
 
     const pending = await listPending();
     const stub = pending.find((p) => p.lintFix === "stubs" && p.theme === "my-concept");
     expect(stub).toBeDefined();
-    // Detail from the LLM should appear in the Definition section
-    expect(stub.proposedContent).toContain("MyConcept is a recurring domain concept.");
-    // Source themes should be linked as backlinks
+    // Synthesised definition appears
+    expect(stub.proposedContent).toContain("MyConcept tracks session state");
+    // Synthesised key claims appear
+    expect(stub.proposedContent).toContain("MyConcept has a unique id");
+    // Source themes linked as backlinks
     expect(stub.proposedContent).toContain("[[theme-one]]");
     expect(stub.proposedContent).toContain("[[theme-two]]");
     expect(stub.proposedContent).toContain("[[theme-three]]");
@@ -776,21 +802,207 @@ describe("runLint", () => {
   });
 
   it("PascalCase stub terms produce kebab-case theme slugs", async () => {
-    await writeTheme(vault, "a", "Uses `TypeDecorators` here.");
-    await writeTheme(vault, "b", "Also uses `TypeDecorators`.");
-    await writeTheme(vault, "c", "Third `TypeDecorators`.");
+    await writeTheme(vault, "a", "Uses `TypeDecorators` for decorating things.");
+    await writeTheme(vault, "b", "We also use `TypeDecorators` here in some way.");
+    await writeTheme(vault, "c", "Third mention of `TypeDecorators` with explanation.");
 
-    mockProvider.complete.mockResolvedValue(
-      JSON.stringify([{ term: "TypeDecorators", count: 3, reason: "Genuine concept." }])
-    );
+    mockProvider.complete.mockImplementation(async (params: any) => {
+      if (params.prompt.includes("reviewing a wiki for missing concept pages")) {
+        return JSON.stringify([
+          { term: "TypeDecorators", count: 3, reason: "Genuine concept." },
+        ]);
+      }
+      // Second pass: synthesis
+      return JSON.stringify({
+        definition: "TypeDecorators are a real pattern.",
+        key_claims: ["Claim one", "Claim two", "Claim three"],
+      });
+    });
 
     await runLint({ vault, provider: mockProvider as any, model: "m" });
 
     const pending = await listPending();
     const stub = pending.find((p) => p.lintFix === "stubs");
     expect(stub).toBeDefined();
-    // Slug must be kebab-case, not lowercased-concatenated
     expect(stub.theme).toBe("type-decorators");
-    expect(stub.theme).not.toBe("typedecorators");
+  });
+
+  it("drops stub candidates when synthesis returns nothing substantive", async () => {
+    await writeTheme(vault, "a", "Uses `FooBar` here.");
+    await writeTheme(vault, "b", "Also `FooBar`.");
+    await writeTheme(vault, "c", "Third `FooBar`.");
+
+    mockProvider.complete.mockImplementation(async (params: any) => {
+      if (params.prompt.includes("reviewing a wiki for missing concept pages")) {
+        return JSON.stringify([{ term: "FooBar", count: 3, reason: "Concept." }]);
+      }
+      // Synthesis returns empty — caller should drop this stub
+      return JSON.stringify({ definition: "", key_claims: [] });
+    });
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const stubs = pending.filter((p) => p.lintFix === "stubs");
+    expect(stubs).toHaveLength(0);
+  });
+
+  it("broken-link fix rewrites [[old_name]] to [[new-name]] when slug matches", async () => {
+    await writeTheme(vault, "aigis-v2", "The real page.");
+    await writeTheme(vault, "ui-ux", "Links to [[aigis_v2]] somewhere.");
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const fix = pending.find((p) => p.lintFix === "broken-link" && p.theme === "ui-ux");
+    expect(fix).toBeDefined();
+    expect(fix.proposedContent).toContain("[[aigis-v2]]");
+    expect(fix.proposedContent).not.toContain("[[aigis_v2]]");
+    expect(fix.fixDetail).toContain("aigis_v2 → aigis-v2");
+  });
+
+  it("broken-link fix skips when no matching theme exists", async () => {
+    await writeTheme(vault, "ui-ux", "Links to [[totally-missing-thing]].");
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const fix = pending.find((p) => p.lintFix === "broken-link");
+    expect(fix).toBeUndefined();
+  });
+
+  it("dedup-dates fix proposes merged content when duplicate dated headings exist", async () => {
+    const dupContent = [
+      "## Current Status",
+      "Project summary.",
+      "",
+      "## Activity Log",
+      "### 2026-04-03 — First",
+      "- First bullet",
+      "",
+      "### 2026-04-03 — Second",
+      "- Second bullet",
+      "",
+    ].join("\n");
+    await writeTheme(vault, "dup-theme", dupContent);
+    // Add another theme so it's not a single-theme vault
+    await writeTheme(vault, "other", "Other content.");
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    const fix = pending.find((p) => p.lintFix === "dedup-dates" && p.theme === "dup-theme");
+    expect(fix).toBeDefined();
+    // Both bullets preserved in a single section
+    expect(fix.proposedContent).toContain("- First bullet");
+    expect(fix.proposedContent).toContain("- Second bullet");
+    // Only one occurrence of the date heading
+    const headings = fix.proposedContent.match(/^###\s+2026-04-03/gm) ?? [];
+    expect(headings).toHaveLength(1);
+  });
+
+  it("empty-orphan delete fix only proposes deletion of essentially-empty orphans", async () => {
+    // Orphan with real content — should NOT be proposed for deletion by empty-orphan logic
+    await writeTheme(
+      vault,
+      "real-orphan",
+      [
+        "## Current Status",
+        "This is a real project with substantive content across multiple sections.",
+        "",
+        "## Activity Log",
+        "### 2026-04-01 — Launch",
+        "- Shipped v1",
+        "### 2026-04-15 — Update",
+        "- Fixed bugs and added features",
+      ].join("\n")
+    );
+    // Orphan with "no activity" filler — SHOULD be proposed for deletion
+    await writeTheme(
+      vault,
+      "empty-orphan",
+      ["## Current Status", "No activity recorded.", ""].join("\n")
+    );
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+
+    const pending = await listPending();
+    // Filter by fixReason tag to distinguish orphan-deletes from low-value deletes
+    const orphanDeletes = pending.filter(
+      (p) => p.lintFix === "delete" && p.fixReason === "orphan with no substantive content"
+    );
+    expect(orphanDeletes.find((d) => d.theme === "empty-orphan")).toBeDefined();
+    expect(orphanDeletes.find((d) => d.theme === "real-orphan")).toBeUndefined();
+  });
+});
+
+describe("mergeDuplicateDates (utility)", () => {
+  it("merges two sections with the same date, preserving both sets of bullets", () => {
+    const input = [
+      "## Activity Log",
+      "### 2026-04-01 — Morning",
+      "- Bullet A",
+      "- Bullet B",
+      "",
+      "### 2026-04-01 — Evening",
+      "- Bullet C",
+      "",
+    ].join("\n");
+    const out = mergeDuplicateDates(input);
+    // Only one heading for 2026-04-01
+    const headings = out.match(/^###\s+2026-04-01/gm) ?? [];
+    expect(headings).toHaveLength(1);
+    // All three bullets present
+    expect(out).toContain("Bullet A");
+    expect(out).toContain("Bullet B");
+    expect(out).toContain("Bullet C");
+  });
+
+  it("leaves unique dates alone", () => {
+    const input = [
+      "### 2026-04-01",
+      "- A",
+      "",
+      "### 2026-04-02",
+      "- B",
+      "",
+    ].join("\n");
+    const out = mergeDuplicateDates(input);
+    expect(out.match(/^###/gm)?.length).toBe(2);
+  });
+
+  it("returns input unchanged when no dated sections exist", () => {
+    const input = "## Some Heading\n\nBody content.\n";
+    expect(mergeDuplicateDates(input)).toBe(input);
+  });
+});
+
+describe("isEssentiallyEmpty (utility)", () => {
+  it("returns true for pages with zero activity log sections", () => {
+    expect(isEssentiallyEmpty("## Current Status\n\n")).toBe(true);
+  });
+
+  it("returns true for pages dominated by 'no activity' phrasing", () => {
+    const content = [
+      "## Current Status",
+      "No activity recorded.",
+      "## Activity Log",
+      "### 2026-04-15",
+      "- No new data.",
+    ].join("\n");
+    expect(isEssentiallyEmpty(content)).toBe(true);
+  });
+
+  it("returns false for pages with substantive content and multiple dated sections", () => {
+    const content = [
+      "## Current Status",
+      "Real work happened in this project with many deliverables and ongoing activity across multiple days.",
+      "## Activity Log",
+      "### 2026-04-01",
+      "- Shipped v1 of the feature",
+      "### 2026-04-15",
+      "- Fixed several bugs and added new capabilities",
+    ].join("\n");
+    expect(isEssentiallyEmpty(content)).toBe(false);
   });
 });

@@ -166,11 +166,13 @@ function subKindBadge(update: PendingUpdate): SubKindBadgeSpec | null {
   }
   if (update.lintFix) {
     const label =
-      update.lintFix === "merge"   ? "Lint merge"  :
-      update.lintFix === "delete"  ? "Lint delete" :
-      update.lintFix === "rename"  ? "Lint rename" :
-      update.lintFix === "orphans" ? "Lint orphan" :
-      update.lintFix === "stubs"   ? "Lint stub"   : `Lint ${update.lintFix}`;
+      update.lintFix === "merge"        ? "Lint merge"        :
+      update.lintFix === "delete"       ? "Lint delete"       :
+      update.lintFix === "rename"       ? "Lint rename"       :
+      update.lintFix === "orphans"      ? "Lint orphan"       :
+      update.lintFix === "stubs"        ? "Lint stub"         :
+      update.lintFix === "broken-link"  ? "Lint fix-links"    :
+      update.lintFix === "dedup-dates"  ? "Lint dedup-dates"  : `Lint ${update.lintFix}`;
     return { cls: "type-lint", text: label };
   }
   return null;
