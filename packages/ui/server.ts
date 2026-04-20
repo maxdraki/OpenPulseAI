@@ -450,9 +450,10 @@ app.get("/api/skills", async (_req, res) => {
       let { eligible, missing } = await checkEligibility(skill);
       const state = await loadSkillState(vault, skill.name);
 
-      // Check config: if skill has config fields WITHOUT defaults, verify they're saved
+      // Check config: if skill has config fields WITHOUT defaults, verify they're saved.
+      // Empty-string defaults count as "has a default" (the skill can run with no value).
       const configFields = Array.isArray(skill.config) ? skill.config : [];
-      const fieldsNeedingInput = configFields.filter((f: any) => !f.default);
+      const fieldsNeedingInput = configFields.filter((f: any) => f.default === undefined);
       if (eligible && fieldsNeedingInput.length > 0) {
         let saved: Record<string, string> = {};
         try {
