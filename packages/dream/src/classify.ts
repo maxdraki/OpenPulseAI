@@ -24,16 +24,29 @@ const THEME_STOPWORDS = new Set([
   "documents", "downloads", "desktop", "library", "home",
   "onedrive", "dropbox", "icloud", "googledrive", "box",
   "sharepoint", "teams", "github", "gitlab", "bitbucket",
+  // Catch-all headings folder-watcher may emit — not project names
+  "loose", "misc", "miscellaneous",
 ]);
 
 const CLOUD_PREFIXES = ["onedrive", "dropbox", "icloud", "googledrive", "sharepoint"];
 
-/** A valid theme name is at least 3 chars, not a stopword, and not a cloud folder variant. */
+/**
+ * A valid theme name is at least 3 chars, not a stopword, not a cloud folder variant,
+ * and not filename-shaped.
+ *
+ * Filename-shape signals (reject when present):
+ * - 3+ underscore-joined segments — descriptive document names like
+ *   "AI_Skills_Training_Personas" collapse to "ai_skills_training_personas" after
+ *   lowercasing, which we don't want promoted to a wiki theme. Real themes in this
+ *   project use kebab-case or single words (vdp, openpulseai, folder-watcher,
+ *   github-activity) — underscore-heavy names are almost always file-derived.
+ */
 function isValidThemeName(name: string): boolean {
   const lower = name.toLowerCase().trim();
   if (lower.length < 3) return false;
   if (THEME_STOPWORDS.has(lower)) return false;
   if (CLOUD_PREFIXES.some(p => lower === p || lower.startsWith(p + "-") || lower.startsWith(p + "_"))) return false;
+  if (lower.split("_").length >= 3) return false;
   return true;
 }
 

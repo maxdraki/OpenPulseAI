@@ -350,4 +350,36 @@ describe("classifyEntries — skills extraction", () => {
     // "a" is too short to be a valid tag
     expect(result.classified[0].skills).not.toContain("a");
   });
+
+  it("rejects filename-shaped themes (3+ underscore segments) from LLM response", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([
+          { index: 0, themes: ["ai_skills_training_personas", "existing"], type: "project" },
+        ]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].themes).not.toContain("ai_skills_training_personas");
+    expect(result.classified[0].themes).toContain("existing");
+  });
+
+  it("accepts single-underscore names (two segments) — only 3+ are rejected", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([{ index: 0, themes: ["two_segments"], type: "project" }]),
+    } as any;
+    const result = await classifyEntries([entry], ["two_segments"], provider, "gpt");
+    expect(result.classified[0].themes).toContain("two_segments");
+  });
+
+  it("rejects 'loose' / 'misc' catch-all headings as themes", async () => {
+    const provider = {
+      complete: async () =>
+        JSON.stringify([{ index: 0, themes: ["loose", "misc", "existing"], type: "project" }]),
+    } as any;
+    const result = await classifyEntries([entry], ["existing"], provider, "gpt");
+    expect(result.classified[0].themes).not.toContain("loose");
+    expect(result.classified[0].themes).not.toContain("misc");
+    expect(result.classified[0].themes).toContain("existing");
+  });
 });

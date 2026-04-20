@@ -27,6 +27,7 @@ Otherwise, summarise ONLY what appears in the output. Group findings into `### [
 - For code repos under `Documents/GitHub`, the repo folder name is the project name.
 - The git-log output is the source of truth for commits, renames, and deletions — cite SHAs where useful.
 - NEVER use a cloud-storage or generic parent folder (OneDrive, Dropbox, iCloud, Documents, Downloads) as the heading — step one level deeper.
+- NEVER use a document filename as the heading (e.g. `AI_Skills_Training_Personas.docx` → do NOT produce `### AI_Skills_Training_Personas`). If the file sits directly in the watch root with no meaningful project subdirectory, list it under a single catch-all heading `### Loose Documents` — do NOT invent a per-file theme.
 
 For each project:
 - **Modified:** filenames (not full paths).
