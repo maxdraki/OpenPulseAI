@@ -36,6 +36,7 @@ export function parseFrontmatter(
       description,
       schedule: typeof parsed.schedule === "string" ? parsed.schedule : undefined,
       lookback: typeof parsed.lookback === "string" ? parsed.lookback : "24h",
+      firstRunLookback: typeof parsed.first_run_lookback === "string" ? parsed.first_run_lookback : undefined,
       requires: {
         bins: Array.isArray(requires?.bins) ? requires.bins.filter((b): b is string => typeof b === "string") : [],
         env: Array.isArray(requires?.env) ? requires.env.filter((e): e is string => typeof e === "string") : [],

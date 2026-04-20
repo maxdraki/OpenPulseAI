@@ -3,6 +3,7 @@ name: obsidian-notes
 description: Track recently modified notes across your Obsidian vaults and summarise what changed
 schedule: "0 19 * * *"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [find, jq]
 setup_guide: "Reads vaults from Obsidian's config (`~/Library/Application Support/obsidian/obsidian.json` on macOS; `$XDG_CONFIG_HOME/obsidian/obsidian.json` or `~/.config/obsidian/obsidian.json` on Linux). Leave **Vault filter** empty to include every vault Obsidian knows about, or list specific vault names (one per line, exact match on the vault folder name) to narrow down."

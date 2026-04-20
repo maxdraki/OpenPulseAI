@@ -148,12 +148,16 @@ export async function runSkill(
 ): Promise<CollectorState> {
   const now = new Date();
 
-  // Compute the collection window: use lastRunAt if available, fall back to lookback for first runs
+  // Compute the collection window: use lastRunAt (if available) so we catch everything since
+  // the last successful run — prevents gaps when the machine was off or the collector was
+  // scheduled weekdays-only over a weekend. First runs fall back to firstRunLookback (or
+  // lookback if that's not set), so freshly-added collectors get a sensible backfill window.
   const priorState = await loadCollectorState(vault, skill.name);
   const rawLastRun = priorState?.lastRunAt ? new Date(priorState.lastRunAt).getTime() : NaN;
+  const firstRunWindow = parseLookback(skill.firstRunLookback ?? skill.lookback);
   const sinceMs = Number.isFinite(rawLastRun)
     ? rawLastRun
-    : now.getTime() - parseLookback(skill.lookback);
+    : now.getTime() - firstRunWindow;
   const sinceDate = new Date(sinceMs);
   const systemConfig: Record<string, string> = {
     since_iso:  sinceDate.toISOString(),
@@ -258,9 +262,12 @@ export async function runSkill(
     await saveCollectorState(vault, state);
     return state;
   } catch (e: any) {
+    // Preserve the previous successful lastRunAt so the next successful run re-collects
+    // whatever window this failed run was meant to capture. Updating lastRunAt on failure
+    // would advance the collection window past an un-captured block of time, leaking data.
     const state: CollectorState = {
       skillName: skill.name,
-      lastRunAt: now.toISOString(),
+      lastRunAt: priorState?.lastRunAt ?? null,
       lastStatus: "error",
       lastError: e.message,
       entriesCollected: 0,

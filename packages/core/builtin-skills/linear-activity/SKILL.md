@@ -3,6 +3,7 @@ name: linear-activity
 description: Track Linear issues — status changes, new issues, comments, and cycle progress
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create a Personal API key at [Linear API Settings](https://linear.app/settings/api). Select read-only scope. If you also install the [Linear CLI](https://github.com/schpet/linear-cli), the collector will use it automatically for richer output."

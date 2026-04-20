@@ -3,6 +3,7 @@ name: todoist-activity
 description: Track Todoist tasks — completed, created, and upcoming due dates
 schedule: "0 20 * * *"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Find your API token in Todoist at [Settings > Integrations > Developer](https://app.todoist.com/app/settings/integrations/developer). Copy the token and paste it below."

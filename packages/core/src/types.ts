@@ -116,7 +116,8 @@ export interface SkillDefinition {
   location: string;        // absolute path to SKILL.md
   body: string;            // markdown content after frontmatter
   schedule?: string;       // cron expression (OpenPulse extension)
-  lookback: string;        // default "24h" (OpenPulse extension)
+  lookback: string;        // default "24h" — used for subsequent runs when lastRunAt exists (OpenPulse extension)
+  firstRunLookback?: string; // used only for the first run (when lastRunAt is null); falls back to `lookback` if absent
   requires: {
     bins: string[];
     env: string[];

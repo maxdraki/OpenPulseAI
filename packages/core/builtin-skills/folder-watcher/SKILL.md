@@ -3,6 +3,7 @@ name: folder-watcher
 description: Track file changes and git history across your project directories since the last run
 schedule: "0 19 * * *"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [find, git]
 setup_guide: "Add the directories you want to watch. Use the folder picker or type paths manually. Separate multiple paths with newlines. If a path contains multiple git repos (e.g. ~/Documents/GitHub), their git history is also collected."

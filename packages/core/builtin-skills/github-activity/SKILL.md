@@ -3,6 +3,7 @@ name: github-activity
 description: Watch specific repos (github.com or GitHub Enterprise) — commits, PRs, reviews, issue comments, releases
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [gh]
 setup_guide: "Requires the [GitHub CLI](https://cli.github.com). After installing, run `gh auth login` in your terminal to authenticate. No API key needed — the CLI manages auth."

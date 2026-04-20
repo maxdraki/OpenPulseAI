@@ -297,4 +297,127 @@ describe("runSkill since injection", () => {
     expect(dateMatch![1]).toBe(before.toISOString().slice(0, 10));
     expect(Date.parse(isoMatch![1])).toBeGreaterThanOrEqual(before.getTime() - 1000);
   });
+
+  it("uses firstRunLookback for the first run when it's set, not lookback", async () => {
+    const skill = makeSkill(
+      "1. Run `echo since={{since_iso}}` to show the since date",
+      { location: "/fake/builtin-skills/test/SKILL.md", lookback: "24h", firstRunLookback: "7d" }
+    );
+    const provider = mockProvider("Summary.");
+    const before = Date.now();
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const sinceMatch = prompt.match(/since=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
+    expect(sinceMatch).toBeTruthy();
+    const sinceMs = Date.parse(sinceMatch![1]);
+    // Should be ~7 days ago, not ~24h ago. Allow a generous window.
+    const expected7d = before - 7 * 86_400_000;
+    expect(sinceMs).toBeGreaterThan(expected7d - 60_000);
+    expect(sinceMs).toBeLessThan(expected7d + 60_000);
+  });
+
+  it("falls back to lookback on first run when firstRunLookback is absent", async () => {
+    const skill = makeSkill(
+      "1. Run `echo since={{since_iso}}` to show the since date",
+      { location: "/fake/builtin-skills/test/SKILL.md", lookback: "24h" }
+    );
+    const provider = mockProvider("Summary.");
+    const before = Date.now();
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    const sinceMatch = prompt.match(/since=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
+    expect(sinceMatch).toBeTruthy();
+    const sinceMs = Date.parse(sinceMatch![1]);
+    // Should be ~24h ago
+    const expected24h = before - 86_400_000;
+    expect(sinceMs).toBeGreaterThan(expected24h - 60_000);
+    expect(sinceMs).toBeLessThan(expected24h + 60_000);
+  });
+
+  it("firstRunLookback is ignored once lastRunAt exists", async () => {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const stateDir = join(tempDir, "vault", "collector-state");
+    await mkdir(stateDir, { recursive: true });
+    const lastRunAt = "2026-01-01T10:00:00.000Z";
+    await writeFile(
+      join(stateDir, "test-skill.json"),
+      JSON.stringify({ skillName: "test-skill", lastRunAt, lastStatus: "success", entriesCollected: 1 }),
+      "utf-8"
+    );
+    const skill = makeSkill(
+      "1. Run `echo since={{since_iso}}` to show the since date",
+      { location: "/fake/builtin-skills/test/SKILL.md", lookback: "24h", firstRunLookback: "30d" }
+    );
+    const provider = mockProvider("Summary.");
+    await runSkill(skill, vault, provider, "model");
+
+    const prompt = (provider.complete as any).mock.calls[0][0].prompt;
+    // Should use lastRunAt, not firstRunLookback's 30d window
+    expect(prompt).toContain("since=2026-01-01T10:00:00.000Z");
+  });
+});
+
+describe("runSkill error handling", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-err-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("preserves previous successful lastRunAt when a run fails", async () => {
+    const { writeFile, mkdir, readFile } = await import("node:fs/promises");
+    const stateDir = join(tempDir, "vault", "collector-state");
+    await mkdir(stateDir, { recursive: true });
+    const priorLastRun = "2026-01-01T10:00:00.000Z";
+    await writeFile(
+      join(stateDir, "test-skill.json"),
+      JSON.stringify({ skillName: "test-skill", lastRunAt: priorLastRun, lastStatus: "success", entriesCollected: 1 }),
+      "utf-8"
+    );
+
+    const skill = makeSkill(
+      "1. Run `echo one`",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = {
+      complete: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
+    } as any;
+
+    await expect(runSkill(skill, vault, provider, "model")).rejects.toThrow("LLM unavailable");
+
+    const raw = await readFile(join(stateDir, "test-skill.json"), "utf-8");
+    const state = JSON.parse(raw);
+    expect(state.lastStatus).toBe("error");
+    expect(state.lastRunAt).toBe(priorLastRun);  // preserved, not advanced
+    expect(state.lastError).toContain("LLM unavailable");
+  });
+
+  it("sets lastRunAt to null on first-run failure (no prior successful run to preserve)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const stateDir = join(tempDir, "vault", "collector-state");
+
+    const skill = makeSkill(
+      "1. Run `echo one`",
+      { location: "/fake/builtin-skills/test/SKILL.md" }
+    );
+    const provider = {
+      complete: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
+    } as any;
+
+    await expect(runSkill(skill, vault, provider, "model")).rejects.toThrow("LLM unavailable");
+
+    const raw = await readFile(join(stateDir, "test-skill.json"), "utf-8");
+    const state = JSON.parse(raw);
+    expect(state.lastStatus).toBe("error");
+    expect(state.lastRunAt).toBeNull();
+  });
 });

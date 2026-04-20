@@ -3,6 +3,7 @@ name: gitlab-activity
 description: Track GitLab activity — merge requests, commits, issues, and pipeline status
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create a Personal Access Token at [GitLab Access Tokens](https://gitlab.com/-/user_settings/personal_access_tokens) with `read_api` scope. Your domain is where you access GitLab (e.g. **gitlab.com** or **gitlab.mycompany.com**)."

@@ -3,6 +3,7 @@ name: jira-activity
 description: Summarise recent Jira issues, sprint progress, and comments
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create an API token at [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Your domain is the subdomain you use to access Jira (e.g. **myteam**.atlassian.net). The project key is the prefix on your issue IDs (e.g. **ENG**-123). You can monitor multiple projects by entering comma-separated keys with no spaces (e.g. **ENG,VDP**)."

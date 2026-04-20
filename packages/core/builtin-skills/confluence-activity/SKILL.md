@@ -3,6 +3,7 @@ name: confluence-activity
 description: Summarise recently updated Confluence pages across one or more spaces
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create an API token at [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Your domain is the subdomain you use to access Confluence (e.g. **myteam**.atlassian.net). To find a space key: open the space in Confluence, look at the URL — it's the uppercase code after `/wiki/spaces/` (e.g. atlassian.net/wiki/spaces/**ENG**/pages/...). You can also find it in Space Settings → Space Details. Monitor multiple spaces by entering comma-separated keys with no spaces (e.g. **ENG,DOCS,TEAM**)."

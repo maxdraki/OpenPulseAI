@@ -3,6 +3,7 @@ name: google-daily-digest
 description: Summarise Gmail and Calendar activity since the last run using gogcli
 schedule: "0 22 * * *"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [gog]
   env: [GOG_ACCOUNT]

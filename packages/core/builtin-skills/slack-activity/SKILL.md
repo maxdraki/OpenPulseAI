@@ -3,6 +3,7 @@ name: slack-activity
 description: Collect recent Slack messages and mentions from key channels
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps), add Bot Token Scopes `channels:history` and `users:read`, install to your workspace, then copy the Bot User OAuth Token (starts with xoxb-). To find channel IDs, right-click a channel in Slack > View channel details > copy the ID at the bottom."

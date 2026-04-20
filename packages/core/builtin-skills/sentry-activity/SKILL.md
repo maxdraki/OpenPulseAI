@@ -3,6 +3,7 @@ name: sentry-activity
 description: Track Sentry errors — unresolved issues, new events, and regression alerts
 schedule: "0 18 * * 1-5"
 lookback: 24h
+first_run_lookback: 7d
 requires:
   bins: [curl]
 setup_guide: "Create an Auth Token at [Sentry Auth Tokens](https://sentry.io/settings/auth-tokens/) with `project:read` and `event:read` scopes. Your org slug is in your Sentry URL: sentry.io/organizations/**your-org**/. If you use self-hosted Sentry, change the domain to your instance."
