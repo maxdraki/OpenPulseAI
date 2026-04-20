@@ -614,13 +614,15 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
       addBtn.textContent = "Add";
 
       const matchedSkill = skills.find((s) => s.name === ds.id);
-      const configFields = (matchedSkill?.config ?? []).filter((f) => !f.default);
+      // Only prompt for fields that lack any default. Empty-string defaults
+      // count as "has a default" — those fields should be tuned in Configure.
+      const requiredFields = (matchedSkill?.config ?? []).filter((f) => f.default === undefined);
 
-      addBtn.addEventListener("click", (e) => {
+      addBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (configFields.length > 0) {
-          // Open modal with config fields
-          const fields: FormField[] = configFields.map((f) => ({
+        if (requiredFields.length > 0) {
+          // Open modal with required config fields
+          const fields: FormField[] = requiredFields.map((f) => ({
             key: f.key,
             label: f.label,
             type: isSensitiveKey(f.key) ? "password" : "text",
@@ -640,12 +642,22 @@ function renderDataSourcesContent(container: HTMLElement, skills: SkillData[]): 
               }
             }
           );
-        } else if (matchedSkill) {
-          // No config fields — show what's missing
+        } else if (matchedSkill && matchedSkill.missing?.length > 0) {
+          // Missing dependencies — tell user what to install
           confirmDialog(
             `${ds.name} requires: ${matchedSkill.missing.join(", ")}. Install the dependencies first.`,
             () => {}
           );
+        } else if (matchedSkill) {
+          // All fields have defaults and no missing deps — install straight with defaults.
+          // The Configure panel on the skill card lets the user refine afterwards.
+          try {
+            await saveSkillConfig(ds.id, {});
+            log("info", `Data source added: ${ds.name}`);
+            await loadSkills?.();
+          } catch (err: any) {
+            log("error", `Install failed: ${ds.name}`, String(err));
+          }
         }
       });
 
