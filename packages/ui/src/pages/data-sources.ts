@@ -1,4 +1,4 @@
-import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, checkGithubRepo, type GithubRepoInfo, type SkillData } from "../lib/tauri-bridge.js";
+import { getSkills, installSkill, installDependency, removeSkill, runSkillNow, getSkillConfig, saveSkillConfig, apiGet, fetchConfluenceSpaces, fetchObsidianVaults, checkGithubRepo, type GithubRepoInfo, type SkillData } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { confirmDialog, formDialog, infoDialog, type FormField } from "../lib/dialog.js";
 import { logoUrl } from "../lib/utils.js";
@@ -200,6 +200,119 @@ function renderSpacePicker(row: HTMLElement, configFields: HTMLElement, savedKey
       discoverBtn.disabled = false;
     }
   });
+}
+
+/**
+ * Renders a checkbox list of Obsidian vaults discovered from obsidian.json.
+ *
+ * Empty saved value = "all vaults" (auto-include new vaults added to Obsidian).
+ * An explicit list = only those names (new vaults won't be auto-included).
+ * The "Include all" toggle at the top makes the distinction visible.
+ */
+function renderObsidianVaultPicker(row: HTMLElement, savedNames: string): void {
+  const selectedNames = new Set(savedNames.split("\n").map((n) => n.trim()).filter(Boolean));
+  const allMode = selectedNames.size === 0; // empty filter = include all
+
+  // Hidden input that the save logic reads
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.dataset.configKey = "obsidian_vault_filter";
+  hidden.value = savedNames;
+  row.appendChild(hidden);
+
+  function updateHidden() {
+    // All-mode serialises to "" — new Obsidian vaults will auto-appear
+    hidden.value = allToggle.checked ? "" : Array.from(selectedNames).join("\n");
+  }
+
+  // "Include all" toggle
+  const allLabel = document.createElement("label");
+  allLabel.style.cssText = "display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; margin-bottom: 0.4rem;";
+  const allToggle = document.createElement("input");
+  allToggle.type = "checkbox";
+  allToggle.checked = allMode;
+  allLabel.appendChild(allToggle);
+  allLabel.appendChild(document.createTextNode("Include all vaults (auto-includes new Obsidian vaults)"));
+  row.appendChild(allLabel);
+
+  // Status / error message
+  const status = document.createElement("p");
+  status.style.cssText = "font-size: 0.78rem; color: var(--text-tertiary); margin: 0.25rem 0;";
+  row.appendChild(status);
+
+  // Vault list container
+  const listContainer = document.createElement("div");
+  listContainer.style.cssText = "max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);";
+  row.appendChild(listContainer);
+
+  let discovered: Array<{ name: string; path: string }> = [];
+
+  function renderList() {
+    listContainer.textContent = "";
+    const disabled = allToggle.checked;
+    for (const vault of discovered) {
+      const item = document.createElement("label");
+      item.style.cssText = "display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; font-size: 0.82rem; border-bottom: 1px solid var(--border);";
+      if (disabled) item.style.opacity = "0.5";
+      item.style.cursor = disabled ? "not-allowed" : "pointer";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = disabled ? true : selectedNames.has(vault.name);
+      cb.disabled = disabled;
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedNames.add(vault.name);
+        else selectedNames.delete(vault.name);
+        updateHidden();
+        updateStatus();
+      });
+
+      const nameSpan = document.createElement("span");
+      nameSpan.style.cssText = "font-weight: 500;";
+      nameSpan.textContent = vault.name;
+
+      const pathSpan = document.createElement("span");
+      pathSpan.style.cssText = "font-size: 0.72rem; color: var(--text-tertiary); margin-left: auto;";
+      pathSpan.textContent = vault.path;
+
+      item.appendChild(cb);
+      item.appendChild(nameSpan);
+      item.appendChild(pathSpan);
+      listContainer.appendChild(item);
+    }
+  }
+
+  function updateStatus() {
+    if (allToggle.checked) {
+      status.textContent = `All ${discovered.length} vault(s) included`;
+    } else {
+      status.textContent = `${selectedNames.size} of ${discovered.length} vault(s) selected`;
+    }
+  }
+
+  allToggle.addEventListener("change", () => {
+    updateHidden();
+    renderList();
+    updateStatus();
+  });
+
+  // Load vaults on open
+  status.textContent = "Loading vaults\u2026";
+  fetchObsidianVaults()
+    .then((result) => {
+      if (result.error && result.vaults.length === 0) {
+        status.textContent = result.error;
+        status.style.color = "var(--warning, orange)";
+        return;
+      }
+      discovered = result.vaults;
+      renderList();
+      updateStatus();
+    })
+    .catch((err: unknown) => {
+      status.textContent = err instanceof Error ? err.message : String(err);
+      status.style.color = "var(--danger)";
+    });
 }
 
 function renderRepoUrlInput(row: HTMLElement, savedUrls: string): void {
@@ -801,6 +914,8 @@ function renderSkillCard(skill: SkillData): HTMLElement {
           }
         } else if (field.key === "confluence_space_keys") {
           renderSpacePicker(row, configFields, savedConfig[field.key] ?? "");
+        } else if (field.key === "obsidian_vault_filter") {
+          renderObsidianVaultPicker(row, savedConfig[field.key] ?? "");
         } else if (field.key === "github_repo_urls") {
           renderRepoUrlInput(row, savedConfig[field.key] ?? "");
         } else {

@@ -856,6 +856,43 @@ app.post("/api/confluence-activity/spaces", async (req, res) => {
   }
 });
 
+// --- Obsidian vault discovery ---
+
+app.get("/api/obsidian-notes/vaults", async (_req, res) => {
+  const home = process.env.HOME ?? "";
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
+  const candidates = [
+    join(home, "Library", "Application Support", "obsidian", "obsidian.json"),
+    join(xdg, "obsidian", "obsidian.json"),
+  ];
+
+  let configPath: string | null = null;
+  for (const candidate of candidates) {
+    try { await stat(candidate); configPath = candidate; break; }
+    catch { /* try next */ }
+  }
+
+  if (!configPath) {
+    return res.json({ vaults: [], error: "obsidian.json not found at standard locations" });
+  }
+
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = JSON.parse(raw) as { vaults?: Record<string, { path: string }> };
+    const vaults = Object.values(parsed.vaults ?? {})
+      .map((v) => {
+        const trimmed = v.path.replace(/\/$/, "");
+        const name = trimmed.split("/").pop() ?? trimmed;
+        return { name, path: v.path };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ vaults });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ vaults: [], error: `Failed to read obsidian.json: ${msg}` });
+  }
+});
+
 // --- GitHub repo access check ---
 
 const VALID_HOSTNAME = /^[\w][\w.-]*\.[a-zA-Z]{2,}$/;

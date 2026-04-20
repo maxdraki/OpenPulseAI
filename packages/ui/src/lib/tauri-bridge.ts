@@ -251,6 +251,16 @@ export async function checkGithubRepo(url: string): Promise<GithubRepoInfo> {
   return apiPost("/github-activity/check-repo", { url });
 }
 
+export interface ObsidianVault {
+  name: string;
+  path: string;
+}
+
+export async function fetchObsidianVaults(): Promise<{ vaults: ObsidianVault[]; error?: string }> {
+  if (isTauri) throw new Error("Obsidian vault discovery is not yet available in the desktop app");
+  return apiGet("/obsidian-notes/vaults");
+}
+
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
   if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });
