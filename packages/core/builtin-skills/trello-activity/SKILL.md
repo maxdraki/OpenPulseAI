@@ -22,7 +22,7 @@ config:
 ## Instructions
 
 1. Run `curl -s "https://api.trello.com/1/boards/{{trello_board_id}}/actions?key={{trello_api_key}}&token={{trello_token}}&limit=50&since={{since_iso}}&filter=createCard,updateCard,commentCard,moveCardToBoard,addMemberToCard"` to get board activity since the last run (Trello's `since` parameter accepts ISO 8601)
-2. Run `curl -s "https://api.trello.com/1/boards/{{trello_board_id}}/cards?key={{trello_api_key}}&token={{trello_token}}&fields=name,dateLastActivity,due,idList,shortUrl&filter=open"` to get current open cards
+2. Run `curl -s "https://api.trello.com/1/boards/{{trello_board_id}}/cards?key={{trello_api_key}}&token={{trello_token}}&fields=name,desc,dateLastActivity,due,idList,shortUrl&filter=open"` to get current open cards with their descriptions
 3. Run `curl -s "https://api.trello.com/1/boards/{{trello_board_id}}/lists?key={{trello_api_key}}&token={{trello_token}}&fields=name"` to get list names for context
 
 Summarise ONLY what the API returns. Focus on:

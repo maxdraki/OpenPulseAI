@@ -24,21 +24,23 @@ config:
 
 ## Instructions
 
-1. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+updated>="{{since_date}}"&fields=summary,status,assignee,priority,comment,project&maxResults=50"` to get recently updated issues
-2. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+status+changed+during+("{{since_date}}",now())&fields=summary,status,assignee,project&maxResults=30"` to get issues that changed status
+1. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+updated>="{{since_date}}"&fields=summary,description,status,assignee,priority,comment,project,labels,issuetype&maxResults=50"` to get recently updated issues with their descriptions and comments
+2. Run `curl -s -u "{{jira_email}}:{{jira_api_token}}" -H "Accept: application/json" "https://{{jira_domain}}/rest/api/3/search/jql?jql=project+IN+({{jira_project_key}})+AND+status+changed+during+("{{since_date}}",now())&fields=summary,status,assignee,project&maxResults=30"` to get issues that changed status (metadata only — descriptions come from query 1)
 
-Summarise ONLY what the API returns. Focus on:
-- Issues that changed status (e.g. In Progress → Done)
-- New comments on issues
-- Newly created issues
+Summarise ONLY what the API returns, **preserving the actual text of descriptions and comments** (paraphrase where verbose, but keep the substance). Focus on:
+- Issues that changed status — quote the status transition (e.g. "In Progress → Done")
+- New comments on issues — include 1-2 sentences of the comment body from `comment.comments[*].body` (Jira returns Atlassian Document Format — extract the text content from `content[*].content[*].text` nodes)
+- Newly created issues — include the description body (from `description.content[*].content[*].text`) summarised to 2-3 sentences
 - High priority items
 
-If the API returns an error or authentication fails, report that clearly. Do not invent issue numbers or status transitions.
+For the issue description and comment bodies: Jira's API returns ADF (Atlassian Document Format) as a nested JSON structure. Walk `description.content[]` and `comment.comments[*].body.content[]` to extract the actual text. Skip rich-text formatting; preserve the prose.
+
+If the API returns an error or authentication fails, report that clearly. Do not invent issue numbers, descriptions, or status transitions.
 
 ## Output Format
 
 ### [Project Name] Activity (use the full project name from the API response, not the key)
-- **Status changes:** [issue transitions]
-- **New issues:** [recently created]
-- **Comments:** [notable discussions]
-- **High priority:** [urgent items]
+- **Status changes:** issue ID, title, transition (e.g. VDP-143 Create Appian output views: In Progress → Done)
+- **New issues:** issue ID, title, 2-3 sentence summary of the description
+- **Comments:** issue ID, commenter, 1-2 sentence paraphrase of the comment body
+- **High priority:** urgent items with 1-line description
