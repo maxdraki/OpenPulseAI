@@ -159,14 +159,20 @@ export async function runSkill(
     ? rawLastRun
     : now.getTime() - firstRunWindow;
   const sinceDate = new Date(sinceMs);
+  // `since_datetime` is "YYYY-MM-DD HH:MM:SS" (UTC) — the format BSD find's `-newermt`
+  // accepts on macOS. ISO 8601 with T/Z fails silently on BSD find; GNU find accepts both.
+  // Use this for `-newermt` in skill commands so they work cross-platform.
+  const toDatetime = (d: Date) => d.toISOString().replace("T", " ").replace(/\..*Z$/, "");
   const systemConfig: Record<string, string> = {
-    since_iso:  sinceDate.toISOString(),
-    since_date: sinceDate.toISOString().slice(0, 10),
-    since_unix: Math.floor(sinceMs / 1000).toString(),
-    since_days: Math.max(1, Math.ceil((now.getTime() - sinceMs) / 86_400_000)).toString(),
-    now_iso:    now.toISOString(),
-    now_date:   now.toISOString().slice(0, 10),
-    now_unix:   Math.floor(now.getTime() / 1000).toString(),
+    since_iso:      sinceDate.toISOString(),
+    since_date:     sinceDate.toISOString().slice(0, 10),
+    since_datetime: toDatetime(sinceDate),
+    since_unix:     Math.floor(sinceMs / 1000).toString(),
+    since_days:     Math.max(1, Math.ceil((now.getTime() - sinceMs) / 86_400_000)).toString(),
+    now_iso:        now.toISOString(),
+    now_date:       now.toISOString().slice(0, 10),
+    now_datetime:   toDatetime(now),
+    now_unix:       Math.floor(now.getTime() / 1000).toString(),
   };
 
   try {
