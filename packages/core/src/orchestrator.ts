@@ -8,8 +8,9 @@
  *   - Heartbeat every 60 s: detect date rollover, persist state
  */
 
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { initLogger, vaultLog } from "./logger.js";
 
@@ -212,25 +213,50 @@ export async function loadState(vaultRoot: string): Promise<OrchestratorState> {
 }
 
 /**
- * Atomically write state: write to .tmp → rename old to .prev → rename .tmp to current.
+ * In-process Promise-chain mutex for saveState. Serialises concurrent calls from
+ * the same process (e.g. heartbeat + runCompact finishing simultaneously) so they
+ * can't race on the tmp file.
+ *
+ * Note: this only guards within-process races. Cross-process races between the
+ * orchestrator and CLI subprocesses (compact-cli, schema-evolve-cli) rely on
+ * unique .tmp filenames for crash-free writes, but a lost-update window remains.
+ * A future fix would route subprocess state mutations through an orchestrator RPC.
  */
-export async function saveState(vaultRoot: string, state: OrchestratorState): Promise<void> {
-  const dir  = join(vaultRoot, "vault");
+let saveQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Atomically write orchestrator state.
+ *
+ * Strategy:
+ *   1. Write JSON to a uniquely-named tmp file (pid + random suffix) so concurrent
+ *      writers never share a tmp filename.
+ *   2. POSIX rename(tmp, target) atomically replaces the destination.
+ *   3. On rename failure, best-effort cleanup of the orphan tmp.
+ *
+ * Drops the legacy `.prev` backup — the old 3-step dance was not atomic and
+ * introduced the ENOENT race window.
+ */
+export function saveState(vaultRoot: string, state: OrchestratorState): Promise<void> {
+  const next = saveQueue.then(() => saveStateAtomic(vaultRoot, state));
+  // Keep the queue alive even if this call rejects; otherwise one bad write
+  // would poison all subsequent serialised writes.
+  saveQueue = next.catch(() => {});
+  return next;
+}
+
+async function saveStateAtomic(vaultRoot: string, state: OrchestratorState): Promise<void> {
+  const dir = join(vaultRoot, "vault");
   const file = statePath(vaultRoot);
-  const tmp  = file + ".tmp";
-  const prev = file + ".prev";
+  const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
 
   await mkdir(dir, { recursive: true });
   await writeFile(tmp, JSON.stringify(state, null, 2), "utf-8");
-
-  // Move current → .prev (ignore if current doesn't exist)
   try {
-    await rename(file, prev);
-  } catch {
-    // file didn't exist yet — that's fine
+    await rename(tmp, file);
+  } catch (err) {
+    try { await unlink(tmp); } catch { /* best-effort cleanup */ }
+    throw err;
   }
-
-  await rename(tmp, file);
 }
 
 // ---------------------------------------------------------------------------

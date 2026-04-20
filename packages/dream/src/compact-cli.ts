@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
   Vault, loadConfig, createProvider, initLogger, vaultLog,
   listThemes, readTheme, stripCodeFences,
+  loadState, saveState,
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeDocument, ThemeType } from "@openpulse/core";
 
@@ -155,17 +156,8 @@ export async function compactTheme(vault: Vault, theme: string, provider: LlmPro
   return compactProject(vault, theme, provider, model);
 }
 
-async function loadOrchestratorState(): Promise<any> {
-  const path = join(VAULT_ROOT, "vault", "orchestrator-state.json");
-  try {
-    return JSON.parse(await readFile(path, "utf-8"));
-  } catch { return null; }
-}
-
-async function saveOrchestratorState(state: any): Promise<void> {
-  const path = join(VAULT_ROOT, "vault", "orchestrator-state.json");
-  await writeFile(path, JSON.stringify(state, null, 2), "utf-8");
-}
+// State I/O is delegated to the shared atomic helpers in @openpulse/core so
+// the subprocess cannot crash the orchestrator with a tmp-file rename race.
 
 async function main() {
   initLogger(VAULT_ROOT);
@@ -178,9 +170,10 @@ async function main() {
   const explicitThemes = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   const force = process.argv.includes("--force");
 
-  const state = await loadOrchestratorState();
-  const perThemeLastCompacted: Record<string, string> = state?.compactionPipeline?.perThemeLastCompacted ?? {};
-  const sizeQueue: string[] = state?.compactionPipeline?.sizeQueue ?? [];
+  // loadState uses core's typed defaults, so these sub-states are always well-formed
+  const state = await loadState(VAULT_ROOT);
+  const perThemeLastCompacted = state.compactionPipeline.perThemeLastCompacted;
+  const sizeQueue = state.compactionPipeline.sizeQueue;
 
   let themes: string[];
   if (explicitThemes.length > 0) {
@@ -214,12 +207,9 @@ async function main() {
     }
   }
 
-  if (state) {
-    state.compactionPipeline = state.compactionPipeline ?? {};
-    state.compactionPipeline.perThemeLastCompacted = perThemeLastCompacted;
-    state.compactionPipeline.sizeQueue = [];
-    await saveOrchestratorState(state);
-  }
+  state.compactionPipeline.perThemeLastCompacted = perThemeLastCompacted;
+  state.compactionPipeline.sizeQueue = [];
+  await saveState(VAULT_ROOT, state);
 
   await vaultLog("info", `[compact] Done — ${compacted} pending update(s) created`);
 }
