@@ -26,6 +26,12 @@ const THEME_STOPWORDS = new Set([
   "sharepoint", "teams", "github", "gitlab", "bitbucket",
   // Catch-all headings folder-watcher may emit — not project names
   "loose", "misc", "miscellaneous",
+  // Environment / lifecycle words that show up everywhere in jira/github content.
+  // Without this guard, "test" became a theme from VDP "Stubs for test environments"
+  // commits, which lint then merged into org-browser-test (which had a [[test]] ref),
+  // contaminating the org-browser page with VDP content.
+  "test", "tests", "prod", "dev", "qa", "uat", "stg", "staging", "sandbox",
+  "preview", "preprod", "production", "development",
 ]);
 
 const CLOUD_PREFIXES = ["onedrive", "dropbox", "icloud", "googledrive", "sharepoint"];
