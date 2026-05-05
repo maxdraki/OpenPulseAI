@@ -134,41 +134,48 @@ function preFilter(entries: ActivityEntry[]): ActivityEntry[] {
     .filter((e): e is ActivityEntry => e !== null);
 }
 
+/** Max primary tags from a single entry. Multi-repo github-activity output can
+ *  legitimately reference 5-10 repos; capping at 3 silently lost the rest.
+ *  Secondary-tag accumulation gets a smaller cap on top.
+ */
+const MAX_PRIMARY_TAGS = 10;
+const MAX_SECONDARY_TAGS = 3;
+
 /**
  * Deterministic classification: extract project names from content.
- * Returns an array of 1-3 theme tags.
- * - Primary tag from file paths / repo refs / headings
+ * Returns up to MAX_PRIMARY_TAGS + MAX_SECONDARY_TAGS theme tags.
+ * - Primary tags from file paths / repo refs / headings — unbounded by entry
+ *   structure (one entry can cover N repos and yield N themes).
  * - Secondary tags: scan entry text for mentions of existing theme names
+ *   (capped, so passing references don't dominate).
  */
 function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): string[] | null {
   const log = entry.log;
   const tags: string[] = [];
+  const addTag = (name: string) => {
+    if (tags.length >= MAX_PRIMARY_TAGS) return;
+    if (!isValidThemeName(name)) return;
+    if (tags.includes(name)) return;
+    tags.push(name);
+  };
 
   // 1. File paths: /Users/.../Documents/GitHub/PROJECT_NAME/...
-  const pathMatch = log.match(/\/(?:Documents\/GitHub|Projects|repos|src)\/([a-zA-Z0-9_-]+)\//);
-  if (pathMatch) {
-    const name = pathMatch[1].toLowerCase();
-    if (isValidThemeName(name)) tags.push(name);
+  for (const m of log.matchAll(/\/(?:Documents\/GitHub|Projects|repos|src)\/([a-zA-Z0-9_-]+)\//g)) {
+    addTag(m[1].toLowerCase());
   }
 
-  // 2a. "### owner/repo" heading format (github-activity multi-repo output)
-  if (tags.length === 0) {
-    const headingRepoMatch = log.match(/^###\s+[a-zA-Z0-9_.-]+\/([a-zA-Z0-9_.-]+)\s*$/m);
-    if (headingRepoMatch) {
-      const name = headingRepoMatch[1].toLowerCase();
-      if (isValidThemeName(name)) tags.push(name);
-    }
+  // 2a. "### owner/repo" heading format — github-activity emits one heading per
+  //     repo, often 5-10 in a single entry. Capture ALL of them so each repo
+  //     gets its own theme on the wiki.
+  for (const m of log.matchAll(/^###\s+[a-zA-Z0-9_.-]+\/([a-zA-Z0-9_.-]+)\s*$/gm)) {
+    addTag(m[1].toLowerCase());
   }
 
-  // 2. GitHub repo references: owner/repo — match any owner.
-  // Require the captured repo name to be a valid theme (filters out "and/or" → "or" false positives).
+  // 2. GitHub repo references in prose: owner/repo near commit/push/PR/merge/release
   if (tags.length === 0) {
     const repoMatch = log.match(/\b[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)\b(?=.*(?:commit|push|PR|pull|merge|release))/i)
       ?? log.match(/\*?\*?Repository:?\*?\*?\s*`?[a-zA-Z0-9_-]+\/([a-zA-Z0-9_-]+)`?/i);
-    if (repoMatch) {
-      const name = repoMatch[1].toLowerCase();
-      if (isValidThemeName(name)) tags.push(name);
-    }
+    if (repoMatch) addTag(repoMatch[1].toLowerCase());
   }
 
   // 3. Source metadata — if the entry came from a known source, use it
@@ -177,30 +184,28 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
     if (projectMention) {
       const name = projectMention[1].toLowerCase();
       const headingStopwords = ["instructions", "output", "summary", "status", "highlights", "findings", "context"];
-      if (!headingStopwords.includes(name) && isValidThemeName(name)) {
-        tags.push(name);
-      }
+      if (!headingStopwords.includes(name)) addTag(name);
     }
   }
 
   // No primary tag found — return null to trigger LLM
   if (tags.length === 0) return null;
 
-  // Secondary tags: scan for existing theme name mentions.
-  // Require the theme to appear as a whole word NOT adjacent to a slash,
-  // so "or" in "and/or" doesn't match the theme "or".
+  // Secondary tags: scan for existing theme name mentions (capped).
+  let secondaryCount = 0;
   for (const theme of existingThemes) {
+    if (secondaryCount >= MAX_SECONDARY_TAGS) break;
     if (tags.includes(theme)) continue;
     if (!isValidThemeName(theme)) continue;
     const escaped = theme.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`(?<![/\\w])${escaped}(?![/\\w])`, "i");
     if (re.test(log)) {
       tags.push(theme);
+      secondaryCount += 1;
     }
-    if (tags.length >= 3) break;
   }
 
-  return tags.slice(0, 3);
+  return tags;
 }
 
 /** Return value of classifyEntries — includes proposed page types for new themes. */

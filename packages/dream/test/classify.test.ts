@@ -192,11 +192,12 @@ describe("classifyEntries", () => {
       expect(classified[0].themes).toContain("hiring");
     });
 
-    it("caps multi-tag at 3 themes per entry", async () => {
+    it("caps secondary (theme-mention) tags at 3 even when prose mentions more existing themes", async () => {
+      // Primary tag from path (1) + 3 secondary tags from prose mentions = 4 total.
+      // The 4th existing-theme mention should NOT be added as secondary.
       const entries: ActivityEntry[] = [
         {
           timestamp: "2026-04-03T10:00:00Z",
-          // Path gives primary tag; text mentions 4 existing themes
           log: "Modified /Users/dev/Documents/GitHub/my-project/src/index.ts — touches frontend, hiring, docs, and devops",
         },
       ];
@@ -206,7 +207,9 @@ describe("classifyEntries", () => {
       const { classified } = await classifyEntries(entries, existingThemes, provider, "test-model");
 
       expect(classified).toHaveLength(1);
-      expect(classified[0].themes.length).toBeLessThanOrEqual(3);
+      // 1 primary (my-project) + at most 3 secondary = 4 max
+      expect(classified[0].themes.length).toBeLessThanOrEqual(4);
+      expect(classified[0].themes).toContain("my-project");
     });
 
     it("classifies ### owner/repo heading format", async () => {
@@ -370,6 +373,45 @@ describe("classifyEntries — skills extraction", () => {
     } as any;
     const result = await classifyEntries([entry], ["two_segments"], provider, "gpt");
     expect(result.classified[0].themes).toContain("two_segments");
+  });
+
+  it("extracts ALL ### owner/repo headings from a multi-repo github-activity entry, not just the first", async () => {
+    const provider = mockProvider("[]"); // shouldn't be called — deterministic should catch all
+    const entry: ActivityEntry = {
+      timestamp: "2026-05-05T07:40:00Z",
+      log: [
+        "### maxdraki/openpulseai",
+        "- Commits: foo (Max Illis, 2026-05-04)",
+        "- PRs: #42 (Closed)",
+        "",
+        "### rws-internal-tech/mcp-registry",
+        "- Commits: bar (Max Illis, 2026-05-01)",
+        "",
+        "### rws-internal-tech/ai-tools-radar",
+        "- Commits: baz (Max Illis, 2026-04-30)",
+        "",
+        "### rws-internal-tech/appian-data-transform",
+        "- Commits: qux (Andrii, 2026-04-29)",
+      ].join("\n"),
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.classified[0].themes).toEqual(
+      expect.arrayContaining(["openpulseai", "mcp-registry", "ai-tools-radar", "appian-data-transform"])
+    );
+    expect(result.classified[0].themes.length).toBe(4);
+  });
+
+  it("respects the MAX_PRIMARY_TAGS cap of 10 even when an entry has more headings", async () => {
+    const provider = mockProvider("[]");
+    const headings = Array.from({ length: 15 }, (_, i) => `### owner/repo${i}`).join("\n\n- some content\n");
+    const entry: ActivityEntry = {
+      timestamp: "2026-05-05T07:40:00Z",
+      log: headings + "\n- some content with PR and commit tokens to survive preFilter\n- line 2\n- line 3\n- line 4\n- line 5",
+      source: "github-activity",
+    };
+    const result = await classifyEntries([entry], [], provider, "gpt");
+    expect(result.classified[0].themes.length).toBeLessThanOrEqual(10);
   });
 
   it("rejects 'loose' / 'misc' catch-all headings as themes", async () => {
