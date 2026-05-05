@@ -805,16 +805,65 @@ app.get("/api/skill-config/:name", async (req, res) => {
   }
 });
 
+/**
+ * Detect whether a config change adds new collection scope (e.g., new repo URLs,
+ * new space keys, new vault paths). When it does, the next collector run should
+ * backfill the new entries — but the runner's lookback only kicks in when
+ * lastRunAt is null. So we reset lastRunAt on scope-adding changes.
+ *
+ * Heuristic: a field is multi-value if either old or new contains a comma or
+ * newline. For multi-value fields, check whether next has any entries that prev
+ * didn't. Single-value fields (token, domain, single ID) never trigger a reset
+ * — auth changes shouldn't replay a week of history.
+ */
+export function configAddsNewScope(
+  prev: Record<string, string>,
+  next: Record<string, string>
+): boolean {
+  const SEPS = /[\n,]/;
+  const allKeys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of allKeys) {
+    const prevVal = prev[key] ?? "";
+    const nextVal = next[key] ?? "";
+    if (prevVal === nextVal) continue;
+    if (!SEPS.test(prevVal) && !SEPS.test(nextVal)) continue; // single-value field
+    const prevSet = new Set(prevVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
+    const nextSet = new Set(nextVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
+    for (const item of nextSet) if (!prevSet.has(item)) return true;
+  }
+  return false;
+}
+
 app.post("/api/skill-config/:name", async (req, res) => {
   if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
   try {
     await mkdir(skillConfigDir, { recursive: true });
-    await writeFile(
-      join(skillConfigDir, `${req.params.name}.json`),
-      JSON.stringify(req.body, null, 2),
-      "utf-8"
-    );
-    res.json({ ok: true });
+    const configPath = join(skillConfigDir, `${req.params.name}.json`);
+
+    // Compare against previous config to detect scope expansion (new repos,
+    // spaces, vault paths, etc.). When detected, reset the collector's
+    // lastRunAt so the next run uses firstRunLookback to backfill the new
+    // entries' history — otherwise newly-added scope misses the firstRunLookback
+    // window because the collector's overall lastRunAt is recent.
+    let scopeAdded = false;
+    try {
+      const prev = JSON.parse(await readFile(configPath, "utf-8")) as Record<string, string>;
+      scopeAdded = configAddsNewScope(prev, req.body as Record<string, string>);
+    } catch { /* no prior config — first save, lastRunAt is already null */ }
+
+    await writeFile(configPath, JSON.stringify(req.body, null, 2), "utf-8");
+
+    if (scopeAdded) {
+      const statePath = join(VAULT_ROOT, "vault", "collector-state", `${req.params.name}.json`);
+      try {
+        const state = JSON.parse(await readFile(statePath, "utf-8"));
+        state.lastRunAt = null;
+        await writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
+        console.error(`[server] config: ${req.params.name} scope expanded — reset lastRunAt for firstRunLookback backfill`);
+      } catch { /* no prior state */ }
+    }
+
+    res.json({ ok: true, backfillScheduled: scopeAdded });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
