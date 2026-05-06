@@ -191,11 +191,15 @@ export async function runSkill(
 
     const commands = extractShellCommands(body);
     const commandOutputs: Array<{ command: string; output: string; error?: string }> = [];
+    // Per-command timeout. Default 120s (multi-repo gh-activity with 7-day window
+    // takes ~30-40s; was hitting the old hard-coded 30s limit). Skills can declare
+    // command_timeout: "180s" / "3m" in frontmatter when they need more.
+    const commandTimeoutMs = parseTimeout(skill.commandTimeout) ?? 120_000;
 
     for (const cmd of commands) {
       try {
         const { stdout, stderr } = await execFileAsync("bash", ["-c", cmd], {
-          timeout: 30000,
+          timeout: commandTimeoutMs,
           env: filterEnv(skill),
         });
         commandOutputs.push({
@@ -296,5 +300,26 @@ function parseLookback(lookback: string): number {
     case "d": return value * 24 * 60 * 60 * 1000;
     case "w": return value * 7 * 24 * 60 * 60 * 1000;
     default: return 24 * 60 * 60 * 1000;
+  }
+}
+
+/**
+ * Parse a timeout value like "120s", "3m", "1h" into milliseconds.
+ * Returns null on malformed input (caller should fall back to its own default).
+ */
+function parseTimeout(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d+)(ms|s|m|h)$/);
+  if (!match) {
+    console.error(`[skills] Unrecognised command_timeout "${value}", using default`);
+    return null;
+  }
+  const n = parseInt(match[1], 10);
+  switch (match[2]) {
+    case "ms": return n;
+    case "s":  return n * 1000;
+    case "m":  return n * 60 * 1000;
+    case "h":  return n * 60 * 60 * 1000;
+    default:   return null;
   }
 }

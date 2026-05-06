@@ -118,6 +118,7 @@ export interface SkillDefinition {
   schedule?: string;       // cron expression (OpenPulse extension)
   lookback: string;        // default "24h" — used for subsequent runs when lastRunAt exists (OpenPulse extension)
   firstRunLookback?: string; // used only for the first run (when lastRunAt is null); falls back to `lookback` if absent
+  commandTimeout?: string;   // per-shell-command timeout, e.g. "120s", "3m". Defaults to 120s. Heavier collectors (multi-repo gh) can bump.
   requires: {
     bins: string[];
     env: string[];

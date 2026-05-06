@@ -4,6 +4,7 @@ description: Watch specific repos (github.com or GitHub Enterprise) — commits,
 schedule: "0 18 * * 1-5"
 lookback: 24h
 first_run_lookback: 7d
+command_timeout: 5m
 requires:
   bins: [gh]
 setup_guide: "Requires the [GitHub CLI](https://cli.github.com). After installing, run `gh auth login` in your terminal to authenticate. No API key needed — the CLI manages auth."
