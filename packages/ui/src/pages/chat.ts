@@ -117,6 +117,12 @@ export async function renderChat(container: HTMLElement): Promise<void> {
   const modelRow = document.createElement("div");
   modelRow.className = "chat-model-row";
 
+  const contextIndicator = document.createElement("span");
+  contextIndicator.className = "chat-context-indicator";
+  contextIndicator.title = "Approximate context window usage";
+  contextIndicator.style.display = "none"; // shown after first response or on session load
+  modelRow.appendChild(contextIndicator);
+
   const modelLabel = document.createElement("label");
   modelLabel.className = "chat-model-label";
   modelLabel.textContent = "Model:";
@@ -306,16 +312,38 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     selectedModel = modelSelect.value || undefined;
   });
 
+  function formatTokens(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+    return String(n);
+  }
+
+  function updateContextIndicator(tokensUsed: number, contextWindow: number): void {
+    if (!contextWindow) {
+      contextIndicator.style.display = "none";
+      return;
+    }
+    const pct = Math.min(100, Math.round((tokensUsed / contextWindow) * 100));
+    contextIndicator.style.display = "inline-flex";
+    contextIndicator.classList.remove("ctx-green", "ctx-amber", "ctx-red");
+    if (pct < 50) contextIndicator.classList.add("ctx-green");
+    else if (pct < 80) contextIndicator.classList.add("ctx-amber");
+    else contextIndicator.classList.add("ctx-red");
+    const hint = pct >= 80 ? " — start a new chat to keep responses fast" : "";
+    contextIndicator.textContent = `Context: ${pct}% · ~${formatTokens(tokensUsed)}/${formatTokens(contextWindow)}${hint}`;
+  }
+
   async function selectSession(id: string): Promise<void> {
     activeSessionId = id;
     setActiveSession(id);
     try {
-      const session = await getChatSession(id);
+      const { session, tokensUsed, contextWindow } = await getChatSession(id);
       renderMessages(session.messages);
       // Sync the model dropdown to whatever this session was last using.
       // Empty string = "Default" option.
       selectedModel = session.model;
       modelSelect.value = session.model ?? "";
+      updateContextIndicator(tokensUsed, contextWindow);
     } catch (err) {
       log("error", "Failed to load chat session", err instanceof Error ? err.message : String(err));
       showEmptyState();
@@ -349,6 +377,7 @@ export async function renderChat(container: HTMLElement): Promise<void> {
       pending.innerHTML = renderMarkdown(result.content, knownThemes);
       pending.classList.add("md-content");
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      updateContextIndicator(result.tokensUsed, result.contextWindow);
       // Refresh sidebar so the active session moves to the top + title updates.
       void refreshSessionList();
     } catch (err: unknown) {
@@ -382,6 +411,7 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     // Reset model dropdown to Default — fresh sessions inherit config.llm.model.
     selectedModel = undefined;
     modelSelect.value = "";
+    contextIndicator.style.display = "none";
     void loadKnownThemes().then((s) => { knownThemes = s; });
     void refreshSessionList();
   });

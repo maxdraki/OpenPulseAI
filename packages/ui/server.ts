@@ -264,6 +264,48 @@ const CHAT_MODEL_ALLOWLIST: Record<string, string[]> = {
   // ollama: passthrough (local models with arbitrary user-defined names)
 };
 
+/**
+ * Approximate context-window sizes per model. Used only for the chat page's
+ * "context % used" indicator — a rough hint for the user, not for routing.
+ *
+ * Keep in sync with CHAT_MODEL_ALLOWLIST as new models are added. For unknown
+ * models (e.g. Ollama local builds) we fall back to a conservative default.
+ */
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  // Anthropic
+  "claude-opus-4-7": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5-20251001": 200_000,
+  // OpenAI
+  "gpt-4o": 128_000,
+  "gpt-4o-mini": 128_000,
+  "gpt-4-turbo": 128_000,
+  // Gemini
+  "gemini-2.5-pro": 2_000_000,
+  "gemini-2.5-flash": 1_000_000,
+  "gemini-3.1-flash-lite-preview": 1_000_000,
+  // Mistral
+  "mistral-large-latest": 128_000,
+  "mistral-small-latest": 32_000,
+};
+
+const DEFAULT_CONTEXT_WINDOW = 32_000;
+
+export function lookupContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
+ * Estimate token usage for a session. ~4 chars per token is a rough rule for
+ * English; we add a constant overhead for the system prompt + injected theme
+ * context. Intentionally approximate — the indicator is a "you're getting full"
+ * cue, not a meter the user should trust to the last 10%.
+ */
+export function estimateTokensUsed(messages: Array<{ content: string }>, systemOverheadTokens = 1000): number {
+  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+  return Math.ceil(totalChars / 4) + systemOverheadTokens;
+}
+
 /** Validate a user-supplied model string against the allowlist for the configured provider. */
 export function isAllowedChatModel(provider: string, model: string): boolean {
   if (provider === "ollama") {
@@ -345,8 +387,14 @@ app.get("/api/chat/sessions/:id", async (req, res) => {
   try {
     const path = join(VAULT_ROOT, "vault", "sessions", `${req.params.id}.json`);
     const raw = await readFile(path, "utf-8");
-    const session = JSON.parse(raw) as ChatSessionFile;
-    res.json({ session });
+    const session = JSON.parse(raw) as ChatSessionFile & { model?: string };
+    // Compute context usage so the UI's indicator is accurate immediately on
+    // session load (without the user having to send a message first).
+    const config = await loadConfig(VAULT_ROOT);
+    const effectiveModel = session.model ?? config.llm.model;
+    const tokensUsed = estimateTokensUsed(session.messages);
+    const contextWindow = lookupContextWindow(effectiveModel);
+    res.json({ session, tokensUsed, contextWindow });
   } catch {
     res.status(404).json({ error: "session not found" });
   }
@@ -433,16 +481,29 @@ app.post("/api/chat", async (req, res) => {
 
     // If the user explicitly chose a model on this turn, persist it onto the session
     // so subsequent turns default to the same model without needing to re-send it.
-    if (requestedModel !== undefined) {
-      try {
-        const path = join(sessionsDir, `${result.sessionId}.json`);
-        const stored = JSON.parse(await readFile(path, "utf-8")) as ChatSessionFile & { model?: string };
-        stored.model = requestedModel;
-        await writeFile(path, JSON.stringify(stored, null, 2), "utf-8");
-      } catch { /* race or missing file — fine, no rollback needed */ }
-    }
+    let storedSession: (ChatSessionFile & { model?: string }) | null = null;
+    try {
+      const path = join(sessionsDir, `${result.sessionId}.json`);
+      storedSession = JSON.parse(await readFile(path, "utf-8")) as ChatSessionFile & { model?: string };
+      if (requestedModel !== undefined) {
+        storedSession.model = requestedModel;
+        await writeFile(path, JSON.stringify(storedSession, null, 2), "utf-8");
+      }
+    } catch { /* race or missing file — fine, no rollback needed */ }
 
-    res.json({ content: text, sessionId: result.sessionId, model });
+    // Approximate context usage so the UI can show a "x% used" hint near the model dropdown.
+    const tokensUsed = storedSession
+      ? estimateTokensUsed(storedSession.messages)
+      : estimateTokensUsed([{ content: message }, { content: text }]);
+    const contextWindow = lookupContextWindow(model);
+
+    res.json({
+      content: text,
+      sessionId: result.sessionId,
+      model,
+      tokensUsed,
+      contextWindow,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });

@@ -265,6 +265,8 @@ export interface ChatResponse {
   content: string;
   sessionId: string;
   model: string;
+  tokensUsed: number;
+  contextWindow: number;
 }
 
 export async function chatSendMessage(
@@ -312,10 +314,15 @@ export async function listChatSessions(): Promise<ChatSessionMeta[]> {
   return r.sessions;
 }
 
-export async function getChatSession(id: string): Promise<ChatSessionFull> {
+export interface ChatSessionLoadResult {
+  session: ChatSessionFull;
+  tokensUsed: number;
+  contextWindow: number;
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionLoadResult> {
   if (isTauri) throw new Error("Chat is not yet available in the desktop app");
-  const r = await apiGet<{ session: ChatSessionFull }>(`/chat/sessions/${encodeURIComponent(id)}`);
-  return r.session;
+  return apiGet(`/chat/sessions/${encodeURIComponent(id)}`);
 }
 
 export async function deleteChatSession(id: string): Promise<void> {
