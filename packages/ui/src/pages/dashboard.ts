@@ -5,17 +5,36 @@ import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
 
+// Static SVG for the refresh button — not user input
+const REFRESH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+
 export async function renderDashboard(container: HTMLElement): Promise<void> {
   const header = document.createElement("div");
   header.className = "page-header";
+  // Inline flex so the refresh button sits to the right of the title block
+  header.style.display = "flex";
+  header.style.justifyContent = "space-between";
+  header.style.alignItems = "flex-start";
+  header.style.gap = "1rem";
+
+  const titleBlock = document.createElement("div");
   const h2 = document.createElement("h2");
   h2.className = "page-title";
   h2.textContent = "Dashboard";
   const sub = document.createElement("p");
   sub.className = "page-subtitle";
   sub.textContent = "Your digital twin at a glance";
-  header.appendChild(h2);
-  header.appendChild(sub);
+  titleBlock.appendChild(h2);
+  titleBlock.appendChild(sub);
+  header.appendChild(titleBlock);
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.className = "btn btn-ghost btn-sm";
+  refreshBtn.title = "Refresh";
+  refreshBtn.setAttribute("aria-label", "Refresh dashboard");
+  refreshBtn.innerHTML = REFRESH_ICON; // static SVG constant, not user data
+  refreshBtn.style.alignSelf = "center";
+  header.appendChild(refreshBtn);
 
   const statsGrid = document.createElement("div");
   statsGrid.className = "stat-grid stat-grid-2";
@@ -29,7 +48,20 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   container.appendChild(statsGrid);
   container.appendChild(themesSection);
 
-  await Promise.all([loadStats(statsGrid), loadThemes(themesSection, await getBacklinks())]);
+  async function refreshAll() {
+    refreshBtn.disabled = true;
+    refreshBtn.style.opacity = "0.6";
+    try {
+      await Promise.all([loadStats(statsGrid), loadThemes(themesSection, await getBacklinks())]);
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.style.opacity = "";
+    }
+  }
+
+  refreshBtn.addEventListener("click", refreshAll);
+
+  await refreshAll();
 }
 
 // Static SVG strings for stat card icons (not user-supplied)
