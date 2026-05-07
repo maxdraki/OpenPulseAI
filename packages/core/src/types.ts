@@ -140,4 +140,8 @@ export interface ChatSession {
     question: string;
     themesConsulted: string[];
   };
+  /** Model override for this session — set when the user picks one in the chat
+   *  page's model selector. Undefined = use whatever config.llm.model is at
+   *  request time. */
+  model?: string;
 }

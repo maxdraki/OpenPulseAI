@@ -232,6 +232,47 @@ app.post("/api/trigger-lint", async (_req, res) => {
 const CHAT_MESSAGE_MAX = 8000;
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Per-provider allowlist for the chat model selector. Curated to match the
+ * BYOM picker on the Settings page. Ollama is local-first so we passthrough
+ * any model name (after a basic safety check); for hosted providers we keep
+ * the list tight to avoid surprise costs from typo'd model names.
+ *
+ * Order matters — first entry is shown as the default in the dropdown when
+ * no per-session override is set.
+ */
+const CHAT_MODEL_ALLOWLIST: Record<string, string[]> = {
+  anthropic: [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+  ],
+  openai: [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+  ],
+  gemini: [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite-preview",
+  ],
+  mistral: [
+    "mistral-large-latest",
+    "mistral-small-latest",
+  ],
+  // ollama: passthrough (local models with arbitrary user-defined names)
+};
+
+/** Validate a user-supplied model string against the allowlist for the configured provider. */
+export function isAllowedChatModel(provider: string, model: string): boolean {
+  if (provider === "ollama") {
+    // Local models — accept anything that looks like a sensible identifier.
+    return /^[\w./:-]{1,80}$/.test(model);
+  }
+  return CHAT_MODEL_ALLOWLIST[provider]?.includes(model) ?? false;
+}
+
 export interface ChatSessionFile {
   id: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
@@ -324,8 +365,30 @@ app.delete("/api/chat/sessions/:id", async (req, res) => {
   }
 });
 
+app.get("/api/chat/models", async (_req, res) => {
+  try {
+    const config = await loadConfig(VAULT_ROOT);
+    const provider = config.llm.provider;
+    const allowed = CHAT_MODEL_ALLOWLIST[provider] ?? [];
+    res.json({
+      provider,
+      defaultModel: config.llm.model,
+      models: allowed,
+      // For ollama, the UI should show the configured model only and let the user know
+      // they can pick any local model name through Settings.
+      passthrough: provider === "ollama",
+    });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.post("/api/chat", async (req, res) => {
-  const { message, sessionId } = req.body as { message?: string; sessionId?: string };
+  const { message, sessionId, model: requestedModel } = req.body as {
+    message?: string;
+    sessionId?: string;
+    model?: string;
+  };
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ error: "message is required" });
   }
@@ -337,21 +400,49 @@ app.post("/api/chat", async (req, res) => {
   }
   try {
     const config = await loadConfig(VAULT_ROOT);
+    if (requestedModel !== undefined && !isAllowedChatModel(config.llm.provider, requestedModel)) {
+      return res.status(400).json({ error: `model "${requestedModel}" is not in the allowlist for provider ${config.llm.provider}` });
+    }
+
+    // Resolve the model with this priority:
+    //   1. Explicit `model` in the request body (user just picked from dropdown)
+    //   2. session.model (chosen earlier in this conversation)
+    //   3. config.llm.model (global default)
+    let model = requestedModel ?? config.llm.model;
+    const sessionsDir = join(VAULT_ROOT, "vault", "sessions");
+    if (sessionId && requestedModel === undefined) {
+      try {
+        const stored = JSON.parse(await readFile(join(sessionsDir, `${sessionId}.json`), "utf-8")) as ChatSessionFile & { model?: string };
+        if (stored.model) model = stored.model;
+      } catch { /* session doesn't exist yet — fall through to config default */ }
+    }
+
     const { createProvider } = await import("../core/dist/index.js");
     const provider = createProvider(config);
     const vault = new Vault(VAULT_ROOT);
     await vault.init();
     const { handleChatWithPulse } = await import("../mcp-server/dist/tools/chat-with-pulse.js");
-    const result = await handleChatWithPulse(vault, provider, config.llm.model, { message, sessionId });
-    // The MCP handler appends "_[session: <id>]_" so MCP/Desktop clients can read the
-    // session id back from the text. We already return sessionId as a separate field,
-    // so strip that footer to keep the chat surface clean.
+    const result = await handleChatWithPulse(vault, provider, model, { message, sessionId });
+
+    // Strip the MCP-only "_[session: …]_" footer (already explained in the earlier comment).
     const text = result.content
       .map((c) => c.text)
       .join("\n")
       .replace(/\n*_\[session: [0-9a-f-]+\]_\s*$/i, "")
       .trim();
-    res.json({ content: text, sessionId: result.sessionId });
+
+    // If the user explicitly chose a model on this turn, persist it onto the session
+    // so subsequent turns default to the same model without needing to re-send it.
+    if (requestedModel !== undefined) {
+      try {
+        const path = join(sessionsDir, `${result.sessionId}.json`);
+        const stored = JSON.parse(await readFile(path, "utf-8")) as ChatSessionFile & { model?: string };
+        stored.model = requestedModel;
+        await writeFile(path, JSON.stringify(stored, null, 2), "utf-8");
+      } catch { /* race or missing file — fine, no rollback needed */ }
+    }
+
+    res.json({ content: text, sessionId: result.sessionId, model });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });

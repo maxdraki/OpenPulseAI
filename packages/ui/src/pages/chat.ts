@@ -3,10 +3,12 @@
 // rendered through the marked library (trusted, HTML-escaped).
 import {
   chatSendMessage,
+  fetchChatModels,
   getWarmThemes,
   listChatSessions,
   getChatSession,
   deleteChatSession,
+  type ChatModelOptions,
   type ChatSessionMeta,
   type ChatSessionFull,
 } from "../lib/tauri-bridge.js";
@@ -111,6 +113,19 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     "Ask anything about your vault — I'll consult the wiki themes and answer.";
   messagesEl.appendChild(emptyState);
 
+  // Model picker row sits above the input row.
+  const modelRow = document.createElement("div");
+  modelRow.className = "chat-model-row";
+
+  const modelLabel = document.createElement("label");
+  modelLabel.className = "chat-model-label";
+  modelLabel.textContent = "Model:";
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "form-input chat-model-select";
+  modelSelect.setAttribute("aria-label", "Model");
+  modelLabel.appendChild(modelSelect);
+  modelRow.appendChild(modelLabel);
+
   const inputRow = document.createElement("div");
   inputRow.className = "chat-input-row";
 
@@ -136,6 +151,7 @@ export async function renderChat(container: HTMLElement): Promise<void> {
   inputRow.appendChild(sendBtn);
 
   chatPage.appendChild(messagesEl);
+  chatPage.appendChild(modelRow);
   chatPage.appendChild(inputRow);
 
   shell.appendChild(sidebar);
@@ -148,7 +164,12 @@ export async function renderChat(container: HTMLElement): Promise<void> {
   // ── State ──
   let knownThemes: Set<string> = new Set();
   let activeSessionId: string | undefined = activeSessionFromHash();
+  let modelOptions: ChatModelOptions | null = null;
+  /** undefined = use server default (config.llm.model or session-stored) */
+  let selectedModel: string | undefined;
+
   void loadKnownThemes().then((s) => { knownThemes = s; });
+  void populateModelDropdown();
 
   function showEmptyState(): void {
     messagesEl.textContent = "";
@@ -252,19 +273,54 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     }
   }
 
+  async function populateModelDropdown(): Promise<void> {
+    try {
+      modelOptions = await fetchChatModels();
+    } catch (err) {
+      log("warn", "Failed to fetch chat model list", err instanceof Error ? err.message : String(err));
+      modelSelect.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "Default";
+      modelSelect.appendChild(opt);
+      return;
+    }
+    modelSelect.innerHTML = "";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = `Default (${modelOptions.defaultModel})`;
+    modelSelect.appendChild(defaultOpt);
+    if (modelOptions.passthrough) {
+      // Ollama: only show the default — user manages local models via Settings.
+      return;
+    }
+    for (const m of modelOptions.models) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      modelSelect.appendChild(opt);
+    }
+  }
+
+  modelSelect.addEventListener("change", () => {
+    selectedModel = modelSelect.value || undefined;
+  });
+
   async function selectSession(id: string): Promise<void> {
     activeSessionId = id;
     setActiveSession(id);
     try {
       const session = await getChatSession(id);
       renderMessages(session.messages);
+      // Sync the model dropdown to whatever this session was last using.
+      // Empty string = "Default" option.
+      selectedModel = session.model;
+      modelSelect.value = session.model ?? "";
     } catch (err) {
       log("error", "Failed to load chat session", err instanceof Error ? err.message : String(err));
       showEmptyState();
     }
-    // Update active highlight in sidebar
     sessionList.querySelectorAll<HTMLElement>(".chat-session-row").forEach((el) => el.classList.remove("active"));
-    // Re-render so the row layout matches; cheap.
     void refreshSessionList();
   }
 
@@ -286,7 +342,7 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     pending.classList.add("chat-bubble-pending");
 
     try {
-      const result = await chatSendMessage(text, activeSessionId);
+      const result = await chatSendMessage(text, activeSessionId, selectedModel);
       activeSessionId = result.sessionId;
       setActiveSession(result.sessionId);
       pending.classList.remove("chat-bubble-pending");
@@ -323,6 +379,9 @@ export async function renderChat(container: HTMLElement): Promise<void> {
     showEmptyState();
     textarea.value = "";
     textarea.focus();
+    // Reset model dropdown to Default — fresh sessions inherit config.llm.model.
+    selectedModel = undefined;
+    modelSelect.value = "";
     void loadKnownThemes().then((s) => { knownThemes = s; });
     void refreshSessionList();
   });

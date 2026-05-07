@@ -264,11 +264,28 @@ export async function fetchObsidianVaults(): Promise<{ vaults: ObsidianVault[]; 
 export interface ChatResponse {
   content: string;
   sessionId: string;
+  model: string;
 }
 
-export async function chatSendMessage(message: string, sessionId?: string): Promise<ChatResponse> {
+export async function chatSendMessage(
+  message: string,
+  sessionId?: string,
+  model?: string,
+): Promise<ChatResponse> {
   if (isTauri) throw new Error("Chat is not yet available in the desktop app");
-  return apiPost("/chat", { message, sessionId });
+  return apiPost("/chat", { message, sessionId, model });
+}
+
+export interface ChatModelOptions {
+  provider: string;
+  defaultModel: string;
+  models: string[];
+  passthrough: boolean;
+}
+
+export async function fetchChatModels(): Promise<ChatModelOptions> {
+  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
+  return apiGet("/chat/models");
 }
 
 export interface ChatSessionMeta {
@@ -285,6 +302,8 @@ export interface ChatSessionFull {
   themesConsulted: string[];
   createdAt: string;
   lastActivity: string;
+  /** Per-session model override (set when the user picks one in the dropdown). */
+  model?: string;
 }
 
 export async function listChatSessions(): Promise<ChatSessionMeta[]> {
