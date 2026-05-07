@@ -261,6 +261,16 @@ export async function fetchObsidianVaults(): Promise<{ vaults: ObsidianVault[]; 
   return apiGet("/obsidian-notes/vaults");
 }
 
+export interface ChatResponse {
+  content: string;
+  sessionId: string;
+}
+
+export async function chatSendMessage(message: string, sessionId?: string): Promise<ChatResponse> {
+  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
+  return apiPost("/chat", { message, sessionId });
+}
+
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
   if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });

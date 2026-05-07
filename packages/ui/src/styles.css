@@ -1841,3 +1841,93 @@ a.wiki-link:hover {
   color: var(--text-tertiary);
   font-size: 0.8rem;
 }
+
+/* ─── Chat ─── */
+
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  /* Page header is ~96px, sidebar/content paddings on the parent take ~3rem.
+     Cap the chat surface height so the message list scrolls but the input row stays in view. */
+  height: calc(100vh - 11rem);
+  min-height: 32rem;
+  gap: 0.75rem;
+}
+
+.chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0.25rem;
+}
+
+.chat-empty {
+  margin: auto;
+  padding: 1.5rem 1rem;
+  color: var(--text-tertiary);
+  text-align: center;
+  font-size: 0.9rem;
+  max-width: 28rem;
+}
+
+.chat-bubble {
+  max-width: 82%;
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-default);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  word-wrap: break-word;
+  white-space: pre-wrap; /* preserves user-bubble newlines; markdown bubbles override below */
+}
+
+.chat-bubble-user {
+  align-self: flex-end;
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.25);
+  color: var(--text-primary);
+  border-bottom-right-radius: 0.25rem;
+}
+
+.chat-bubble-assistant {
+  align-self: flex-start;
+  background: var(--bg-raised);
+  white-space: normal; /* markdown rendering produces its own block elements */
+  border-bottom-left-radius: 0.25rem;
+}
+
+.chat-bubble-error {
+  align-self: flex-start;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--danger, #ef4444);
+}
+
+.chat-bubble-pending {
+  opacity: 0.6;
+}
+
+/* Tighten markdown spacing inside assistant bubbles. */
+.chat-bubble-assistant.md-content > *:first-child { margin-top: 0; }
+.chat-bubble-assistant.md-content > *:last-child { margin-bottom: 0; }
+.chat-bubble-assistant.md-content p { margin: 0 0 0.4rem; }
+.chat-bubble-assistant.md-content p:last-child { margin-bottom: 0; }
+
+.chat-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.chat-textarea {
+  flex: 1 1 auto;
+  resize: none;
+  min-height: 2.6rem;
+  max-height: 10rem;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}

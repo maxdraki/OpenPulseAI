@@ -8,6 +8,7 @@ import { renderLogs } from "./pages/logs.js";
 import { renderHelp } from "./pages/help.js";
 import { renderSchedule } from "./pages/schedule.js";
 import { renderSkillsEvidence } from "./pages/skills-evidence.js";
+import { renderChat } from "./pages/chat.js";
 import { listPendingUpdates } from "./lib/tauri-bridge.js";
 
 const content = document.getElementById("content")!;
@@ -16,6 +17,7 @@ const navItems = document.querySelectorAll<HTMLButtonElement>(".nav-item[data-pa
 const pages: Record<string, (el: HTMLElement) => Promise<void>> = {
   dashboard: renderDashboard,
   review: renderReview,
+  chat: renderChat,
   settings: renderSettings,
   journals: renderJournals,
   themes: renderThemes,

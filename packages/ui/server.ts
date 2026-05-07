@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme, readAllThemes, mergeThemes, isSafeThemeName, parseActivityBlocks } from "../core/dist/index.js";
+import { Vault, writeTheme, readAllThemes, mergeThemes, isSafeThemeName, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,6 +224,45 @@ app.post("/api/trigger-lint", async (_req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --- Chat (in-app, backed by handleChatWithPulse) ---
+
+const CHAT_MESSAGE_MAX = 8000;
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+app.post("/api/chat", async (req, res) => {
+  const { message, sessionId } = req.body as { message?: string; sessionId?: string };
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ error: "message is required" });
+  }
+  if (message.length > CHAT_MESSAGE_MAX) {
+    return res.status(400).json({ error: `message too long (max ${CHAT_MESSAGE_MAX} chars)` });
+  }
+  if (sessionId !== undefined && !SESSION_ID_RE.test(sessionId)) {
+    return res.status(400).json({ error: "invalid sessionId" });
+  }
+  try {
+    const config = await loadConfig(VAULT_ROOT);
+    const { createProvider } = await import("../core/dist/index.js");
+    const provider = createProvider(config);
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
+    const { handleChatWithPulse } = await import("../mcp-server/dist/tools/chat-with-pulse.js");
+    const result = await handleChatWithPulse(vault, provider, config.llm.model, { message, sessionId });
+    // The MCP handler appends "_[session: <id>]_" so MCP/Desktop clients can read the
+    // session id back from the text. We already return sessionId as a separate field,
+    // so strip that footer to keep the chat surface clean.
+    const text = result.content
+      .map((c) => c.text)
+      .join("\n")
+      .replace(/\n*_\[session: [0-9a-f-]+\]_\s*$/i, "")
+      .trim();
+    res.json({ content: text, sessionId: result.sessionId });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
   }
 });
 
