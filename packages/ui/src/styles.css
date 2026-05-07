@@ -1844,13 +1844,118 @@ a.wiki-link:hover {
 
 /* ─── Chat ─── */
 
+.chat-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 1rem;
+  height: calc(100vh - 11rem);
+  min-height: 32rem;
+}
+
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--border-default);
+  border-radius: 0.5rem;
+  background: var(--bg-raised);
+  padding: 0.5rem;
+  overflow: hidden;
+}
+
+.chat-new-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.chat-session-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.chat-session-empty {
+  padding: 0.75rem 0.5rem;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.chat-session-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.6rem;
+  padding-right: 1.8rem;
+  border-radius: 0.4rem;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  font-family: inherit;
+  color: var(--text-primary);
+}
+
+.chat-session-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-default);
+}
+
+.chat-session-row.active {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.chat-session-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-session-meta {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
+
+.chat-session-delete {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-session-row:hover .chat-session-delete,
+.chat-session-row:focus-within .chat-session-delete {
+  opacity: 1;
+}
+
+.chat-session-delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger, #ef4444);
+}
+
 .chat-page {
   display: flex;
   flex-direction: column;
-  /* Page header is ~96px, sidebar/content paddings on the parent take ~3rem.
-     Cap the chat surface height so the message list scrolls but the input row stays in view. */
-  height: calc(100vh - 11rem);
-  min-height: 32rem;
+  min-width: 0; /* allow grid cell to shrink so long content wraps */
   gap: 0.75rem;
 }
 

@@ -232,6 +232,98 @@ app.post("/api/trigger-lint", async (_req, res) => {
 const CHAT_MESSAGE_MAX = 8000;
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export interface ChatSessionFile {
+  id: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  themesConsulted: string[];
+  createdAt: string;
+  lastActivity: string;
+  pendingFile?: unknown;
+}
+
+export interface ChatSessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastActivity: string;
+  messageCount: number;
+}
+
+/**
+ * Build a sidebar-friendly summary of a session: a title (first user message,
+ * truncated to 60 chars; "New chat" if no user messages yet) + counts/timestamps.
+ * Pure function — exported so tests can exercise the title heuristic without
+ * spinning up an express app.
+ */
+export function summariseSession(s: ChatSessionFile): ChatSessionMeta {
+  const firstUser = s.messages.find((m) => m.role === "user")?.content?.trim() ?? "";
+  let title = firstUser ? firstUser.replace(/\s+/g, " ") : "New chat";
+  if (title.length > 60) title = title.slice(0, 57).trimEnd() + "…";
+  return {
+    id: s.id,
+    title,
+    createdAt: s.createdAt,
+    lastActivity: s.lastActivity,
+    messageCount: s.messages.length,
+  };
+}
+
+app.get("/api/chat/sessions", async (_req, res) => {
+  try {
+    const sessionsDir = join(VAULT_ROOT, "vault", "sessions");
+    let files: string[];
+    try {
+      files = await readdir(sessionsDir);
+    } catch {
+      // Directory doesn't exist yet — no sessions
+      return res.json({ sessions: [] });
+    }
+    const summaries: ChatSessionMeta[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const raw = await readFile(join(sessionsDir, f), "utf-8");
+        const parsed = JSON.parse(raw) as ChatSessionFile;
+        if (typeof parsed?.id !== "string") continue;
+        summaries.push(summariseSession(parsed));
+      } catch {
+        // Skip malformed session files
+      }
+    }
+    summaries.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+    res.json({ sessions: summaries });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/chat/sessions/:id", async (req, res) => {
+  if (!SESSION_ID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: "invalid sessionId" });
+  }
+  try {
+    const path = join(VAULT_ROOT, "vault", "sessions", `${req.params.id}.json`);
+    const raw = await readFile(path, "utf-8");
+    const session = JSON.parse(raw) as ChatSessionFile;
+    res.json({ session });
+  } catch {
+    res.status(404).json({ error: "session not found" });
+  }
+});
+
+app.delete("/api/chat/sessions/:id", async (req, res) => {
+  if (!SESSION_ID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: "invalid sessionId" });
+  }
+  try {
+    const path = join(VAULT_ROOT, "vault", "sessions", `${req.params.id}.json`);
+    await rm(path, { force: true });
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.post("/api/chat", async (req, res) => {
   const { message, sessionId } = req.body as { message?: string; sessionId?: string };
   if (typeof message !== "string" || !message.trim()) {

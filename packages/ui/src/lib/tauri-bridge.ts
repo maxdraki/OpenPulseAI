@@ -271,6 +271,40 @@ export async function chatSendMessage(message: string, sessionId?: string): Prom
   return apiPost("/chat", { message, sessionId });
 }
 
+export interface ChatSessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastActivity: string;
+  messageCount: number;
+}
+
+export interface ChatSessionFull {
+  id: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  themesConsulted: string[];
+  createdAt: string;
+  lastActivity: string;
+}
+
+export async function listChatSessions(): Promise<ChatSessionMeta[]> {
+  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
+  const r = await apiGet<{ sessions: ChatSessionMeta[] }>("/chat/sessions");
+  return r.sessions;
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionFull> {
+  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
+  const r = await apiGet<{ session: ChatSessionFull }>(`/chat/sessions/${encodeURIComponent(id)}`);
+  return r.session;
+}
+
+export async function deleteChatSession(id: string): Promise<void> {
+  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
+  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
   if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });
