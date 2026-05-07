@@ -114,11 +114,15 @@ const DREAM_TIMEOUT_MS     = 5 * 60 * 1000;   // 5 minutes
 
 /** Returns today's date as YYYY-MM-DD in local time. */
 export function getLocalDate(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return formatLocalDate(new Date());
+}
+
+/** Format a Date as YYYY-MM-DD in the system's local timezone. */
+export function formatLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /**
@@ -612,8 +616,13 @@ export class Orchestrator {
   // -------------------------------------------------------------------------
 
   private async heartbeat(): Promise<void> {
+    // Compare local-date to local-date. The previous bug used .slice(0, 10)
+    // on the UTC ISO timestamp and compared to local-date, which made the
+    // rollover fire every heartbeat for the duration of the local/UTC offset
+    // (e.g. 1 hour in BST) — once per minute for an hour, repeatedly clearing
+    // collectorsCompletedToday and breaking the dream auto-trigger barrier.
     const prevDate = this.state.lastHeartbeat
-      ? this.state.lastHeartbeat.slice(0, 10)
+      ? formatLocalDate(new Date(this.state.lastHeartbeat))
       : null;
     const today = getLocalDate();
 

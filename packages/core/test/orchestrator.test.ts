@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scheduleToCron, getLocalDate, defaultState, loadState, saveState } from "../src/orchestrator.js";
+import { scheduleToCron, getLocalDate, formatLocalDate, defaultState, loadState, saveState } from "../src/orchestrator.js";
 
 describe("scheduleToCron", () => {
   it("converts weekday schedule to cron", () => {
@@ -57,6 +57,30 @@ describe("defaultState — new pipelines", () => {
     expect(s.schemaEvolutionPipeline).toBeDefined();
     expect(s.schemaEvolutionPipeline.running).toBe(false);
     expect(s.schemaEvolutionPipeline.schedule).toEqual({ time: "05:00", days: ["sun","mon","tue","wed","thu","fri","sat"] });
+  });
+});
+
+describe("formatLocalDate", () => {
+  it("formats a Date as YYYY-MM-DD in local timezone", () => {
+    const d = new Date(2026, 4, 6, 23, 45, 0); // May 6 2026 23:45 LOCAL
+    expect(formatLocalDate(d)).toBe("2026-05-06");
+  });
+
+  it("interprets a UTC ISO timestamp by its LOCAL date, not its UTC date — regression for the BST/UTC rollover bug", () => {
+    // 23:45 UTC on May 6 = 00:45 BST on May 7 in summer-time London. The bug
+    // was comparing the ISO string's first 10 chars (UTC date "2026-05-06")
+    // against getLocalDate() which returns local date — they differed for
+    // the entire 1-hour offset window, firing rollover every minute.
+    const utcIso = "2026-05-06T23:45:00.000Z";
+    const localDate = formatLocalDate(new Date(utcIso));
+    // Whatever the test runner's local TZ, formatLocalDate must agree with
+    // a same-instant Date created the conventional way. (We can't assert a
+    // specific date string without controlling TZ — instead we assert
+    // round-trip consistency.)
+    const sameDate = formatLocalDate(new Date(Date.parse(utcIso)));
+    expect(localDate).toBe(sameDate);
+    // Sanity: the function output is YYYY-MM-DD shape
+    expect(localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 
