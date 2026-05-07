@@ -5,8 +5,10 @@ import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
 
-// Static SVG for the refresh button — not user input
-const REFRESH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+// Static SVG for the refresh button — Lucide `rotate-cw`. A single nearly-full
+// circular arc reads as a circle visually (the previous Feather `refresh-cw`
+// used two short arcs that looked like an ellipse at small sizes).
+const REFRESH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>';
 
 export async function renderDashboard(container: HTMLElement): Promise<void> {
   const header = document.createElement("div");
