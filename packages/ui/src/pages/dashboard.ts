@@ -32,7 +32,15 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   refreshBtn.className = "btn btn-ghost btn-sm";
   refreshBtn.title = "Refresh";
   refreshBtn.setAttribute("aria-label", "Refresh dashboard");
-  refreshBtn.innerHTML = REFRESH_ICON; // static SVG constant, not user data
+  // Icon + label — `.btn` already does inline-flex with a 0.45rem gap, so this
+  // composes cleanly. SVG is a static constant (not user data) so innerHTML is safe.
+  const refreshIcon = document.createElement("span");
+  refreshIcon.style.display = "inline-flex";
+  refreshIcon.innerHTML = REFRESH_ICON;
+  const refreshLabel = document.createElement("span");
+  refreshLabel.textContent = "Refresh";
+  refreshBtn.appendChild(refreshIcon);
+  refreshBtn.appendChild(refreshLabel);
   refreshBtn.style.alignSelf = "center";
   header.appendChild(refreshBtn);
 
