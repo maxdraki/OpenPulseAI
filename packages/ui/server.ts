@@ -10,6 +10,7 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { timingSafeEqual } from "node:crypto";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
@@ -19,9 +20,39 @@ const execFileAsync = promisify(execFile);
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = 3001;
+// Bind to loopback by default so the dev server is never exposed on an external
+// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy,
+// and ALWAYS set OPENPULSE_API_TOKEN when you do.
+const HOST = process.env.OPENPULSE_HOST ?? "127.0.0.1";
+// When set, every /api request must send `Authorization: Bearer <token>`.
+const API_TOKEN = process.env.OPENPULSE_API_TOKEN ?? "";
 
 /** Guard against path traversal in :name params */
 const SAFE_NAME = /^[\w-]+$/;
+
+/** Constant-time string compare (avoids leaking the token via timing). */
+function tokensMatch(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/** Mask a secret for display — never expose the full value to a client. */
+function maskKey(key: string | undefined): string | undefined {
+  if (!key) return undefined;
+  const k = key.trim();
+  return k.length <= 8 ? "••••" : `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
+
+/** Read the stored LLM apiKey from config.yaml. Server-side only — never returned to clients. */
+async function readStoredApiKey(): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(VAULT_ROOT, "config.yaml"), "utf-8");
+    return raw.match(/apiKey:\s*(.+)/)?.[1]?.trim();
+  } catch {
+    return undefined;
+  }
+}
 
 const PROVIDER_ENV_KEYS: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
@@ -41,6 +72,18 @@ app.use(cors({
   },
 }));
 app.use(express.json());
+
+// Auth guard. With no token configured the server is loopback-only (see HOST),
+// so local dev keeps working without credentials. Any externally-reachable
+// deployment MUST set OPENPULSE_API_TOKEN, which makes /api reject unauthenticated
+// requests — closing the hole that let API keys be harvested from a public instance.
+app.use("/api", (req, res, next) => {
+  if (!API_TOKEN) return next();
+  const header = req.header("authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (token && tokensMatch(token, API_TOKEN)) return next();
+  res.status(401).json({ error: "Unauthorized" });
+});
 
 // --- Helpers ---
 
@@ -568,10 +611,13 @@ app.get("/api/llm-config", async (_req, res) => {
     const modelMatch = raw.match(/model:\s*(.+)/);
     const apiKeyMatch = raw.match(/apiKey:\s*(.+)/);
     const baseUrlMatch = raw.match(/baseUrl:\s*(.+)/);
+    const storedKey = apiKeyMatch?.[1]?.trim();
     res.json({
       provider: providerMatch?.[1] ?? "anthropic",
       model: modelMatch?.[1]?.trim() ?? "claude-sonnet-4-5-20250929",
-      apiKey: apiKeyMatch?.[1]?.trim(),
+      // Never return the raw key. The UI only needs to know one exists and show a hint.
+      hasKey: Boolean(storedKey),
+      keyHint: maskKey(storedKey),
       baseUrl: baseUrlMatch?.[1]?.trim(),
     });
   } catch {
@@ -595,13 +641,17 @@ app.post("/api/save-llm-settings", async (req, res) => {
       }
     } catch { /* no existing config */ }
 
+    // The UI never receives the raw key, so a blank apiKey means "keep the existing
+    // one" rather than "delete it". Only overwrite when the user typed a new key.
+    const effectiveApiKey = apiKey || (await readStoredApiKey());
+
     let yaml = "";
     if (themes.length > 0) {
       yaml += `themes:\n${themes.map((t) => `  - ${t}`).join("\n")}\n`;
     }
     yaml += `llm:\n  provider: ${provider}\n  model: ${model}\n`;
-    if (apiKey) {
-      yaml += `  apiKey: ${apiKey}\n`;
+    if (effectiveApiKey) {
+      yaml += `  apiKey: ${effectiveApiKey}\n`;
     }
     if (baseUrl) {
       yaml += `  baseUrl: ${baseUrl}\n`;
@@ -819,8 +869,10 @@ app.post("/api/skills/:name/run", async (req, res) => {
 });
 
 app.post("/api/validate-models", async (req, res) => {
-  const { provider, apiKey, baseUrl } = req.body;
+  const { provider, baseUrl } = req.body;
   if (!provider) return res.status(400).json({ valid: false, error: "provider is required", models: [] });
+  // Use the client-supplied key if present (user typing a new one), else the stored key.
+  const apiKey: string | undefined = req.body.apiKey || (provider === "ollama" ? undefined : await readStoredApiKey());
 
   try {
     let models: Array<{ id: string; name: string }> = [];
@@ -890,8 +942,10 @@ app.post("/api/validate-models", async (req, res) => {
 });
 
 app.post("/api/test-model", async (req, res) => {
-  const { provider, model, apiKey, baseUrl } = req.body;
+  const { provider, model, baseUrl } = req.body;
   if (!provider || !model) return res.status(400).json({ success: false, error: "provider and model are required" });
+  // Fall back to the stored key when the client doesn't send one (masked UI).
+  const apiKey: string | undefined = req.body.apiKey || (provider === "ollama" ? undefined : await readStoredApiKey());
 
   try {
     const { createProvider } = await import("../core/dist/index.js");
@@ -1390,7 +1444,14 @@ app.post("/api/orchestrator-toggle", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[openpulse-ui] Dev API server running on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
+  const exposed = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
+  if (exposed && !API_TOKEN) {
+    console.warn(
+      `[openpulse-ui] WARNING: bound to ${HOST} with no OPENPULSE_API_TOKEN set — ` +
+      `/api is unauthenticated and reachable off this machine. Set OPENPULSE_API_TOKEN before exposing it.`,
+    );
+  }
 });
