@@ -17,7 +17,9 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   // Load current config first
   let currentProvider = "anthropic";
   let currentModel = "";
-  let currentApiKey = "";
+  let currentApiKey = "";          // raw key is only ever present on the Tauri desktop path
+  let hasStoredKey = false;        // web path: a key exists server-side but is never sent here
+  let keyHint = "";
   let currentBaseUrl = "";
 
   try {
@@ -25,6 +27,8 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     currentProvider = config.provider;
     currentModel = config.model;
     currentApiKey = config.apiKey ?? "";
+    hasStoredKey = config.hasKey ?? Boolean(config.apiKey);
+    keyHint = config.keyHint ?? "";
     currentBaseUrl = config.baseUrl ?? "";
   } catch { /* use defaults */ }
 
@@ -92,7 +96,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
 
     // Restore saved credentials if switching back to the original provider
     if (newProvider === savedProvider) {
-      renderCredentials(newProvider, savedModel, savedApiKey, savedBaseUrl);
+      renderCredentials(newProvider, savedModel, savedApiKey, savedBaseUrl, newProvider === savedProvider && hasStoredKey, newProvider === savedProvider ? keyHint : "");
       if (savedModel) {
         populateModelDropdown([{ id: savedModel, name: savedModel }], savedModel);
         if (modelCardEl) modelCardEl.style.display = "";
@@ -199,7 +203,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   await renderClaudeDesktopConnection();
 
   // Render credentials for initial provider
-  renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl);
+  renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl, hasStoredKey, keyHint);
 
   // Show model card with the given models and wire the save button
   function showModelCard(models: ModelInfo[], selectedModel: string) {
@@ -214,10 +218,11 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
     }
   }
 
-  // Auto-validate on load to populate the full model list
-  if (currentApiKey || currentProvider === "ollama") {
+  // Auto-validate on load to populate the full model list. On the web path we have
+  // no raw key, but the server validates with its stored key when we send none.
+  if (currentApiKey || hasStoredKey || currentProvider === "ollama") {
     try {
-      const key = currentProvider === "ollama" ? undefined : currentApiKey;
+      const key = currentProvider === "ollama" ? undefined : (currentApiKey || undefined);
       const result = await validateAndListModels(currentProvider, key, currentBaseUrl);
       if (result.valid && result.models.length > 0) {
         showModelCard(result.models, currentModel);
@@ -232,7 +237,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   }
 }
 
-function renderCredentials(provider: string, currentModel: string, currentApiKey: string, currentBaseUrl: string): void {
+function renderCredentials(provider: string, currentModel: string, currentApiKey: string, currentBaseUrl: string, hasStoredKey = false, keyHint = ""): void {
   const providerData = PROVIDERS.find(p => p.id === provider)!;
   const card = document.getElementById("credentials-card")!;
 
@@ -258,7 +263,8 @@ function renderCredentials(provider: string, currentModel: string, currentApiKey
     input.className = "form-input";
     input.type = "password";
     input.id = "apikey-input";
-    input.placeholder = "Enter your API key";
+    input.placeholder = hasStoredKey ? `Saved (${keyHint}) — leave blank to keep` : "Enter your API key";
+    // Only the Tauri desktop path supplies a raw key; the web path never pre-fills the secret.
     if (currentApiKey) input.value = currentApiKey;
     const help = document.createElement("p");
     help.className = "form-help";

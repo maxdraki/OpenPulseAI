@@ -87,8 +87,9 @@ export async function triggerDream(): Promise<string> {
   return result.output;
 }
 
-export async function getLlmConfig(): Promise<{ provider: string; model: string; apiKey?: string; baseUrl?: string }> {
+export async function getLlmConfig(): Promise<{ provider: string; model: string; apiKey?: string; hasKey?: boolean; keyHint?: string; baseUrl?: string }> {
   if (isTauri) return tauriInvoke("get_llm_config");
+  // Dev-server path returns { hasKey, keyHint } instead of the raw apiKey.
   return apiGet("/llm-config");
 }
 
