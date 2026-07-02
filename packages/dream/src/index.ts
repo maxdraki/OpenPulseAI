@@ -2,15 +2,146 @@
 import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { Vault, loadConfig, listThemes, createProvider, initLogger, vaultLog, readTheme, parseActivityBlocks } from "@openpulse/core";
-import type { ActivityEntry, ProjectStatus } from "@openpulse/core";
+import {
+  Vault,
+  loadConfig,
+  listThemes,
+  createProvider,
+  initLogger,
+  vaultLog,
+  readTheme,
+  parseActivityBlocks,
+} from "@openpulse/core";
+import type { ActivityEntry, ProjectStatus, OpenPulseConfig, LlmProvider, PendingUpdate } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
 import { synthesizeToPending } from "./synthesize.js";
 import { archiveProcessedHotFiles } from "./archive.js";
 import { buildBacklinks, writeBacklinksFile } from "./backlinks.js";
 import { seedSchema } from "./schema.js";
+import { acquireDreamLock } from "./lock.js";
+import { loadProcessedLedger, saveProcessedLedger, filterUnprocessed, markProcessed } from "./ledger.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
+
+export interface DreamPipelineResult {
+  pending: PendingUpdate[];
+}
+
+/**
+ * Runs the full Dream Pipeline against an already-initialised vault: read+filter
+ * unprocessed hot entries → classify → synthesize → write pendings → mark the
+ * ledger → index/backlinks/log → archive old (non-today) hot files.
+ *
+ * This is the single shared entry point used by both the CLI (`main`, below)
+ * and the orchestrator's `runDreamPipeline` callback, so it acquires a
+ * vault-level lock (see `lock.ts`) to guard against a manual CLI run racing an
+ * orchestrator-triggered one.
+ *
+ * Returns `null` when there is nothing new to process (all hot entries were
+ * already processed, or there were none at all).
+ */
+export async function runDreamPipeline(
+  vault: Vault,
+  config: OpenPulseConfig,
+  provider: LlmProvider,
+  model: string
+): Promise<DreamPipelineResult | null> {
+  const releaseLock = await acquireDreamLock(vault);
+  try {
+    const rawEntries = await readHotEntries(vault);
+    const ledger = await loadProcessedLedger(vault);
+    const entries = filterUnprocessed(rawEntries, ledger);
+    if (entries.length === 0) {
+      console.error("[dream] No unprocessed hot entries to process. Exiting.");
+      return null;
+    }
+    console.error(`[dream] Found ${entries.length} hot entries.`);
+
+    const themes = await listThemes(vault);
+    const allThemes = [...new Set([...config.themes, ...themes])];
+
+    const { classified, proposedTypes, conceptCandidates, orphanCandidates, themeMergeProposals } =
+      await classifyEntries(entries, allThemes, provider, model);
+    console.error(`[dream] Classified ${classified.length} entries.`);
+
+    // Persist concept candidates — merge with existing file
+    const conceptCandidatesPath = join(vault.warmDir, "_concept-candidates.json");
+    let existingConcepts: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
+    try {
+      const raw = await readFile(conceptCandidatesPath, "utf-8");
+      existingConcepts = JSON.parse(raw);
+    } catch { /* fresh file */ }
+    for (const [term, data] of Object.entries(conceptCandidates)) {
+      if (existingConcepts[term]) {
+        existingConcepts[term].count += data.count;
+        existingConcepts[term].sources = [...new Set([...existingConcepts[term].sources, ...data.sources])];
+      } else {
+        existingConcepts[term] = data;
+      }
+    }
+    await writeFile(conceptCandidatesPath, JSON.stringify(existingConcepts, null, 2), "utf-8");
+
+    // Persist orphan candidates — append to existing array
+    if (orphanCandidates.length > 0) {
+      const orphanPath = join(vault.warmDir, "_orphan-candidates.json");
+      let existingOrphans: typeof orphanCandidates = [];
+      try {
+        const raw = await readFile(orphanPath, "utf-8");
+        existingOrphans = JSON.parse(raw);
+      } catch { /* fresh file */ }
+      await writeFile(orphanPath, JSON.stringify([...existingOrphans, ...orphanCandidates], null, 2), "utf-8");
+    }
+
+    // Theme merge proposals → pending updates
+    for (const proposal of themeMergeProposals) {
+      const id = randomUUID();
+      const pendingUpdate = {
+        id,
+        theme: proposal.proposed,
+        proposedContent: `## Merge proposal\n\nProposed merge: [[${proposal.proposed}]] → [[${proposal.canonical}]]\nReason: ${proposal.reason}\n\nApproving this pending update will rewrite links and delete the source theme.`,
+        previousContent: null,
+        entries: [],
+        createdAt: new Date().toISOString(),
+        status: "pending" as const,
+        batchId: new Date().toISOString(),
+        lintFix: "merge" as const,
+        related: [proposal.canonical],
+      };
+      await writeFile(join(vault.pendingDir, `${id}.json`), JSON.stringify(pendingUpdate, null, 2), "utf-8");
+    }
+
+    let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
+    try {
+      pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes);
+    } catch (err) {
+      console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
+      await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
+      throw err;
+    }
+    console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
+
+    // Close the crash window: mark every consumed entry processed in the
+    // ledger *before* touching index/backlinks/log/archive. If the process
+    // crashes anywhere after this point, the next run's ledger filter skips
+    // these entries — at most a partial re-run, never a duplicate or a loss.
+    const batchId = pending[0]?.batchId ?? new Date().toISOString();
+    await saveProcessedLedger(vault, markProcessed(entries, ledger, batchId));
+
+    await generateIndex(vault);
+    const backlinks = await buildBacklinks(vault);
+    await writeBacklinksFile(vault, backlinks);
+    const themeNames = pending.map((p) => p.theme).join(", ");
+    await appendLog(vault, "dream", `${entries.length} entries → ${pending.length} updates (${themeNames})`);
+
+    await archiveProcessedHotFiles(vault);
+    await vaultLog("info", "Dream pipeline complete", `${classified.length} entries → ${pending.length} pending update(s)`);
+    console.error("[dream] Hot files archived. Dream complete.");
+
+    return { pending };
+  } finally {
+    await releaseLock();
+  }
+}
 
 async function main() {
   console.error("[dream] Starting Dream Pipeline...");
@@ -25,85 +156,7 @@ async function main() {
   const provider = createProvider(config);
   const model = config.llm.model;
 
-  const entries = await readHotEntries(vault);
-  if (entries.length === 0) {
-    console.error("[dream] No hot entries to process. Exiting.");
-    return;
-  }
-  console.error(`[dream] Found ${entries.length} hot entries.`);
-
-  const themes = await listThemes(vault);
-  const allThemes = [...new Set([...config.themes, ...themes])];
-
-  const { classified, proposedTypes, conceptCandidates, orphanCandidates, themeMergeProposals } =
-    await classifyEntries(entries, allThemes, provider, model);
-  console.error(`[dream] Classified ${classified.length} entries.`);
-
-  // Persist concept candidates — merge with existing file
-  const conceptCandidatesPath = join(vault.warmDir, "_concept-candidates.json");
-  let existingConcepts: Record<string, { count: number; sources: string[]; firstSeen: string }> = {};
-  try {
-    const raw = await readFile(conceptCandidatesPath, "utf-8");
-    existingConcepts = JSON.parse(raw);
-  } catch { /* fresh file */ }
-  for (const [term, data] of Object.entries(conceptCandidates)) {
-    if (existingConcepts[term]) {
-      existingConcepts[term].count += data.count;
-      existingConcepts[term].sources = [...new Set([...existingConcepts[term].sources, ...data.sources])];
-    } else {
-      existingConcepts[term] = data;
-    }
-  }
-  await writeFile(conceptCandidatesPath, JSON.stringify(existingConcepts, null, 2), "utf-8");
-
-  // Persist orphan candidates — append to existing array
-  if (orphanCandidates.length > 0) {
-    const orphanPath = join(vault.warmDir, "_orphan-candidates.json");
-    let existingOrphans: typeof orphanCandidates = [];
-    try {
-      const raw = await readFile(orphanPath, "utf-8");
-      existingOrphans = JSON.parse(raw);
-    } catch { /* fresh file */ }
-    await writeFile(orphanPath, JSON.stringify([...existingOrphans, ...orphanCandidates], null, 2), "utf-8");
-  }
-
-  // Theme merge proposals → pending updates
-  for (const proposal of themeMergeProposals) {
-    const id = randomUUID();
-    const pendingUpdate = {
-      id,
-      theme: proposal.proposed,
-      proposedContent: `## Merge proposal\n\nProposed merge: [[${proposal.proposed}]] → [[${proposal.canonical}]]\nReason: ${proposal.reason}\n\nApproving this pending update will rewrite links and delete the source theme.`,
-      previousContent: null,
-      entries: [],
-      createdAt: new Date().toISOString(),
-      status: "pending" as const,
-      batchId: new Date().toISOString(),
-      lintFix: "merge" as const,
-      related: [proposal.canonical],
-    };
-    await writeFile(join(vault.pendingDir, `${id}.json`), JSON.stringify(pendingUpdate, null, 2), "utf-8");
-  }
-
-  let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
-  try {
-    pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes);
-  } catch (err) {
-    console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
-    await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
-    throw err;
-  }
-  console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
-
-  await generateIndex(vault);
-  const backlinks = await buildBacklinks(vault);
-  await writeBacklinksFile(vault, backlinks);
-  const themeNames = pending.map((p) => p.theme).join(", ");
-  await appendLog(vault, "dream", `${entries.length} entries → ${pending.length} updates (${themeNames})`);
-
-  await archiveProcessedHotFiles(vault);
-  await vaultLog("info", "Dream pipeline complete", `${classified.length} entries → ${pending.length} pending update(s)`);
-  console.error("[dream] Hot files archived. Dream complete.");
+  await runDreamPipeline(vault, config, provider, model);
 }
 
 async function readHotEntries(vault: Vault): Promise<ActivityEntry[]> {
@@ -298,7 +351,15 @@ export async function appendLog(vault: Vault, type: string, detail: string): Pro
   await appendFile(join(vault.warmDir, "log.md"), line, "utf-8");
 }
 
-main().catch((error) => {
-  console.error("[dream] Fatal error:", error);
-  process.exit(1);
-});
+// Only run main() when invoked directly, not when imported by tests.
+// Matches the compact-cli.ts / schema-evolve-cli.ts pattern rather than
+// lint-cli.ts's import.meta.url comparison — this file is also invoked via
+// the "openpulse-dream" bin symlink, where import.meta.url (resolved through
+// the symlink) and a literal file:// wrap of process.argv[1] can diverge.
+const isMain = process.argv[1]?.endsWith("index.js");
+if (isMain) {
+  main().catch((error) => {
+    console.error("[dream] Fatal error:", error);
+    process.exit(1);
+  });
+}

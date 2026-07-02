@@ -1,17 +1,42 @@
-import { readdir, mkdir, rename } from "node:fs/promises";
+import { readdir, mkdir, rename, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { archiveHotFile, vaultLog, type Vault } from "@openpulse/core";
+import { archiveHotFile, vaultLog, parseActivityBlocks, getLocalDate, type Vault } from "@openpulse/core";
+import { loadProcessedLedger, saveProcessedLedger, pruneLedgerForEntries } from "./ledger.js";
 
 export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
   const files = await readdir(vault.hotDir);
+  const today = getLocalDate();
   let archived = 0;
 
-  // Archive all daily hot files (including today's — they've been processed)
+  // Prune the processed-entry ledger as we go — once a file is archived there's
+  // nothing left to dedupe against for its entries, so their ledger rows would
+  // otherwise accumulate forever.
+  const originalLedger = await loadProcessedLedger(vault);
+  let ledger = originalLedger;
+
+  // Archive daily hot files strictly older than today. Today's file is left in
+  // place even if every entry in it has already been classified/synthesized —
+  // it may still receive appends from collectors mid-run, and archiving it
+  // would silently drop anything appended after `readHotEntries` ran.
   for (const file of files) {
     const match = file.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
     if (!match) continue;
-    await archiveHotFile(vault, match[1]);
+    const date = match[1];
+    if (date === today) continue;
+
+    try {
+      const content = await readFile(join(vault.hotDir, file), "utf-8");
+      ledger = pruneLedgerForEntries(parseActivityBlocks(content), ledger);
+    } catch {
+      // File unreadable — nothing to prune, archive still proceeds below.
+    }
+
+    await archiveHotFile(vault, date);
     archived++;
+  }
+
+  if (ledger !== originalLedger) {
+    await saveProcessedLedger(vault, ledger);
   }
 
   // Archive ingested documents
