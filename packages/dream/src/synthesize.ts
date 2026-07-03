@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFile, appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { writeFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type Vault,
@@ -19,6 +19,13 @@ import {
 import { loadSchema, type SchemaTemplate } from "./schema.js";
 import { entryId, extractSources } from "./provenance.js";
 import { buildBacklinks } from "./backlinks.js";
+import {
+  readFactsFile,
+  activeFacts,
+  formatActiveFactsForPrompt,
+  ingestFacts,
+  type FactCandidate,
+} from "./facts.js";
 import {
   parsePageSections,
   serializeSections,
@@ -349,38 +356,48 @@ export function stripMetaBlock(content: string): string {
   return content.replace(/<meta>[\s\S]*?<\/meta>\s*/i, "").trimStart();
 }
 
+/**
+ * Extracts atomic facts from a single entry. Includes the theme's currently
+ * ACTIVE facts (id + text, compact form — see `formatActiveFactsForPrompt`)
+ * in the prompt context so the LLM can flag when a new claim contradicts or
+ * updates one of them via `supersedes` (see facts.ts's `ingestFacts`, which
+ * validates and applies those references — self-references and unknown ids
+ * are guarded against there, not here).
+ */
 async function extractFacts(
   theme: string,
   entry: { timestamp: string; log: string; source?: string },
   provider: LlmProvider,
-  model: string
-): Promise<Array<{ claim: string; sourceId: string; confidence: "high" | "medium" | "low" }>> {
+  model: string,
+  activeFactsContext: string
+): Promise<FactCandidate[]> {
   const sourceId = `${entry.timestamp.slice(0, 10)}-${entry.source ?? "unknown"}`;
   const prompt = `Extract atomic factual claims from this entry that are relevant to the theme "${theme}".
 Each claim must be one sentence, self-contained, and cite this sourceId: ${sourceId}.
 
+Currently active facts for this theme (id: claim). If a new claim contradicts or replaces one of these (e.g. "X uses SQLite" -> "X migrated to Postgres"), list its id in "supersedes":
+${activeFactsContext}
+
 Entry:
 ${entry.log}
 
-Return ONLY a JSON array: [{"claim": "...", "sourceId": "${sourceId}", "confidence": "high"|"medium"|"low"}]
-Return [] if the entry has no relevant facts.`;
+Return ONLY a JSON array: [{"claim": "...", "sourceId": "${sourceId}", "confidence": "high"|"medium"|"low", "supersedes": ["<factId>", ...]}]
+Omit "supersedes" (or use []) when nothing is superseded. Return [] if the entry has no relevant facts.`;
   try {
     const response = await provider.complete({ model, prompt, temperature: 0 });
     const parsed = JSON.parse(stripCodeFences(response));
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((x): x is { claim: string; sourceId: string; confidence: "high" | "medium" | "low" } =>
-      x && typeof x.claim === "string" && typeof x.sourceId === "string");
+    return parsed
+      .filter((x): x is { claim: string; sourceId: string; confidence?: string; supersedes?: unknown } =>
+        x && typeof x.claim === "string" && typeof x.sourceId === "string")
+      .map((x) => ({
+        claim: x.claim,
+        sourceId: x.sourceId,
+        confidence: x.confidence === "high" || x.confidence === "medium" || x.confidence === "low" ? x.confidence : "medium",
+        supersedes: Array.isArray(x.supersedes) ? x.supersedes.filter((s: unknown): s is string => typeof s === "string") : undefined,
+      }));
   } catch {
     return [];
-  }
-}
-
-async function readFactsText(factsDir: string, theme: string): Promise<string> {
-  const path = join(factsDir, `${theme}.jsonl`);
-  try {
-    return await readFile(path, "utf-8");
-  } catch {
-    return "";
   }
 }
 
@@ -535,20 +552,44 @@ export async function synthesizeToPending(
       const factsDir = await ensureFactsDir(vault);
       const factsPath = join(factsDir, `${theme}.jsonl`);
 
-      // Pass 1: extract facts from each new entry in this batch
+      // Pass 1: extract facts from each new entry in this batch, then ingest
+      // them with dedupe-on-ingest and supersession applied (see facts.ts).
+      // Re-reading active facts before each extraction call lets a fact
+      // superseded earlier in this same batch be reflected in the context
+      // given to the next entry's extraction.
+      let factsAdded = 0;
+      let factsSkipped = 0;
+      let factsSuperseded = 0;
+      const unknownSupersedeIds: string[] = [];
       for (const item of items) {
-        const facts = await extractFacts(theme, item.entry, provider, model);
-        if (facts.length > 0) {
-          const lines = facts
-            .map((f) => JSON.stringify({ ...f, extractedAt: new Date().toISOString() }))
-            .join("\n") + "\n";
-          await appendFile(factsPath, lines, "utf-8");
+        const currentFacts = await readFactsFile(factsPath);
+        const activeFactsContext = formatActiveFactsForPrompt(currentFacts);
+        const candidates = await extractFacts(theme, item.entry, provider, model, activeFactsContext);
+        if (candidates.length > 0) {
+          const result = await ingestFacts(factsPath, candidates);
+          factsAdded += result.added;
+          factsSkipped += result.skipped;
+          factsSuperseded += result.superseded;
+          unknownSupersedeIds.push(...result.unknownSupersedeIds);
         }
       }
+      if (factsSkipped > 0 || factsSuperseded > 0 || unknownSupersedeIds.length > 0) {
+        await vaultLog(
+          "info",
+          `Fact ingest for theme "${theme}": +${factsAdded} added, ${factsSkipped} duplicate(s) skipped, ${factsSuperseded} superseded` +
+            (unknownSupersedeIds.length > 0 ? `, ${unknownSupersedeIds.length} unknown/invalid supersede id(s) ignored` : ""),
+          unknownSupersedeIds.length > 0 ? JSON.stringify(unknownSupersedeIds) : undefined
+        );
+      }
 
-      // Pass 2: read all facts + existing page + resynthesize
-      const allFacts = await readFactsText(factsDir, theme);
-      const factsBlock = allFacts.trim().length > 0 ? allFacts : "(no facts extracted)";
+      // Pass 2: read only ACTIVE facts + existing page + resynthesize. Superseded
+      // facts stay in the file as history but must never reach the synthesis
+      // prompt, which is instructed it may only claim what's in the facts list.
+      const allStoredFacts = await readFactsFile(factsPath);
+      const activeStoredFacts = activeFacts(allStoredFacts);
+      const factsBlock = activeStoredFacts.length > 0
+        ? activeStoredFacts.map((f) => JSON.stringify(f)).join("\n")
+        : "(no facts extracted)";
 
       proposedContent = await provider.complete({
         model,

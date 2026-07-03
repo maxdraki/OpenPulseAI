@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
@@ -242,6 +242,84 @@ describe("synthesizeToPending", () => {
 
     expect(provider.complete).toHaveBeenCalledTimes(2);
     expect(pending[0].proposedContent).toContain("No durable claims yet");
+  });
+
+  it("skips re-extracting a duplicate fact from a later run on the same theme", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    // Legacy line (no "id" field) — its id is computed on read from
+    // claim + sourceId, so it must dedupe against the case/punctuation
+    // variant pass 1 re-extracts below.
+    await writeFile(
+      join(vault.warmDir, "_facts", "dedupe-theme.jsonl"),
+      JSON.stringify({ claim: "X uses SQLite.", sourceId: "2026-04-17-github-activity", confidence: "high", extractedAt: "2026-04-17T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        // Pass 1 re-extracts the SAME claim (case/punctuation-variant) from the same sourceId.
+        .mockResolvedValueOnce('[{"claim":"x   uses sqlite!!","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce("## Definition\nX uses SQLite. ^[src:2026-04-17-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-17T00:00:00Z", log: "X uses SQLite.", source: "github-activity" },
+        themes: ["dedupe-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", { "dedupe-theme": "concept" });
+
+    const factsText = await readFile(join(vault.warmDir, "_facts", "dedupe-theme.jsonl"), "utf-8");
+    const lines = factsText.trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1); // the duplicate was skipped, not appended again
+  });
+
+  it("applies supersession signaled by pass-1 extraction and excludes the superseded fact from the pass-2 prompt", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    await writeFile(
+      join(vault.warmDir, "_facts", "supersede-theme.jsonl"),
+      JSON.stringify({ id: "old-fact-id", claim: "X uses SQLite.", sourceId: "2026-04-01-github-activity", confidence: "high", extractedAt: "2026-04-01T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce(
+          '[{"claim":"X migrated to Postgres.","sourceId":"2026-04-20-github-activity","confidence":"high","supersedes":["old-fact-id"]}]'
+        )
+        .mockResolvedValueOnce("## Definition\nX migrated to Postgres. ^[src:2026-04-20-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-20T00:00:00Z", log: "X migrated to Postgres.", source: "github-activity" },
+        themes: ["supersede-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", { "supersede-theme": "concept" });
+
+    // Pass-1 extraction prompt included the active-facts context.
+    const extractionPrompt = (provider.complete as any).mock.calls[0][0].prompt as string;
+    expect(extractionPrompt).toContain("old-fact-id");
+    expect(extractionPrompt).toContain("X uses SQLite.");
+
+    // Pass-2 synthesis prompt must NOT include the now-superseded fact's claim.
+    const synthesisPrompt = (provider.complete as any).mock.calls[1][0].prompt as string;
+    expect(synthesisPrompt).toContain("X migrated to Postgres.");
+    expect(synthesisPrompt).not.toContain("X uses SQLite.");
+
+    // The fact store retains the superseded line as history (never deleted).
+    const factsText = await readFile(join(vault.warmDir, "_facts", "supersede-theme.jsonl"), "utf-8");
+    const facts = factsText.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(facts).toHaveLength(2);
+    const old = facts.find((f) => f.id === "old-fact-id");
+    expect(old.supersededBy).toBeTruthy();
+    expect(old.supersededAt).toBeTruthy();
   });
 
   it("parses LLM <meta> block into projectStatus and strips it from content", async () => {

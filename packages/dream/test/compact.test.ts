@@ -139,4 +139,94 @@ describe("compactTheme — concept path", () => {
     expect(update.theme).toBe("mypattern");
     expect(update.proposedContent).toContain("Rewritten definition");
   });
+
+  it("passes only active facts to the compaction prompt, excluding superseded ones", async () => {
+    const root = await mkdtemp(join(tmpdir(), "compact-"));
+    await mkdir(join(root, "vault", "warm", "_pending"), { recursive: true });
+    await mkdir(join(root, "vault", "warm", "_facts"), { recursive: true });
+    const vault = new Vault(root);
+
+    await writeFile(join(root, "vault", "warm", "mypattern.md"),
+      `---\ntheme: mypattern\nlastUpdated: 2026-04-16T00:00:00Z\ntype: concept\n---\n\n## Definition\nSome pattern.`, "utf-8");
+    await writeFile(join(root, "vault", "warm", "_facts", "mypattern.jsonl"),
+      [
+        JSON.stringify({ id: "old1", claim: "X uses SQLite", sourceId: "s1", confidence: "high", extractedAt: "2026-04-01T00:00:00Z", supersededBy: "new1", supersededAt: "2026-04-10T00:00:00Z" }),
+        JSON.stringify({ id: "new1", claim: "X migrated to Postgres", sourceId: "s2", confidence: "high", extractedAt: "2026-04-10T00:00:00Z" }),
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn().mockResolvedValue("## Definition\nRewritten definition. ^[src:s2]"),
+    } as any;
+
+    const did = await compactTheme(vault, "mypattern", provider, "gpt");
+    expect(did).toBe(true);
+
+    const promptArg = provider.complete.mock.calls[0][0].prompt as string;
+    expect(promptArg).toContain("X migrated to Postgres");
+    expect(promptArg).not.toContain("X uses SQLite");
+  });
+
+  it("returns false (no compaction) when all facts are superseded and none are active", async () => {
+    const root = await mkdtemp(join(tmpdir(), "compact-"));
+    await mkdir(join(root, "vault", "warm", "_pending"), { recursive: true });
+    await mkdir(join(root, "vault", "warm", "_facts"), { recursive: true });
+    const vault = new Vault(root);
+
+    await writeFile(join(root, "vault", "warm", "onlysuperseded.md"),
+      `---\ntheme: onlysuperseded\nlastUpdated: 2026-04-16T00:00:00Z\ntype: concept\n---\n\n## Definition\nSome pattern.`, "utf-8");
+    await writeFile(join(root, "vault", "warm", "_facts", "onlysuperseded.jsonl"),
+      JSON.stringify({ id: "old1", claim: "X", sourceId: "s1", confidence: "high", extractedAt: "2026-04-01T00:00:00Z", supersededBy: "new1", supersededAt: "2026-04-02T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = { complete: vi.fn() } as any;
+    const did = await compactTheme(vault, "onlysuperseded", provider, "gpt");
+    expect(did).toBe(false);
+    expect(provider.complete).not.toHaveBeenCalled();
+  });
+
+  it("archives superseded facts to <theme>.archive.jsonl and trims the live file once over threshold", async () => {
+    const root = await mkdtemp(join(tmpdir(), "compact-"));
+    await mkdir(join(root, "vault", "warm", "_pending"), { recursive: true });
+    await mkdir(join(root, "vault", "warm", "_facts"), { recursive: true });
+    const vault = new Vault(root);
+
+    await writeFile(join(root, "vault", "warm", "bigpattern.md"),
+      `---\ntheme: bigpattern\nlastUpdated: 2026-04-16T00:00:00Z\ntype: concept\n---\n\n## Definition\nSome pattern.`, "utf-8");
+
+    // 350 lines (over the 300-line default threshold), half superseded.
+    const lines: string[] = [];
+    for (let i = 0; i < 350; i++) {
+      const active = i % 2 === 0;
+      lines.push(JSON.stringify({
+        id: `f${i}`,
+        claim: `Claim ${i}`,
+        sourceId: "s1",
+        confidence: "high",
+        extractedAt: "2026-04-01T00:00:00Z",
+        ...(active ? {} : { supersededBy: `f${i - 1}`, supersededAt: "2026-04-02T00:00:00Z" }),
+      }));
+    }
+    const factsPath = join(root, "vault", "warm", "_facts", "bigpattern.jsonl");
+    await writeFile(factsPath, lines.join("\n") + "\n", "utf-8");
+
+    const provider = {
+      complete: vi.fn().mockResolvedValue("## Definition\nRewritten. ^[src:s1]"),
+    } as any;
+
+    const did = await compactTheme(vault, "bigpattern", provider, "gpt");
+    expect(did).toBe(true);
+
+    const archivePath = join(root, "vault", "warm", "_facts", "bigpattern.archive.jsonl");
+    const archiveText = await readFile(archivePath, "utf-8");
+    const archivedCount = archiveText.trim().split("\n").filter(Boolean).length;
+    expect(archivedCount).toBe(175);
+
+    const liveText = await readFile(factsPath, "utf-8");
+    const liveFacts = liveText.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(liveFacts).toHaveLength(175);
+    expect(liveFacts.every((f) => !f.supersededBy)).toBe(true);
+  });
 });

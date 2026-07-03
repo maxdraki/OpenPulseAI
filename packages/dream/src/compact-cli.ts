@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -8,6 +8,7 @@ import {
   loadState, updateStateSection,
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeDocument, ThemeType } from "@openpulse/core";
+import { readFactsFile, activeFacts, compactFactStore } from "./facts.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const VERBATIM_LIMIT = 14;
@@ -124,9 +125,18 @@ async function compactConcept(vault: Vault, theme: string, provider: LlmProvider
   if (!doc) return false;
 
   const factsPath = join(vault.warmDir, "_facts", `${theme}.jsonl`);
-  let facts = "";
-  try { facts = await readFile(factsPath, "utf-8"); } catch { return false; }
-  if (!facts.trim()) return false;
+  const archivePath = join(vault.warmDir, "_facts", `${theme}.archive.jsonl`);
+
+  // Housekeeping: once the live fact file grows past the threshold, move
+  // superseded facts out to the archive (never dropped, just relocated) so
+  // this prompt — and every future pass-2 resynthesis — only pays for
+  // active facts (see facts.ts's compactFactStore).
+  await compactFactStore(factsPath, archivePath);
+
+  const allFacts = await readFactsFile(factsPath);
+  const active = activeFacts(allFacts);
+  if (active.length === 0) return false;
+  const factsText = active.map((f) => JSON.stringify(f)).join("\n") + "\n";
 
   const response = await provider.complete({
     model,
@@ -137,10 +147,10 @@ async function compactConcept(vault: Vault, theme: string, provider: LlmProvider
 Current page:
 ${doc.content}
 
-All extracted facts (includes older and newer, JSON per line):
-${facts}
+All active extracted facts (superseded facts have already been resolved and excluded — JSON per line):
+${factsText}
 
-Rewrite the page. Prefer newer facts where they contradict older ones. Preserve all ^[src:] citations. Note unresolved conflicts with ^[ambiguous].
+Rewrite the page. Preserve all ^[src:] citations. Note unresolved conflicts with ^[ambiguous].
 
 Return ONLY the Markdown content, no fences.`,
   });
