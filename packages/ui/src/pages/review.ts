@@ -2,11 +2,48 @@ import { listPendingUpdates, approveUpdate, approveUpdatesBatch, rejectUpdate, r
 import { renderMarkdown } from "../lib/markdown.js";
 import { renderDiffHtml } from "../lib/diff.js";
 import { log } from "../lib/logger.js";
+import { confirmDialog } from "../lib/dialog.js";
 
 /** True when `err` is a stale-conflict 409 from the approve endpoint (see
  *  `packages/ui/server.ts`'s `POST /api/approve-update`). */
 function isStaleConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409 && (err.body as { error?: string } | undefined)?.error === "stale";
+}
+
+// --- Pure per-item selection logic (batch approve/reject within a multi-item
+// batch) — kept side-effect-free so it's directly unit-testable; see
+// packages/ui/test/review-selection.test.ts. ---
+
+/** Label for the batch header's approve button. Reads "Approve All (n)" when
+ *  every card is checked (least-surprise default — matches the old
+ *  behavior), or "Approve Selected (n)" once anything is unchecked. */
+export function computeApproveLabel(total: number, selected: number): string {
+  return selected === total ? `Approve All (${total})` : `Approve Selected (${selected})`;
+}
+
+/** Symmetric with computeApproveLabel — same "All" vs "Selected" rule for the
+ *  Reject button. */
+export function computeRejectLabel(total: number, selected: number): string {
+  return selected === total ? `Reject All (${total})` : `Reject Selected (${selected})`;
+}
+
+/** One-line "N updates · M selected" summary shown in the batch header. */
+export function batchSummaryLine(total: number, selected: number): string {
+  return `${total} update${total === 1 ? "" : "s"} · ${selected} selected`;
+}
+
+/** Ids of the items whose id is present in `selected`, in `items` order —
+ *  what gets sent to the batch approve/reject calls. */
+export function selectedUpdateIds<T extends { id: string }>(items: readonly T[], selected: ReadonlySet<string>): string[] {
+  return items.filter((item) => selected.has(item.id)).map((item) => item.id);
+}
+
+/** "Select all / none" toggle: selects every id unless every id is already
+ *  selected, in which case it clears the selection. (An empty selection is
+ *  not "all selected", so it selects all rather than no-op-ing.) */
+export function toggleSelectAll(ids: readonly string[], current: ReadonlySet<string>): Set<string> {
+  const allSelected = ids.length > 0 && ids.every((id) => current.has(id));
+  return allSelected ? new Set() : new Set(ids);
 }
 
 // Note: renderMarkdown uses the `marked` library which handles HTML escaping.
@@ -118,25 +155,58 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
           batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
         }
 
+        // Per-item selection — defaults to everything checked (least-surprise:
+        // "Approve All" still means all, until the user unchecks something).
+        const allIds = batchUpdates.map((u) => u.id);
+        const selected = new Set<string>(allIds);
+
+        const batchSummary = document.createElement("span");
+        batchSummary.className = "batch-summary";
+
         const batchActions = document.createElement("div");
         batchActions.className = "batch-actions";
 
+        const selectAllBtn = document.createElement("button");
+        selectAllBtn.className = "btn btn-secondary";
+
         const approveAllBtn = document.createElement("button");
         approveAllBtn.className = "btn btn-success";
-        approveAllBtn.textContent = "Approve All";
 
         const rejectAllBtn = document.createElement("button");
         rejectAllBtn.className = "btn btn-danger";
-        rejectAllBtn.textContent = "Reject All";
+
+        /** Keeps the summary line + button labels/disabled-state in sync with
+         *  the live `selected` set — called after every checkbox toggle. */
+        function refreshBatchHeader(): void {
+          const n = selected.size;
+          batchSummary.textContent = batchSummaryLine(allIds.length, n);
+          approveAllBtn.textContent = computeApproveLabel(allIds.length, n);
+          rejectAllBtn.textContent = computeRejectLabel(allIds.length, n);
+          approveAllBtn.disabled = n === 0;
+          rejectAllBtn.disabled = n === 0;
+          selectAllBtn.textContent = n === allIds.length ? "Select None" : "Select All";
+        }
+        refreshBatchHeader();
+
+        selectAllBtn.addEventListener("click", () => {
+          const next = toggleSelectAll(allIds, selected);
+          selected.clear();
+          for (const id of next) selected.add(id);
+          refreshBatchHeader();
+          for (const cb of checkboxes.values()) cb.checked = selected.has(cb.dataset.updateId!);
+        });
 
         approveAllBtn.addEventListener("click", async () => {
+          const ids = selectedUpdateIds(batchUpdates, selected);
+          if (ids.length === 0) return;
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
+          selectAllBtn.disabled = true;
           try {
             // One server-side batch call so the whole action lands as a single
             // vault-git commit listing every theme (see approve.ts's
             // approvePendingUpdatesBatch) instead of one commit per item.
-            const results = await approveUpdatesBatch(batchUpdates.map((u) => u.id));
+            const results = await approveUpdatesBatch(ids);
             const staleCount = results.filter((r) => !r.ok && r.stale).length;
             const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
 
@@ -151,40 +221,75 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
               const parts: string[] = [];
               if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
               if (otherFailed) parts.push(`${otherFailed} failed`);
-              showReviewSummary(`Approve All: ${parts.join(", ")}. Approved the rest.`);
+              showReviewSummary(`Approve: ${parts.join(", ")}. Approved the rest.`);
             }
           } catch (e: unknown) {
             // Request itself failed (network error, 500, etc.) — nothing was
             // necessarily approved server-side, so re-enable the buttons
             // rather than leaving the batch permanently stuck (M7).
-            log("error", `Approve All failed: ${batchKey}`, String(e));
-            showReviewSummary("Approve All failed — please try again.");
+            log("error", `Approve failed: ${batchKey}`, String(e));
+            showReviewSummary("Approve failed — please try again.");
             approveAllBtn.disabled = false;
             rejectAllBtn.disabled = false;
+            selectAllBtn.disabled = false;
           }
         });
 
-        rejectAllBtn.addEventListener("click", async () => {
+        function doRejectSelected(): void {
+          const ids = selectedUpdateIds(batchUpdates, selected);
+          if (ids.length === 0) return;
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          const results = await Promise.allSettled(batchUpdates.map((u) => rejectUpdate(u.id)));
-          const failed = results.filter((r) => r.status === "rejected").length;
-          if (failed) log("error", `Rejected batch with ${failed} failure(s): ${batchKey}`);
-          else log("info", `Rejected batch: ${batchKey}`);
-          await loadPending(listEl);
-          updateReviewBadge();
+          selectAllBtn.disabled = true;
+          void (async () => {
+            const results = await Promise.allSettled(ids.map((id) => rejectUpdate(id)));
+            const failed = results.filter((r) => r.status === "rejected").length;
+            if (failed) log("error", `Rejected batch with ${failed} failure(s): ${batchKey}`);
+            else log("info", `Rejected batch: ${batchKey}`);
+            await loadPending(listEl);
+            updateReviewBadge();
+          })();
+        }
+
+        rejectAllBtn.addEventListener("click", () => {
+          const n = selected.size;
+          // A bulk reject of more than a handful of items is destructive and
+          // easy to fat-finger after unchecking a few cards — confirm first.
+          if (n > 3) {
+            confirmDialog(`Reject ${n} selected update${n === 1 ? "" : "s"}? This can't be undone.`, doRejectSelected);
+          } else {
+            doRejectSelected();
+          }
         });
 
+        batchActions.appendChild(selectAllBtn);
         batchActions.appendChild(approveAllBtn);
         batchActions.appendChild(rejectAllBtn);
         batchHeader.appendChild(batchLabel);
+        batchHeader.appendChild(batchSummary);
         batchHeader.appendChild(batchActions);
         listEl.appendChild(batchHeader);
+
+        // Render individual cards with a per-item include checkbox.
+        const checkboxes = new Map<string, HTMLInputElement>();
+        for (const update of batchUpdates) {
+          const { card, checkbox } = buildCard(update, listEl, {
+            checked: selected.has(update.id),
+            onToggle: (checked) => {
+              if (checked) selected.add(update.id);
+              else selected.delete(update.id);
+              refreshBatchHeader();
+            },
+          });
+          if (checkbox) checkboxes.set(update.id, checkbox);
+          listEl.appendChild(card);
+        }
+        continue;
       }
 
-      // Render individual cards for each update in this batch
+      // Single-item batch — keep the plain per-card UI, no checkbox clutter.
       for (const update of batchUpdates) {
-        listEl.appendChild(buildCard(update, listEl));
+        listEl.appendChild(buildCard(update, listEl).card);
       }
     }
   } catch (e: any) {
@@ -225,13 +330,37 @@ function subKindBadge(update: PendingUpdate): SubKindBadgeSpec | null {
   return null;
 }
 
-function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
+interface CardSelectionOptions {
+  checked: boolean;
+  onToggle: (checked: boolean) => void;
+}
+
+interface BuiltCard {
+  card: HTMLElement;
+  /** Present only when `selection` was passed in (multi-item batch). */
+  checkbox: HTMLInputElement | null;
+}
+
+function buildCard(update: PendingUpdate, listEl: HTMLElement, selection?: CardSelectionOptions): BuiltCard {
   const card = document.createElement("div");
   card.className = "pending-card";
 
   // Header: theme badge + date
   const header = document.createElement("div");
   header.className = "pending-header";
+
+  let checkbox: HTMLInputElement | null = null;
+  if (selection) {
+    checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "pending-select-checkbox";
+    checkbox.checked = selection.checked;
+    checkbox.dataset.updateId = update.id;
+    checkbox.setAttribute("aria-label", `Include ${update.theme} in batch action`);
+    checkbox.addEventListener("change", () => selection.onToggle(checkbox!.checked));
+    header.appendChild(checkbox);
+  }
+
   const badge = document.createElement("span");
   badge.className = "pending-theme-badge";
   badge.textContent = update.theme;
@@ -470,7 +599,7 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
     }
   });
 
-  return card;
+  return { card, checkbox };
 }
 
 async function updateReviewBadge(): Promise<void> {
