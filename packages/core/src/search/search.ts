@@ -14,7 +14,7 @@
  * query failing to embed) degrades silently to FTS-only results.
  */
 import type { Vault } from "../vault.js";
-import { getAllEmbeddings, queryIndex } from "./index-db.js";
+import { getAllEmbeddings, queryIndex, rebuildIndex } from "./index-db.js";
 import { sanitizeFtsQuery } from "./sanitize.js";
 import { cosineSimilarity, embedTexts } from "./embeddings.js";
 
@@ -46,6 +46,20 @@ export const RRF_K = 60;
  *  one signal but well on the other still has a chance to surface after
  *  fusion, rather than being cut off before RRF ever sees it. */
 const FTS_CANDIDATE_LIMIT = 50;
+/** Minimum cosine similarity for a vector candidate to be considered a
+ *  match at all. Without a floor, every stored embedding gets *some* rank
+ *  in the vector ranking no matter how dissimilar to the query, so on any
+ *  non-empty index a query with zero real matches still surfaces `limit`
+ *  results via RRF — silently defeating "no results" UX and the
+ *  chat_with_pulse anti-hallucination `matched: false` path. 0.30 is a
+ *  conservative floor for normalized MiniLM embeddings: comfortably below
+ *  genuine semantic matches (~0.5+) but well above the near-zero
+ *  similarity of unrelated text. */
+const VECTOR_SIMILARITY_FLOOR = 0.3;
+/** Cap on how many above-floor vector candidates are ranked and fused —
+ *  keeps RRF's vector ranking bounded on a large index instead of ranking
+ *  every embedding in the vault on every query. */
+const VECTOR_CANDIDATE_CAP = 50;
 
 /** Fuses any number of independent rank-1-based rankings (`key -> rank`)
  *  into a single `key -> score` map via Reciprocal Rank Fusion:
@@ -117,7 +131,9 @@ export async function searchIndex(
       if (allEmbeddings.length > 0) {
         const scored = allEmbeddings
           .map((e) => ({ e, sim: cosineSimilarity(queryVector, e.vector) }))
-          .sort((a, b) => b.sim - a.sim);
+          .filter(({ sim }) => sim >= VECTOR_SIMILARITY_FLOOR)
+          .sort((a, b) => b.sim - a.sim)
+          .slice(0, VECTOR_CANDIDATE_CAP);
 
         const vectorRanking = new Map<string, number>();
         scored.forEach(({ e }, i) => {
@@ -150,4 +166,26 @@ export async function searchIndex(
       signals: Array.from(signalsByKey.get(key) ?? []),
     };
   });
+}
+
+/**
+ * Shared "empty index → rebuild once → retry" pattern used by every
+ * consumer of `searchIndex` (search_index, query_memory, chat_with_pulse,
+ * and the Themes page's `GET /api/search`). A brand-new vault (or one whose
+ * index file predates the search feature) has no index yet — rather than
+ * surface a confusing "no results" the first time anyone queries it, this
+ * rebuilds once from the warm themes on disk and retries the same query
+ * before giving up.
+ */
+export async function searchWithRebuildRetry(
+  vault: Vault,
+  query: string,
+  opts?: { limit?: number; mode?: "hybrid" | "fts" }
+): Promise<SearchResult[]> {
+  let results = await searchIndex(vault, query, opts);
+  if (results.length === 0) {
+    await rebuildIndex(vault);
+    results = await searchIndex(vault, query, opts);
+  }
+  return results;
 }
