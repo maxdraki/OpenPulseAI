@@ -561,6 +561,10 @@ export class Orchestrator {
     const allRunSinceDream = enabledCollectors.every((n) => {
       const col = this.state.collectors[n];
       if (!col?.lastRun) return false;
+      // A failed run still advances lastRun (so retries/backoff have a timestamp to
+      // reason about) but must NOT satisfy the barrier — Dream should wait for a
+      // successful run of every collector, not merely "attempted since last dream".
+      if (col.lastResult !== "success") return false;
       return new Date(col.lastRun).getTime() > dreamLastRun;
     });
 

@@ -1,8 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scheduleToCron, getLocalDate, formatLocalDate, defaultState, loadState, saveState } from "../src/orchestrator.js";
+import {
+  scheduleToCron,
+  getLocalDate,
+  formatLocalDate,
+  defaultState,
+  loadState,
+  saveState,
+  Orchestrator,
+  type OrchestratorCallbacks,
+} from "../src/orchestrator.js";
 
 describe("scheduleToCron", () => {
   it("converts weekday schedule to cron", () => {
@@ -146,5 +155,64 @@ describe("saveState — concurrent writes", () => {
     // Target file exists and is valid
     const raw = await readFile(join(tmp, "vault", "orchestrator-state.json"), "utf-8");
     expect(() => JSON.parse(raw)).not.toThrow();
+  });
+});
+
+describe("Dream barrier — failed collectors must not count as 'ran'", () => {
+  function makeCallbacks(opts: { failOnce: Set<string> }): OrchestratorCallbacks & { dreamRuns: number } {
+    const cb = {
+      dreamRuns: 0,
+      async runCollector(name: string) {
+        if (opts.failOnce.has(name)) {
+          opts.failOnce.delete(name);
+          throw new Error(`boom: ${name}`);
+        }
+      },
+      async runDreamPipeline() {
+        cb.dreamRuns++;
+      },
+      async runLintPipeline() {},
+      async runCompactionPipeline() {},
+      async runSchemaEvolutionPipeline() {},
+      async getSkillNames() {
+        return ["collector-a", "collector-b"];
+      },
+    };
+    return cb;
+  }
+
+  it("does not trigger dream when one collector fails; triggers once the failed one later succeeds", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-barrier-"));
+    const failOnce = new Set(["collector-b"]);
+    const callbacks = makeCallbacks({ failOnce });
+
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const schedule = [{ time: "09:00", days: ["mon"] }];
+    await orch.updateSchedule("collector-a", schedule, true);
+    await orch.updateSchedule("collector-b", schedule, true);
+
+    // collector-b fails first (first call throws) — this still records a lastRun
+    // timestamp for bookkeeping, but must NOT satisfy the barrier.
+    await orch.triggerRun("collector-b");
+    const statusAfterFail = orch.getStatus();
+    expect(statusAfterFail.collectors["collector-b"].lastResult).toBe("error");
+    expect(statusAfterFail.collectors["collector-b"].lastRun).toBeTruthy();
+
+    // collector-a succeeds — this is when the barrier check runs. Without the
+    // fix, collector-b's (failed) lastRun would still count as "ran since last
+    // dream" because it only compared timestamps, not lastResult.
+    await orch.triggerRun("collector-a");
+    expect(callbacks.dreamRuns).toBe(0);
+
+    // collector-b now succeeds (failOnce already consumed) — barrier should be met
+    await orch.triggerRun("collector-b");
+
+    expect(callbacks.dreamRuns).toBe(1);
+    const statusAfterSuccess = orch.getStatus();
+    expect(statusAfterSuccess.collectors["collector-b"].lastResult).toBe("success");
+
+    await orch.stop();
   });
 });
