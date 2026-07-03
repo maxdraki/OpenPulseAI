@@ -28,8 +28,9 @@ import { vaultLog } from "../logger.js";
 import { listThemes } from "../warm.js";
 import type { Vault } from "../vault.js";
 import { chunkTheme, type Chunk } from "./chunker.js";
+import { embedTexts, EMBEDDING_MODEL } from "./embeddings.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /** How long a connection waits for a lock held by another connection
  *  (same process or another) before SQLite gives up and raises
@@ -101,6 +102,7 @@ function ensureSchema(db: DatabaseSyncInstance): void {
 
   db.exec("DROP TABLE IF EXISTS chunks_fts;");
   db.exec("DROP TABLE IF EXISTS chunks;");
+  db.exec("DROP TABLE IF EXISTS embeddings;");
   db.exec(`
     CREATE TABLE chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +115,14 @@ function ensureSchema(db: DatabaseSyncInstance): void {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_theme ON chunks(theme);");
   db.exec("CREATE VIRTUAL TABLE chunks_fts USING fts5(text, heading, theme);");
+  db.exec(`
+    CREATE TABLE embeddings (
+      content_hash TEXT PRIMARY KEY,
+      vector BLOB NOT NULL,
+      model TEXT NOT NULL,
+      dim INTEGER NOT NULL
+    );
+  `);
   db.prepare(
     "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
   ).run(String(SCHEMA_VERSION));
@@ -190,12 +200,12 @@ async function openIndexDb(vault: Vault): Promise<DatabaseSyncInstance | null> {
  *  nobody crashes. */
 async function withIndexDb<T>(
   vault: Vault,
-  fn: (db: DatabaseSyncInstance) => T
+  fn: (db: DatabaseSyncInstance) => T | Promise<T>
 ): Promise<T | null> {
   const db = await openIndexDb(vault);
   if (!db) return null;
   try {
-    return fn(db);
+    return await fn(db);
   } catch (e) {
     await warnOnce(
       "search index operation failed — degrading for this call",
@@ -240,6 +250,77 @@ function deleteChunksByIds(db: DatabaseSyncInstance, ids: (number | bigint)[]): 
   }
 }
 
+/** Converts a `Float32Array` to a copyable `Uint8Array` BLOB for storage. */
+function float32ArrayToBuffer(vec: Float32Array): Uint8Array {
+  return new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength).slice();
+}
+
+/** Converts a BLOB read back from SQLite into a `Float32Array`, copying
+ *  into a freshly allocated, correctly aligned buffer first — the bytes
+ *  handed back by `node:sqlite` are not guaranteed to start at a 4-byte
+ *  aligned offset within their backing `ArrayBuffer`. */
+function bufferToFloat32Array(buf: Uint8Array): Float32Array {
+  const copy = new Uint8Array(buf.byteLength);
+  copy.set(buf);
+  return new Float32Array(copy.buffer);
+}
+
+/** Computes and stores embeddings for every content_hash present in
+ *  `chunks` that isn't already in the `embeddings` table — unchanged
+ *  chunks (same content_hash as before) are never re-embedded. No-ops
+ *  silently (index stays FTS-only) when embeddings are unavailable; never
+ *  throws — a failure here must never fail the caller's rebuild/update. */
+async function syncEmbeddings(db: DatabaseSyncInstance, chunks: Chunk[]): Promise<void> {
+  try {
+    const uniqueHashes = Array.from(new Set(chunks.map((c) => c.contentHash)));
+    if (uniqueHashes.length === 0) return;
+
+    const placeholders = uniqueHashes.map(() => "?").join(",");
+    const existing = new Set(
+      (
+        db
+          .prepare(`SELECT content_hash FROM embeddings WHERE content_hash IN (${placeholders})`)
+          .all(...uniqueHashes) as { content_hash: string }[]
+      ).map((r) => r.content_hash)
+    );
+
+    const missingHashes = uniqueHashes.filter((h) => !existing.has(h));
+    if (missingHashes.length === 0) return;
+
+    const textByHash = new Map<string, string>();
+    for (const c of chunks) {
+      if (!textByHash.has(c.contentHash)) textByHash.set(c.contentHash, `${c.heading}\n\n${c.text}`);
+    }
+
+    const texts = missingHashes.map((h) => textByHash.get(h) ?? "");
+    const vectors = await embedTexts(texts);
+    if (!vectors) return; // embeddings unavailable — index stays FTS-only
+
+    const insert = db.prepare(
+      "INSERT INTO embeddings (content_hash, vector, model, dim) VALUES (?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING"
+    );
+    for (let i = 0; i < missingHashes.length; i++) {
+      const vec = vectors[i];
+      if (!vec) continue;
+      insert.run(missingHashes[i], float32ArrayToBuffer(vec), EMBEDDING_MODEL, vec.length);
+    }
+  } catch (e) {
+    await warnOnce(
+      "embeddings sync failed — index stays FTS-only for this call",
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+}
+
+/** Deletes any embedding row whose content_hash is no longer referenced by
+ *  any row in `chunks` — run after any delete so removed/renamed chunks
+ *  don't leave orphaned vectors behind. Content shared verbatim across
+ *  multiple chunks (same content_hash) keeps its embedding until every
+ *  referencing chunk is gone. */
+function pruneOrphanedEmbeddings(db: DatabaseSyncInstance): void {
+  db.exec("DELETE FROM embeddings WHERE content_hash NOT IN (SELECT DISTINCT content_hash FROM chunks)");
+}
+
 /** Reads a warm theme's raw file (frontmatter included — `chunkTheme` strips
  *  it) and chunks it. Returns `[]` if the file can't be read (e.g. it was
  *  deleted between listing and reading). */
@@ -262,7 +343,7 @@ export async function rebuildIndex(vault: Vault): Promise<void> {
     allChunks.push(...(await readAndChunkTheme(vault, theme)));
   }
 
-  await withIndexDb(vault, (db) => {
+  await withIndexDb(vault, async (db) => {
     db.exec("BEGIN");
     try {
       db.exec("DELETE FROM chunks");
@@ -273,6 +354,9 @@ export async function rebuildIndex(vault: Vault): Promise<void> {
       db.exec("ROLLBACK");
       throw e;
     }
+
+    await syncEmbeddings(db, allChunks);
+    pruneOrphanedEmbeddings(db);
   });
 }
 
@@ -282,7 +366,7 @@ export async function rebuildIndex(vault: Vault): Promise<void> {
 export async function updateThemeInIndex(vault: Vault, theme: string): Promise<void> {
   const newChunks = await readAndChunkTheme(vault, theme);
 
-  await withIndexDb(vault, (db) => {
+  await withIndexDb(vault, async (db) => {
     const existing = db
       .prepare("SELECT id, content_hash FROM chunks WHERE theme = ?")
       .all(theme) as { id: number; content_hash: string }[];
@@ -318,6 +402,9 @@ export async function updateThemeInIndex(vault: Vault, theme: string): Promise<v
       db.exec("ROLLBACK");
       throw e;
     }
+
+    await syncEmbeddings(db, newChunks);
+    pruneOrphanedEmbeddings(db);
   });
 }
 
@@ -335,6 +422,8 @@ export async function removeThemeFromIndex(vault: Vault, theme: string): Promise
       db.exec("ROLLBACK");
       throw e;
     }
+
+    pruneOrphanedEmbeddings(db);
   });
 }
 
@@ -343,6 +432,7 @@ export interface RawSearchRow {
   heading: string;
   snippet: string;
   score: number;
+  contentHash: string;
 }
 
 /** Runs a sanitized FTS5 MATCH query and returns raw ranked rows (ranking
@@ -358,7 +448,7 @@ export async function queryIndex(
   const rows = await withIndexDb(vault, (db) => {
     return db
       .prepare(
-        `SELECT c.theme AS theme, c.heading AS heading,
+        `SELECT c.theme AS theme, c.heading AS heading, c.content_hash AS contentHash,
                 snippet(chunks_fts, 0, '[', ']', '...', 12) AS snippet,
                 bm25(chunks_fts, 1.0, 5.0, 5.0) AS score
          FROM chunks_fts
@@ -371,4 +461,45 @@ export async function queryIndex(
   });
 
   return rows ?? [];
+}
+
+export interface EmbeddingRow {
+  theme: string;
+  heading: string;
+  text: string;
+  contentHash: string;
+  vector: Float32Array;
+}
+
+/** Loads every stored embedding joined with its owning chunk(s) —
+ *  content_hash + vector only from the `embeddings` table, joined against
+ *  `chunks` for the theme/heading/text needed to build a `SearchResult`.
+ *  One row per (chunk, embedding) pair, so content shared verbatim across
+ *  multiple chunks yields one row per chunk, each with its own
+ *  theme/heading. Returns `[]` if the index is unavailable. */
+export async function getAllEmbeddings(vault: Vault): Promise<EmbeddingRow[]> {
+  const rows = await withIndexDb(vault, (db) => {
+    return db
+      .prepare(
+        `SELECT c.theme AS theme, c.heading AS heading, c.text AS text, c.content_hash AS contentHash, e.vector AS vector
+         FROM chunks c
+         JOIN embeddings e ON e.content_hash = c.content_hash`
+      )
+      .all() as unknown as {
+      theme: string;
+      heading: string;
+      text: string;
+      contentHash: string;
+      vector: Uint8Array;
+    }[];
+  });
+
+  if (!rows) return [];
+  return rows.map((r) => ({
+    theme: r.theme,
+    heading: r.heading,
+    text: r.text,
+    contentHash: r.contentHash,
+    vector: bufferToFloat32Array(r.vector),
+  }));
 }
