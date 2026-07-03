@@ -5,6 +5,7 @@ import {
   batchSummaryLine,
   selectedUpdateIds,
   toggleSelectAll,
+  rebuildSelection,
 } from "../src/pages/review.js";
 
 describe("computeApproveLabel", () => {
@@ -78,5 +79,36 @@ describe("toggleSelectAll", () => {
     // no-oping — matches selecting-all being the more useful action from empty.
     const result = toggleSelectAll(ids, new Set());
     expect(result).toEqual(new Set(["a", "b", "c"]));
+  });
+});
+
+describe("rebuildSelection", () => {
+  it("selects every id when nothing has been deselected", () => {
+    const deselected = new Set<string>();
+    expect(rebuildSelection(["a", "b", "c"], deselected)).toEqual(new Set(["a", "b", "c"]));
+  });
+
+  it("excludes ids recorded as deselected, so unchecking survives a reload triggered by a different card", () => {
+    const deselected = new Set(["b"]);
+    expect(rebuildSelection(["a", "b", "c"], deselected)).toEqual(new Set(["a", "c"]));
+    // The persisted set itself is untouched when all its ids still exist.
+    expect(deselected).toEqual(new Set(["b"]));
+  });
+
+  it("prunes deselected ids that no longer appear in the fresh id list", () => {
+    const deselected = new Set(["b", "gone"]);
+    expect(rebuildSelection(["a", "b", "c"], deselected)).toEqual(new Set(["a", "c"]));
+    expect(deselected).toEqual(new Set(["b"]));
+  });
+
+  it("clears entirely once every deselected id has disappeared", () => {
+    const deselected = new Set(["gone1", "gone2"]);
+    expect(rebuildSelection(["a", "b"], deselected)).toEqual(new Set(["a", "b"]));
+    expect(deselected).toEqual(new Set());
+  });
+
+  it("returns an empty selection when every id has been deselected", () => {
+    const deselected = new Set(["a", "b", "c"]);
+    expect(rebuildSelection(["a", "b", "c"], deselected)).toEqual(new Set());
   });
 });

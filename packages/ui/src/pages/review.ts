@@ -46,6 +46,21 @@ export function toggleSelectAll(ids: readonly string[], current: ReadonlySet<str
   return allSelected ? new Set() : new Set(ids);
 }
 
+/** Rebuilds a batch's selection set for a fresh `loadPending()` reload from a
+ *  persisted set of *deselected* ids (see the module-level `deselectedByBatch`
+ *  map in review.ts). Every current id is selected except the ones recorded
+ *  as deselected — so unchecking a few cards in a large batch survives a
+ *  reload triggered by acting on a different card. `deselected` is mutated in
+ *  place to drop ids that no longer appear in `ids` (approved/rejected items,
+ *  or a batch that shrank), so the persisted set never grows unboundedly. */
+export function rebuildSelection(ids: readonly string[], deselected: Set<string>): Set<string> {
+  const idSet = new Set(ids);
+  for (const id of deselected) {
+    if (!idSet.has(id)) deselected.delete(id);
+  }
+  return new Set(ids.filter((id) => !deselected.has(id)));
+}
+
 // Note: renderMarkdown uses the `marked` library which handles HTML escaping.
 // The vault content rendered here is from our own dream pipeline, not arbitrary user input.
 
@@ -87,6 +102,15 @@ function showReviewSummary(message: string): void {
   el.style.display = "";
 }
 
+/** Persists which ids the user has *deselected* within each batch, keyed by
+ *  batchKey, across `loadPending()` reloads. `loadPending` re-runs after any
+ *  single card's Approve/Reject/Regenerate — not just batch actions — so
+ *  without this, a batch's `selected` set (previously re-initialized to
+ *  all-checked on every call) would silently forget any cards the user had
+ *  unchecked the moment they acted on an unrelated card. See
+ *  `rebuildSelection` for how a fresh id list is reconciled against this. */
+const deselectedByBatch = new Map<string, Set<string>>();
+
 async function loadPending(listEl: HTMLElement): Promise<void> {
   listEl.textContent = "";
 
@@ -126,6 +150,12 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
       batches.set(key, group);
     }
 
+    // Drop persisted deselections for batches that no longer exist (fully
+    // approved/rejected) so the map doesn't grow unboundedly.
+    for (const key of Array.from(deselectedByBatch.keys())) {
+      if (!batches.has(key)) deselectedByBatch.delete(key);
+    }
+
     for (const [batchKey, batchUpdates] of batches) {
       if (batchUpdates.length > 1) {
         // Render batch header with Approve All / Reject All
@@ -156,9 +186,14 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         }
 
         // Per-item selection — defaults to everything checked (least-surprise:
-        // "Approve All" still means all, until the user unchecks something).
+        // "Approve All" still means all, until the user unchecks something),
+        // but reconciled against any deselections persisted from a previous
+        // render of this same batch (see `deselectedByBatch` / `rebuildSelection`)
+        // so they survive a reload triggered by acting on a different card.
         const allIds = batchUpdates.map((u) => u.id);
-        const selected = new Set<string>(allIds);
+        const deselected = deselectedByBatch.get(batchKey) ?? new Set<string>();
+        deselectedByBatch.set(batchKey, deselected);
+        const selected = rebuildSelection(allIds, deselected);
 
         const batchSummary = document.createElement("span");
         batchSummary.className = "batch-summary";
@@ -188,10 +223,25 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         }
         refreshBatchHeader();
 
+        /** Sets a batch's in-flight state: disables the header buttons plus
+         *  every per-card checkbox and the select-all toggle, so the user
+         *  can't change the selection mid-request (minor fix alongside the
+         *  persisted-deselection bug — see task-12 fix round 1). */
+        function setBatchBusy(busy: boolean): void {
+          approveAllBtn.disabled = busy || selected.size === 0;
+          rejectAllBtn.disabled = busy || selected.size === 0;
+          selectAllBtn.disabled = busy;
+          for (const cb of checkboxes.values()) cb.disabled = busy;
+        }
+
         selectAllBtn.addEventListener("click", () => {
           const next = toggleSelectAll(allIds, selected);
           selected.clear();
           for (const id of next) selected.add(id);
+          deselected.clear();
+          for (const id of allIds) {
+            if (!selected.has(id)) deselected.add(id);
+          }
           refreshBatchHeader();
           for (const cb of checkboxes.values()) cb.checked = selected.has(cb.dataset.updateId!);
         });
@@ -199,9 +249,7 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         approveAllBtn.addEventListener("click", async () => {
           const ids = selectedUpdateIds(batchUpdates, selected);
           if (ids.length === 0) return;
-          approveAllBtn.disabled = true;
-          rejectAllBtn.disabled = true;
-          selectAllBtn.disabled = true;
+          setBatchBusy(true);
           try {
             // One server-side batch call so the whole action lands as a single
             // vault-git commit listing every theme (see approve.ts's
@@ -229,18 +277,14 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
             // rather than leaving the batch permanently stuck (M7).
             log("error", `Approve failed: ${batchKey}`, String(e));
             showReviewSummary("Approve failed — please try again.");
-            approveAllBtn.disabled = false;
-            rejectAllBtn.disabled = false;
-            selectAllBtn.disabled = false;
+            setBatchBusy(false);
           }
         });
 
         function doRejectSelected(): void {
           const ids = selectedUpdateIds(batchUpdates, selected);
           if (ids.length === 0) return;
-          approveAllBtn.disabled = true;
-          rejectAllBtn.disabled = true;
-          selectAllBtn.disabled = true;
+          setBatchBusy(true);
           void (async () => {
             const results = await Promise.allSettled(ids.map((id) => rejectUpdate(id)));
             const failed = results.filter((r) => r.status === "rejected").length;
@@ -276,8 +320,13 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
           const { card, checkbox } = buildCard(update, listEl, {
             checked: selected.has(update.id),
             onToggle: (checked) => {
-              if (checked) selected.add(update.id);
-              else selected.delete(update.id);
+              if (checked) {
+                selected.add(update.id);
+                deselected.delete(update.id);
+              } else {
+                selected.delete(update.id);
+                deselected.add(update.id);
+              }
               refreshBatchHeader();
             },
           });
