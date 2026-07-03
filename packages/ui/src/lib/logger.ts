@@ -28,11 +28,10 @@ export async function log(level: LogLevel, message: string, detail?: string): Pr
     if (isTauri) {
       await tauriInvoke("append_log", { entry });
     } else {
-      await fetch(`http://localhost:3001/api/logs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(entry),
-      });
+      // Routed through apiPost (not a raw fetch) so it picks up the same
+      // Authorization header as every other /api call — a bare fetch here
+      // would 401 once the dev-server's bearer guard is on by default.
+      await apiPost("/logs", entry as unknown as Record<string, unknown>);
     }
   } catch {
     console.warn("[logger] Failed to write log:", message);
@@ -44,10 +43,8 @@ export async function getLogs(level?: LogLevel): Promise<LogEntry[]> {
     if (isTauri) {
       return tauriInvoke("get_logs", { level: level ?? null });
     }
-    const url = level ? `http://localhost:3001/api/logs?level=${level}` : `http://localhost:3001/api/logs`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    return res.json();
+    const path = level ? `/logs?level=${level}` : `/logs`;
+    return await apiGet(path);
   } catch {
     return [];
   }

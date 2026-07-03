@@ -3,8 +3,8 @@ import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
-import type { ClassificationResult, LlmProvider } from "@openpulse/core";
-import { synthesizeToPending, parseMetaBlock, stripMetaBlock } from "../src/synthesize.js";
+import type { ClassificationResult, LlmProvider, PendingUpdate } from "@openpulse/core";
+import { synthesizeToPending, parseMetaBlock, stripMetaBlock, regenerateStaleUpdate } from "../src/synthesize.js";
 
 function mockProvider(responseText: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(responseText) };
@@ -282,6 +282,383 @@ describe("synthesizeToPending", () => {
     expect(pending[0].projectStatus).toBeUndefined();
     expect(pending[0].projectStatusReason).toBeUndefined();
     expect(pending[0].proposedContent).toContain("## Current Status");
+  });
+
+  describe("per-theme failure isolation", () => {
+    it("skips a failing theme, keeps the succeeding one's pending, and reports the failure", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme A", source: "github-activity" },
+          themes: ["theme-a"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme B", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-b"')) throw new Error("LLM down for theme-b");
+          return "## Current Status\n\nDone.";
+        }),
+      };
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", undefined, {
+        onThemeFailure,
+      });
+
+      expect(pending.map((p) => p.theme)).toEqual(["theme-a"]);
+      expect(onThemeFailure).toHaveBeenCalledTimes(1);
+      expect(onThemeFailure).toHaveBeenCalledWith("theme-b", expect.any(Error));
+
+      // theme-a's pending file was actually written to disk despite theme-b failing.
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(1);
+    });
+
+    it("continues past a failing theme to synthesize a later one in the same batch", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme B (fails)", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme C (succeeds)", source: "github-activity" },
+          themes: ["theme-c"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-b"')) throw new Error("LLM down for theme-b");
+          return "## Current Status\n\nDone.";
+        }),
+      };
+
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model");
+      expect(pending.map((p) => p.theme)).toEqual(["theme-c"]);
+    });
+  });
+
+  describe("truncation guard", () => {
+    it("refuses a pending update when the provider reports the completion was truncated, defers the theme via onThemeFailure, and leaves other themes unaffected", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme A", source: "github-activity" },
+          themes: ["theme-a"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme B", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-a"')) return "## Current Status\n\nTruncated content";
+          return "## Current Status\n\nDone.";
+        }),
+        wasLastCompletionTruncated: vi.fn(),
+      };
+      // Simulate: theme-a's completion is truncated, theme-b's is not.
+      let callCount = 0;
+      (provider.complete as ReturnType<typeof vi.fn>).mockImplementation(async (params: { prompt: string }) => {
+        callCount++;
+        if (params.prompt.includes('for "theme-a"')) {
+          (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(true);
+          return "## Current Status\n\nTruncated content";
+        }
+        (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(false);
+        return "## Current Status\n\nDone.";
+      });
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", undefined, {
+        onThemeFailure,
+      });
+
+      expect(pending.map((p) => p.theme)).toEqual(["theme-b"]);
+      expect(onThemeFailure).toHaveBeenCalledTimes(1);
+      expect(onThemeFailure).toHaveBeenCalledWith("theme-a", expect.any(Error));
+
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(1);
+      expect(callCount).toBe(2);
+    });
+  });
+
+  describe("shrinkage guard", () => {
+    it("refuses an update whose proposed content is less than 80% of the existing content's length", async () => {
+      const existingContent = "x".repeat(1000);
+      await writeTheme(vault, "shrink-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["shrink-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      // 50% of existing length — should be refused.
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(500 - 20));
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "shrink-theme": "project" }, {
+        onThemeFailure,
+      });
+
+      expect(pending).toHaveLength(0);
+      expect(onThemeFailure).toHaveBeenCalledWith("shrink-theme", expect.any(Error));
+
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(0);
+    });
+
+    it("allows an update whose proposed content is 95% of the existing content's length", async () => {
+      const existingContent = "x".repeat(1000);
+      await writeTheme(vault, "ok-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["ok-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      // 95% of existing length — should be allowed.
+      const provider = mockProvider("y".repeat(950));
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "ok-theme": "project" }, {
+        onThemeFailure,
+      });
+
+      expect(pending).toHaveLength(1);
+      expect(onThemeFailure).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("maxTokens computation", () => {
+    it("caps maxTokens above the old 4096 ceiling for a large existing page, bounded by 16384", async () => {
+      // ~40000 chars ≈ 10000 estimated tokens. Headroom = max(1024, 25% of 10000) = 2500.
+      // Expected maxTokens = min(16384, 10000 + 2500) = 12500.
+      const existingContent = "x".repeat(40000);
+      await writeTheme(vault, "big-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["big-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(39000));
+      await synthesizeToPending(vault, classified, provider, "test-model", { "big-theme": "project" });
+
+      expect(provider.complete).toHaveBeenCalledWith(
+        expect.objectContaining({ maxTokens: expect.any(Number) })
+      );
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.maxTokens).toBeGreaterThan(4096);
+      expect(call.maxTokens).toBeLessThanOrEqual(16384);
+      expect(call.maxTokens).toBe(12500);
+    });
+
+    it("bounds maxTokens at MAX_SYNTHESIS_OUTPUT_TOKENS (16384) even for an enormous existing page", async () => {
+      // ~400000 chars ≈ 100000 estimated tokens — headroom alone would blow past 16384.
+      const existingContent = "x".repeat(400000);
+      await writeTheme(vault, "huge-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["huge-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(390000));
+      await synthesizeToPending(vault, classified, provider, "test-model", { "huge-theme": "project" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.maxTokens).toBe(16384);
+    });
+  });
+
+  describe("fold at source", () => {
+    async function writePending(vault: Vault, update: Partial<PendingUpdate> & { theme: string }): Promise<PendingUpdate> {
+      const full: PendingUpdate = {
+        id: update.id ?? "existing-pending-id",
+        theme: update.theme,
+        proposedContent: update.proposedContent ?? "",
+        previousContent: update.previousContent ?? null,
+        entries: update.entries ?? [],
+        createdAt: update.createdAt ?? new Date().toISOString(),
+        status: update.status ?? "pending",
+        batchId: update.batchId,
+        lintFix: update.lintFix,
+        compactionType: update.compactionType,
+        schemaEvolution: update.schemaEvolution,
+        querybackSource: update.querybackSource,
+        type: update.type,
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, `${full.id}.json`), JSON.stringify(full, null, 2), "utf-8");
+      return full;
+    }
+
+    it("uses the existing dream-kind pending's proposedContent as the synthesis base, and leaves exactly one pending whose previousContent is the on-disk page", async () => {
+      await writeTheme(vault, "project-x", "## Current Status\n\nOriginal on-disk content.");
+      const existingPending = await writePending(vault, {
+        id: "prior-proposal",
+        theme: "project-x",
+        proposedContent: "## Current Status\n\nPrior proposal content not yet approved.",
+        previousContent: "## Current Status\n\nOriginal on-disk content.",
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "More work happened", source: "github-activity" },
+          themes: ["project-x"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nPrior proposal content not yet approved, now with more work happened folded in.");
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "project-x": "project" });
+
+      // Prompt was built against the prior proposal's content, not the stale on-disk page.
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("Prior proposal content not yet approved");
+
+      // The result's previousContent is the actual on-disk page, not the folded proposal.
+      expect(pending[0].previousContent).toBe("## Current Status\n\nOriginal on-disk content.");
+
+      // Exactly one pending remains for the theme — the old one was replaced.
+      const files = await readdir(vault.pendingDir);
+      const jsonFiles = files.filter((f) => f.endsWith(".json"));
+      expect(jsonFiles).toHaveLength(1);
+      expect(jsonFiles[0]).not.toBe(`${existingPending.id}.json`);
+    });
+
+    it("does NOT fold a lintFix-kind pending — synthesizes against the on-disk page instead", async () => {
+      await writeTheme(vault, "project-y", "## Current Status\n\nOn-disk content.");
+      await writePending(vault, {
+        id: "lint-pending",
+        theme: "project-y",
+        proposedContent: "## Merge proposal\n\nStructural fix, not a content base.",
+        previousContent: null,
+        lintFix: "dedup-dates",
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "New activity", source: "github-activity" },
+          themes: ["project-y"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nOn-disk content, updated.");
+      await synthesizeToPending(vault, classified, provider, "test-model", { "project-y": "project" });
+
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("On-disk content.");
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).not.toContain("Structural fix");
+
+      // The lint pending was left untouched.
+      const raw = await readFile(join(vault.pendingDir, "lint-pending.json"), "utf-8");
+      expect(JSON.parse(raw).proposedContent).toContain("Structural fix");
+    });
+
+    it("ignores a foldable pending that's already stale relative to the on-disk page", async () => {
+      await writeTheme(vault, "project-z", "## Current Status\n\nHand-edited on-disk content.");
+      await writePending(vault, {
+        id: "stale-pending",
+        theme: "project-z",
+        proposedContent: "## Current Status\n\nStale proposal.",
+        previousContent: "## Current Status\n\nDifferent original content.", // no longer matches on-disk
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "New activity", source: "github-activity" },
+          themes: ["project-z"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nHand-edited on-disk content, updated.");
+      await synthesizeToPending(vault, classified, provider, "test-model", { "project-z": "project" });
+
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("Hand-edited on-disk content");
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).not.toContain("Stale proposal");
+    });
+  });
+
+  describe("regenerateStaleUpdate", () => {
+    it("produces a replacement pending whose previousContent is the current on-disk page, and removes the stale file", async () => {
+      const staleUpdate: PendingUpdate = {
+        id: "stale-id",
+        theme: "project-r",
+        proposedContent: "## Current Status\n\nStale proposal content.",
+        previousContent: "## Current Status\n\nOld page content.",
+        entries: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        status: "pending",
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, "stale-id.json"), JSON.stringify(staleUpdate, null, 2), "utf-8");
+
+      const provider = mockProvider("## Current Status\n\nMerged: current page content plus the stale proposal's new information.");
+      const currentContent = "## Current Status\n\nCurrent page content that changed after the proposal.";
+
+      const replacement = await regenerateStaleUpdate(vault, staleUpdate, currentContent, provider, "test-model");
+
+      expect(replacement.previousContent).toBe(currentContent);
+      expect(replacement.proposedContent).toContain("Merged:");
+      expect(replacement.id).not.toBe("stale-id");
+      expect(replacement.theme).toBe("project-r");
+
+      const files = await readdir(vault.pendingDir);
+      expect(files).toContain(`${replacement.id}.json`);
+      expect(files).not.toContain("stale-id.json");
+    });
+
+    it("refuses (throws) rather than emit a shrunken merge", async () => {
+      const staleUpdate: PendingUpdate = {
+        id: "stale-id-2",
+        theme: "project-shrink",
+        proposedContent: "## Current Status\n\nStale proposal.",
+        previousContent: "x".repeat(1000),
+        entries: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        status: "pending",
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, "stale-id-2.json"), JSON.stringify(staleUpdate, null, 2), "utf-8");
+
+      const currentContent = "x".repeat(1000);
+      const provider = mockProvider("y".repeat(100)); // way under 80% of 1000 chars
+
+      await expect(
+        regenerateStaleUpdate(vault, staleUpdate, currentContent, provider, "test-model")
+      ).rejects.toThrow();
+
+      // Stale file untouched — no replacement written.
+      const files = await readdir(vault.pendingDir);
+      expect(files).toContain("stale-id-2.json");
+      expect(files).not.toContain(`${staleUpdate.id}-replacement.json`);
+    });
   });
 
   describe("parseMetaBlock / stripMetaBlock", () => {

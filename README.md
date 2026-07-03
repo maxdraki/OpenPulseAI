@@ -122,6 +122,8 @@ pnpm dev    # Starts API server on :3001 + Vite on :1420
 
 Open `http://localhost:1420`. Go to **Settings** to configure your LLM provider, then **Skills** to see available collectors.
 
+**Auth:** the API server (`:3001`) can run skills, install dependencies, and write your Claude Desktop config, so it always requires a bearer token — there's no unauthenticated mode. On first run it auto-generates one and persists it at `~/OpenPulseAI/ui-token` (mode `0600`); `npx vite` reads the *same* file (via `vite.config.ts`) and bakes it into the browser bundle, so the two dev processes always agree on the token with no manual wiring — just make sure both are pointed at the same vault (`OPENPULSE_VAULT`, if you've overridden it). Set `OPENPULSE_API_TOKEN` yourself to pin a specific token (e.g. for a shared/remote deployment — and if you do bind `OPENPULSE_HOST` to something other than loopback, treat that token as a real secret).
+
 ### Connect Claude Desktop
 
 Go to **Settings → Connections** and click **Connect** next to Claude Desktop. Or manually add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -136,6 +138,24 @@ Go to **Settings → Connections** and click **Connect** next to Claude Desktop.
   }
 }
 ```
+
+This is the stdio transport (Claude Desktop spawns the process itself, so it's inherently trusted — no token needed).
+
+#### Remote MCP over HTTPS
+
+If you want to connect via Claude Desktop's "Add custom connector" dialog (a URL, not a local command) instead, run the HTTPS transport:
+
+```bash
+node packages/mcp-server/dist/http.js --port 3002
+```
+
+On first run this generates a self-signed cert (`~/OpenPulseAI/certs/`) and a bearer token (`~/OpenPulseAI/mcp-token`, mode `0600`), then prints the full connector URL with the token embedded, e.g.:
+
+```
+https://localhost:3002/mcp?token=<64 hex chars>
+```
+
+Paste that whole URL into the connector dialog. Every request to `/mcp` requires that token (as the `?token=` query param, since Claude Desktop's dialog only takes a URL, or as `Authorization: Bearer <token>` for callers that can set headers) — CORS alone doesn't stop a local process or script from talking to this port, so the token is the actual access control. `/health` stays open (no vault access). Delete `~/OpenPulseAI/mcp-token` to rotate it.
 
 ## Skills
 

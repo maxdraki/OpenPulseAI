@@ -1,6 +1,6 @@
 // Dashboard — stat cards + inline themes. All innerHTML usage is either static SVG
 // icons or vault content rendered through the marked library (trusted, HTML-escaped).
-import { getVaultHealth, getWarmThemes, getBacklinks } from "../lib/tauri-bridge.js";
+import { getVaultHealth, getWarmThemes, getBacklinks, getDreamUsage } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 
 function nav(page: string) { (window as any).__navigate(page); }
@@ -50,19 +50,28 @@ export async function renderDashboard(container: HTMLElement): Promise<void> {
   statsGrid.className = "stat-grid stat-grid-2";
   statsGrid.id = "stats";
 
+  const usageNote = document.createElement("p");
+  usageNote.className = "dashboard-usage-note";
+  usageNote.id = "dream-usage-note";
+
   const themesSection = document.createElement("div");
   themesSection.id = "themes-section";
 
   container.textContent = "";
   container.appendChild(header);
   container.appendChild(statsGrid);
+  container.appendChild(usageNote);
   container.appendChild(themesSection);
 
   async function refreshAll() {
     refreshBtn.disabled = true;
     refreshBtn.style.opacity = "0.6";
     try {
-      await Promise.all([loadStats(statsGrid), loadThemes(themesSection, await getBacklinks())]);
+      await Promise.all([
+        loadStats(statsGrid),
+        loadThemes(themesSection, await getBacklinks()),
+        loadDreamUsage(usageNote),
+      ]);
     } finally {
       refreshBtn.disabled = false;
       refreshBtn.style.opacity = "";
@@ -86,6 +95,23 @@ async function loadStats(grid: HTMLElement): Promise<void> {
     grid.appendChild(buildStatCard("pending", String(h.pendingCount), "Pending Reviews", "review", REVIEW_ICON));
   } catch {
     grid.textContent = "Failed to load stats";
+  }
+}
+
+async function loadDreamUsage(note: HTMLElement): Promise<void> {
+  try {
+    const { usage, at } = await getDreamUsage();
+    if (!usage) {
+      note.textContent = "";
+      return;
+    }
+    const when = at ? new Date(at).toLocaleString() : "unknown time";
+    note.textContent =
+      `Last dream run (${when}): ${usage.calls} LLM call${usage.calls === 1 ? "" : "s"}, ` +
+      `${usage.inputTokens} in / ${usage.outputTokens} out tokens` +
+      (usage.retries > 0 ? `, ${usage.retries} retr${usage.retries === 1 ? "y" : "ies"}` : "");
+  } catch {
+    note.textContent = "";
   }
 }
 

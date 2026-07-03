@@ -330,6 +330,12 @@ body {
   font-size: 0.85rem;
 }
 
+.dashboard-usage-note {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin: -0.75rem 0 1.25rem;
+}
+
 .dashboard-theme-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -605,6 +611,37 @@ a.wiki-link:hover {
   border-color: var(--border-default);
 }
 
+/* Stale pending — page changed on disk since this update was proposed
+   (see checkStaleness/ApiError 409 handling in review.ts). */
+.pending-card.stale {
+  border-color: var(--danger, #dc2626);
+  background: color-mix(in srgb, var(--danger, #dc2626) 6%, var(--bg-surface));
+}
+
+.pending-stale-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #dc2626) 30%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--danger, #dc2626);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.review-batch-summary {
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.75rem;
+  background: color-mix(in srgb, var(--warning, #d97706) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 30%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--warning, #d97706);
+  font-size: 0.82rem;
+}
+
 .pending-header {
   display: flex;
   justify-content: space-between;
@@ -654,6 +691,65 @@ a.wiki-link:hover {
   color: var(--text-secondary);
   max-height: 400px;
   overflow-y: auto;
+}
+
+/* ---- Before/after diff view (Review page Diff toggle) ---- */
+.pending-diff {
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.diff-line {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-marker {
+  flex: none;
+  width: 1ch;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-equal {
+  color: var(--text-secondary);
+}
+
+.diff-add {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.diff-add .diff-marker {
+  color: var(--success);
+}
+
+.diff-remove {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.diff-remove .diff-marker {
+  color: var(--danger);
+}
+
+.diff-empty {
+  padding: 0.6rem;
+  color: var(--text-tertiary);
 }
 
 .pending-textarea {

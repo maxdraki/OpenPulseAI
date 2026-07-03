@@ -19,15 +19,22 @@ export {
   saveIngestedDocument,
   parseActivityBlock,
   parseActivityBlocks,
+  splitHotFileBlocks,
+  joinHotFileBlocks,
+  ENTRY_MARKER,
   type ParsedActivityBlock,
 } from "./hot.js";
 export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";
 export { archiveHotFile } from "./cold.js";
 export { loadConfig, DEFAULT_CONFIG } from "./config.js";
-export type { LlmProvider, CompletionParams } from "./llm/provider.js";
+export type { LlmProvider, CompletionParams, UsageTotals } from "./llm/provider.js";
 export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";
 export { stripCodeFences } from "./llm/strip-fences.js";
+export { withRetry, classifyError, LlmError } from "./llm/retry.js";
+export type { RetryOptions, LlmErrorOptions } from "./llm/retry.js";
+export { UsageAccumulator, emptyUsageTotals, mergeUsageTotals } from "./llm/usage.js";
+export type { TokenUsage } from "./llm/usage.js";
 export { initLogger, vaultLog } from "./logger.js";
 export type { LogLevel, LogEntry } from "./logger.js";
 export {
@@ -41,6 +48,7 @@ export {
   defaultState,
   loadState,
   saveState,
+  updateStateSection,
   scheduleToCron,
   getLocalDate,
 } from "./orchestrator.js";
@@ -53,3 +61,5 @@ export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./sk
 export { mergeThemes, isSafeThemeName } from "./merge-themes.js";
 export { sanitizeThemeSlug } from "./theme-slug.js";
 export { SEED_SKILLS, isKnownSkill, isValidSkillTag, normaliseSkill } from "./skills-taxonomy.js";
+export { checkStaleness, normalizeContentForCompare, type StalenessResult } from "./staleness.js";
+export { ensureVaultRepo, commitVault } from "./vault-git.js";

@@ -10,32 +10,32 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { timingSafeEqual } from "node:crypto";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme, readAllThemes, mergeThemes, isSafeThemeName, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig } from "../core/dist/index.js";
+import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
+import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
 const execFileAsync = promisify(execFile);
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = 3001;
 // Bind to loopback by default so the dev server is never exposed on an external
-// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy,
-// and ALWAYS set OPENPULSE_API_TOKEN when you do.
+// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy.
 const HOST = process.env.OPENPULSE_HOST ?? "127.0.0.1";
-// When set, every /api request must send `Authorization: Bearer <token>`.
-const API_TOKEN = process.env.OPENPULSE_API_TOKEN ?? "";
+// The bearer guard is ALWAYS on — this API can run skills, install deps, and
+// write Claude Desktop config, so there's no safe "open" posture even on
+// loopback (any local process/browser tab could otherwise hit it). An explicit
+// OPENPULSE_API_TOKEN env var wins (e.g. a shared/production deployment);
+// otherwise a persistent token is auto-generated and stored in the config dir
+// (~/OpenPulseAI/ui-token, mode 0600) the first time the server starts, and
+// reused on every subsequent start. vite.config.ts reads the same file so the
+// browser bundle can authenticate — see VITE_OPENPULSE_TOKEN there.
+const API_TOKEN = process.env.OPENPULSE_API_TOKEN || (await loadOrCreateToken(VAULT_ROOT));
 
 /** Guard against path traversal in :name params */
 const SAFE_NAME = /^[\w-]+$/;
-
-/** Constant-time string compare (avoids leaking the token via timing). */
-function tokensMatch(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual(ab, bb);
-}
 
 /** Mask a secret for display — never expose the full value to a client. */
 function maskKey(key: string | undefined): string | undefined {
@@ -73,15 +73,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Auth guard. With no token configured the server is loopback-only (see HOST),
-// so local dev keeps working without credentials. Any externally-reachable
-// deployment MUST set OPENPULSE_API_TOKEN, which makes /api reject unauthenticated
-// requests — closing the hole that let API keys be harvested from a public instance.
+// Auth guard — always on (see API_TOKEN above for how the token is sourced).
+// This API can run skills, install deps, and write Claude Desktop config, so
+// there's no endpoint exempted from it: the browser bundle gets the token at
+// build time via vite.config.ts, so there's no unauthenticated bootstrap step
+// that legitimately needs an exemption.
 app.use("/api", (req, res, next) => {
-  if (!API_TOKEN) return next();
-  const header = req.header("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token && tokensMatch(token, API_TOKEN)) return next();
+  if (isAuthorizedHeader(req.header("authorization"), API_TOKEN)) return next();
   res.status(401).json({ error: "Unauthorized" });
 });
 
@@ -122,7 +120,7 @@ app.get("/api/vault-health", async (_req, res) => {
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
-      hotCount += content.split(/\n---\n/).filter((b) => b.trim()).length;
+      hotCount += splitHotFileBlocks(content).filter((b) => b.trim()).length;
     }
     // Count ingested documents
     try {
@@ -164,65 +162,30 @@ app.get("/api/pending-updates", async (_req, res) => {
 app.post("/api/approve-update", async (req, res) => {
   const { id, editedContent } = req.body;
   if (!id || !/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
-  const pendingPath = join(pendingDir, `${id}.json`);
   try {
-    const raw = await readFile(pendingPath, "utf-8");
-    const update = JSON.parse(raw);
-    const finalContent = editedContent ?? update.proposedContent;
+    const outcome = await approvePendingUpdate(VAULT_ROOT, pendingDir, id, editedContent ?? undefined);
 
-    // Guard against path-traversal or malformed theme names in pending updates.
-    // Exempt "_schema" meta-theme which uses a leading underscore by design.
-    if (update.theme !== "_schema" && !isSafeThemeName(update.theme)) {
-      return res.status(400).json({ ok: false, error: "Unsafe theme name in pending update" });
-    }
-    if (update.related?.[0] && !isSafeThemeName(update.related[0])) {
-      return res.status(400).json({ ok: false, error: "Unsafe related theme name" });
-    }
-
-    const vault = new Vault(VAULT_ROOT);
-    await vault.init();
-
-    // Route by sub-kind
-    const related: string[] = Array.isArray(update.related) ? update.related : [];
-    if (update.lintFix === "merge" && related[0]) {
-      await mergeThemes(vault, update.theme, related[0]);
-    } else if (update.lintFix === "delete") {
-      await mergeThemes(vault, update.theme, null);
-    } else if (update.lintFix === "rename" && related[0]) {
-      await mergeThemes(vault, update.theme, related[0], { rename: true });
-    } else if (update.schemaEvolution || update.theme === "_schema") {
-      // Write to vault/warm/_schema.md instead of a normal theme file
-      const schemaPath = join(warmDir, "_schema.md");
-      await writeFile(schemaPath, finalContent, "utf-8");
-    } else {
-      // Normal dream-update (or any other sub-kind): write to warm theme file,
-      // preserving type, sources, created, related
-      await writeTheme(vault, update.theme, finalContent, {
-        type: update.type,
-        sources: update.sources,
-        related: update.related,
-        created: update.created,
-        skills: update.skills,
-        status: update.projectStatus,
-        statusReason: update.projectStatusReason,
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
+        ok: false,
+        error: outcome.error,
+        ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}),
       });
+    }
 
-      // Size check for dream-pipeline project updates: enqueue compaction if
-      // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
-      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
-        const sectionCount = (finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
-        if (sectionCount > 14 && update.type === "project") {
-          await orchestrator.enqueueForCompaction([update.theme]);
-          // Fire-and-forget immediate run for responsiveness
-          orchestrator.triggerCompact([update.theme]).catch((err: unknown) => {
-            console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
-          });
-        }
+    // Size check for dream-pipeline project updates: enqueue compaction if
+    // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
+    const update = outcome.update;
+    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+      const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
+      if (sectionCount > 14 && update.type === "project") {
+        await orchestrator.enqueueForCompaction([outcome.theme]);
+        // Fire-and-forget immediate run for responsiveness
+        orchestrator.triggerCompact([outcome.theme]).catch((err: unknown) => {
+          console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
+        });
       }
     }
-
-    // Remove pending file
-    await rm(pendingPath);
 
     // Rebuild index.md and _backlinks.md in the background — fire and forget
     const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
@@ -233,6 +196,69 @@ app.post("/api/approve-update", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/approve-batch", async (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string" && /^[\w-]+$/.test(id))) {
+    return res.status(400).json({ error: "Invalid ids" });
+  }
+  try {
+    const results = await approvePendingUpdatesBatch(VAULT_ROOT, pendingDir, ids);
+
+    // Mirror the single-approve side effects (oversized-page compaction
+    // enqueue) for every item that actually wrote — see /api/approve-update.
+    for (const { outcome } of results) {
+      if (!outcome.ok) continue;
+      const update = outcome.update;
+      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+        const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
+        if (sectionCount > 14 && update.type === "project") {
+          await orchestrator.enqueueForCompaction([outcome.theme]);
+          orchestrator.triggerCompact([outcome.theme]).catch((err: unknown) => {
+            console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
+          });
+        }
+      }
+    }
+
+    // Rebuild index.md/_backlinks.md once for the whole batch, not per item.
+    if (results.some((r) => r.outcome.ok)) {
+      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
+      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+        if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
+      });
+    }
+
+    res.json(
+      results.map(({ id, outcome }) => ({
+        id,
+        ok: outcome.ok,
+        ...(outcome.ok
+          ? {}
+          : { error: outcome.error, ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}) }),
+      }))
+    );
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pending/:id/regenerate", async (req, res) => {
+  const id = req.params.id;
+  if (!/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
+  try {
+    const config = await loadConfig(VAULT_ROOT);
+    const { createProvider } = await import("../core/dist/index.js");
+    const provider = createProvider(config);
+    const outcome = await regeneratePendingUpdate(VAULT_ROOT, pendingDir, id, provider, config.llm.model);
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ ok: false, error: outcome.error });
+    }
+    res.json({ ok: true, update: outcome.update });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -252,7 +278,11 @@ app.post("/api/trigger-dream", async (_req, res) => {
     const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
     const { stderr } = await execFileAsync("node", [dreamBin], {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
-      timeout: 60000,
+      // Match the orchestrator's dream-pipeline timeout (300s, see
+      // orchestrator.ts) — a 60s timeout here made manual "trigger now" runs
+      // far more likely to get killed mid-retry (LLM retries, slow local
+      // Ollama models) than the orchestrator's own scheduled runs (M5).
+      timeout: 300000,
     });
     res.json({ output: stderr || "Dream pipeline completed." });
   } catch (e: any) {
@@ -659,9 +689,11 @@ app.post("/api/save-llm-settings", async (req, res) => {
 
     await writeFile(configPath, yaml, "utf-8");
 
-    // Set API key as env var hint (Stronghold when Tauri is available)
+    // Set API key as env var hint (Stronghold when Tauri is available). Never log
+    // key material — not even a prefix; prefixes still leak entropy and provider
+    // key formats are fixed-width enough to narrow a brute-force search.
     if (apiKey) {
-      console.log(`[server] API key for ${provider} received (${apiKey.slice(0, 6)}...). Set ${PROVIDER_ENV_KEYS[provider]} env var for the dream pipeline.`);
+      console.log(`[server] API key for ${provider} received (hasKey: true). Set ${PROVIDER_ENV_KEYS[provider]} env var for the dream pipeline.`);
     }
 
     res.json({ ok: true });
@@ -733,12 +765,12 @@ app.delete("/api/hot-entries/:id", async (req, res) => {
       if (file.includes("/") || file.includes("..")) return res.status(400).json({ error: "Invalid id" });
       const filePath = join(hotDir, file);
       const content = await readFile(filePath, "utf-8");
-      const blocks = content.split(/\n---\n/).filter((b) => b.trim());
+      const blocks = splitHotFileBlocks(content).filter((b) => b.trim());
       blocks.splice(blockIndex, 1);
       if (blocks.length === 0) {
         await rm(filePath);
       } else {
-        await writeFile(filePath, blocks.join("\n\n---\n") + "\n\n---\n", "utf-8");
+        await writeFile(filePath, joinHotFileBlocks(blocks), "utf-8");
       }
       return res.json({ ok: true });
     }
@@ -1033,6 +1065,35 @@ app.get("/api/logs", async (_req, res) => {
     res.json(entries.slice(0, 500));
   } catch {
     res.json([]);
+  }
+});
+
+// Surfaces the most recent Dream Pipeline run's token/call/retry totals for
+// the Dashboard. The pipeline always runs as a subprocess (manual trigger or
+// orchestrator), so this is the only channel back to the UI — it logs a
+// dedicated "Dream pipeline usage" entry (see packages/dream/src/index.ts)
+// whose `detail` is a JSON-encoded UsageTotals; we just find the latest one.
+app.get("/api/dream-usage", async (_req, res) => {
+  try {
+    const files = await readdir(logsDir).catch(() => []);
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl")).sort().reverse();
+
+    for (const file of jsonlFiles.slice(0, 7)) {
+      const raw = await readFile(join(logsDir, file), "utf-8");
+      const lines = raw.split("\n").filter((l) => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.message === "Dream pipeline usage" && entry.detail) {
+            const usage = JSON.parse(entry.detail);
+            return res.json({ usage, at: entry.timestamp });
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    res.json({ usage: null, at: null });
+  } catch {
+    res.json({ usage: null, at: null });
   }
 });
 
@@ -1447,11 +1508,16 @@ app.post("/api/orchestrator-toggle", async (req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
+  if (process.env.OPENPULSE_API_TOKEN) {
+    console.log(`[openpulse-ui] /api auth: using OPENPULSE_API_TOKEN from the environment.`);
+  } else {
+    console.log(`[openpulse-ui] /api auth: token auto-generated at ${tokenPath(VAULT_ROOT)} (delete to rotate).`);
+  }
   const exposed = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
-  if (exposed && !API_TOKEN) {
+  if (exposed) {
     console.warn(
-      `[openpulse-ui] WARNING: bound to ${HOST} with no OPENPULSE_API_TOKEN set — ` +
-      `/api is unauthenticated and reachable off this machine. Set OPENPULSE_API_TOKEN before exposing it.`,
+      `[openpulse-ui] WARNING: bound to ${HOST} — /api is reachable off this machine. ` +
+      `It IS authenticated, but keep the token file (or OPENPULSE_API_TOKEN) secret.`,
     );
   }
 });

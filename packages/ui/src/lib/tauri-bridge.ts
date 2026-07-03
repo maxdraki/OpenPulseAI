@@ -8,6 +8,18 @@ export interface VaultHealth {
   vaultExists: boolean;
 }
 
+export interface DreamUsageTotals {
+  calls: number;
+  retries: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface DreamUsage {
+  usage: DreamUsageTotals | null;
+  at: string | null;
+}
+
 export interface PendingUpdate {
   id: string;
   theme: string;
@@ -37,6 +49,18 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 const API_BASE = "http://localhost:3001/api";
 export const apiBase = API_BASE;
 
+// The dev-server's bearer guard is on by default (see server.ts) — vite.config.ts
+// reads the same auto-generated token file and exposes it here so the browser can
+// authenticate. Empty when this bundle wasn't built by our vite config (e.g. a
+// stray import in a non-vite test context).
+const DEV_TOKEN = (import.meta.env.VITE_OPENPULSE_TOKEN as string | undefined) ?? "";
+
+/** Auth header for /api calls. Exported so call sites that can't go through
+ *  apiGet/apiPost (e.g. a raw fetch for a non-JSON response) still attach it. */
+export function authHeaders(): Record<string, string> {
+  return DEV_TOKEN ? { Authorization: `Bearer ${DEV_TOKEN}` } : {};
+}
+
 // --- Transport layer (exported for logger.ts) ---
 
 export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -44,18 +68,44 @@ export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
+}
+
+/**
+ * Thrown by `apiPost`/`apiGet` on a non-2xx response. Carries the HTTP status
+ * and the parsed JSON body (when the server sent one) so callers can react
+ * to specific error shapes — e.g. the approve endpoint's `409 { error:
+ * "stale", theme, reason }` — instead of only seeing a generic message.
+ */
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, body: unknown) {
+    const bodyMessage = body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : undefined;
+    super(bodyMessage ?? `API error: ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function parseErrorBody(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return undefined;
+  }
 }
 
 export async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await parseErrorBody(res));
   return res.json();
 }
 
@@ -64,6 +114,17 @@ export async function apiPost<T>(path: string, body: Record<string, unknown>): P
 export async function getVaultHealth(): Promise<VaultHealth> {
   if (isTauri) return tauriInvoke("get_vault_health");
   return apiGet("/vault-health");
+}
+
+/**
+ * Latest Dream Pipeline run's token/call/retry totals, for the Dashboard.
+ * Dev-server only for now (the pipeline always runs as a subprocess reading
+ * vault/logs — there's no Tauri command for this yet); Tauri callers get a
+ * graceful "no data" result rather than an error.
+ */
+export async function getDreamUsage(): Promise<DreamUsage> {
+  if (isTauri) return { usage: null, at: null };
+  return apiGet("/dream-usage");
 }
 
 export async function listPendingUpdates(): Promise<PendingUpdate[]> {
@@ -76,9 +137,52 @@ export async function approveUpdate(id: string, editedContent?: string): Promise
   await apiPost("/approve-update", { id, editedContent: editedContent ?? null });
 }
 
+export interface BatchApproveResult {
+  id: string;
+  ok: boolean;
+  stale?: boolean;
+}
+
+/**
+ * Approves a whole "Approve All" batch as one server-side action so it lands
+ * as a single vault-git commit listing every theme (see
+ * `.superpowers/sdd/task-5-brief.md` §B and `POST /api/approve-batch`) rather
+ * than one commit per item. The desktop app has no Tauri command for this
+ * yet, so it falls back to approving sequentially item-by-item there — each
+ * one still gets written, just without the single-commit guarantee (the
+ * Tauri backend has no vault-git integration at all yet).
+ */
+export async function approveUpdatesBatch(ids: string[]): Promise<BatchApproveResult[]> {
+  if (isTauri) {
+    const out: BatchApproveResult[] = [];
+    for (const id of ids) {
+      try {
+        await tauriInvoke("approve_update", { id, editedContent: null });
+        out.push({ id, ok: true });
+      } catch {
+        out.push({ id, ok: false });
+      }
+    }
+    return out;
+  }
+  return apiPost("/approve-batch", { ids });
+}
+
 export async function rejectUpdate(id: string): Promise<void> {
   if (isTauri) return tauriInvoke("reject_update", { id });
   await apiPost("/reject-update", { id });
+}
+
+/**
+ * Regenerates a stale pending update against the current on-disk page (see
+ * `POST /api/pending/:id/regenerate`). Dev-server only for now, consistent
+ * with how Chat is gated — the desktop app has no direct path to the Dream
+ * pipeline's LLM merge step yet.
+ */
+export async function regeneratePendingUpdate(id: string): Promise<PendingUpdate> {
+  if (isTauri) throw new Error("Regenerate is not yet available in the desktop app");
+  const result = await apiPost<{ ok: boolean; update: PendingUpdate }>(`/pending/${encodeURIComponent(id)}/regenerate`, {});
+  return result.update;
 }
 
 export async function triggerDream(): Promise<string> {
@@ -168,7 +272,7 @@ export interface HotEntry {
 
 export async function deleteHotEntry(id: string): Promise<void> {
   if (isTauri) return tauriInvoke("delete_hot_entry", { id });
-  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -328,7 +432,7 @@ export async function getChatSession(id: string): Promise<ChatSessionLoadResult>
 
 export async function deleteChatSession(id: string): Promise<void> {
   if (isTauri) throw new Error("Chat is not yet available in the desktop app");
-  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
@@ -345,7 +449,7 @@ export async function installSkill(repo: string): Promise<string> {
 
 export async function removeSkill(name: string): Promise<void> {
   if (isTauri) return tauriInvoke("remove_skill", { name });
-  const res = await fetch(`${API_BASE}/skills/${name}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/skills/${name}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

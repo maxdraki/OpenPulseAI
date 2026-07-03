@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureVaultRepo } from "./vault-git.js";
 
 export class Vault {
   readonly root: string;
@@ -27,6 +28,9 @@ export class Vault {
     await mkdir(this.pendingDir, { recursive: true });
     await mkdir(this.coldDir, { recursive: true });
     await mkdir(this.sessionsDir, { recursive: true });
+    // Adopts (or leaves alone) a git repo rooted at vault/ so existing
+    // vaults get history on next start. Never throws — see vault-git.ts.
+    await ensureVaultRepo(this);
   }
 
   dailyLogPath(date: string): string {

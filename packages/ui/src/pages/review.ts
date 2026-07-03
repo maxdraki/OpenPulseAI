@@ -1,6 +1,13 @@
-import { listPendingUpdates, approveUpdate, rejectUpdate, type PendingUpdate } from "../lib/tauri-bridge.js";
+import { listPendingUpdates, approveUpdate, approveUpdatesBatch, rejectUpdate, regeneratePendingUpdate, ApiError, type PendingUpdate } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { renderDiffHtml } from "../lib/diff.js";
 import { log } from "../lib/logger.js";
+
+/** True when `err` is a stale-conflict 409 from the approve endpoint (see
+ *  `packages/ui/server.ts`'s `POST /api/approve-update`). */
+function isStaleConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && (err.body as { error?: string } | undefined)?.error === "stale";
+}
 
 // Note: renderMarkdown uses the `marked` library which handles HTML escaping.
 // The vault content rendered here is from our own dream pipeline, not arbitrary user input.
@@ -17,14 +24,30 @@ export async function renderReview(container: HTMLElement): Promise<void> {
   pageHeader.appendChild(h2);
   pageHeader.appendChild(subtitle);
 
+  const summaryEl = document.createElement("div");
+  summaryEl.id = "review-batch-summary";
+  summaryEl.className = "review-batch-summary";
+  summaryEl.style.display = "none";
+
   const listEl = document.createElement("div");
   listEl.id = "pending-list";
 
   container.textContent = "";
   container.appendChild(pageHeader);
+  container.appendChild(summaryEl);
   container.appendChild(listEl);
 
   await loadPending(listEl);
+}
+
+/** Shows a transient summary above the pending list (survives `loadPending`'s
+ *  re-render of `listEl`, since it lives outside it) — e.g. how many items an
+ *  "Approve All" skipped as stale. */
+function showReviewSummary(message: string): void {
+  const el = document.getElementById("review-batch-summary");
+  if (!el) return;
+  el.textContent = message;
+  el.style.display = "";
 }
 
 async function loadPending(listEl: HTMLElement): Promise<void> {
@@ -109,12 +132,36 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         approveAllBtn.addEventListener("click", async () => {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          const results = await Promise.allSettled(batchUpdates.map((u) => approveUpdate(u.id)));
-          const failed = results.filter((r) => r.status === "rejected").length;
-          if (failed) log("error", `Approved batch with ${failed} failure(s): ${batchKey}`);
-          else log("info", `Approved batch: ${batchKey}`);
-          await loadPending(listEl);
-          updateReviewBadge();
+          try {
+            // One server-side batch call so the whole action lands as a single
+            // vault-git commit listing every theme (see approve.ts's
+            // approvePendingUpdatesBatch) instead of one commit per item.
+            const results = await approveUpdatesBatch(batchUpdates.map((u) => u.id));
+            const staleCount = results.filter((r) => !r.ok && r.stale).length;
+            const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
+
+            if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
+            if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
+            if (!otherFailed && !staleCount) log("info", `Approved batch: ${batchKey}`);
+
+            await loadPending(listEl);
+            updateReviewBadge();
+
+            if (staleCount || otherFailed) {
+              const parts: string[] = [];
+              if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
+              if (otherFailed) parts.push(`${otherFailed} failed`);
+              showReviewSummary(`Approve All: ${parts.join(", ")}. Approved the rest.`);
+            }
+          } catch (e: unknown) {
+            // Request itself failed (network error, 500, etc.) — nothing was
+            // necessarily approved server-side, so re-enable the buttons
+            // rather than leaving the batch permanently stuck (M7).
+            log("error", `Approve All failed: ${batchKey}`, String(e));
+            showReviewSummary("Approve All failed — please try again.");
+            approveAllBtn.disabled = false;
+            rejectAllBtn.disabled = false;
+          }
         });
 
         rejectAllBtn.addEventListener("click", async () => {
@@ -227,6 +274,16 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   textarea.style.display = "none";
   textarea.value = update.proposedContent;
 
+  // Before/after diff view (hidden until the Diff toggle is used) — see
+  // renderDiffHtml in ../lib/diff.js. Updates with no previousContent (new
+  // pages, or legacy pre-staleness-tracking records) have nothing to diff
+  // against, so the toggle is disabled with a hint rather than silently
+  // rendering a whole-page "added" diff.
+  const hasPreviousContent = update.previousContent != null;
+  const diffContainer = document.createElement("div");
+  diffContainer.className = "pending-diff";
+  diffContainer.style.display = "none";
+
   // Actions row
   const actions = document.createElement("div");
   actions.className = "pending-actions";
@@ -250,6 +307,14 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   editBtn.className = "btn btn-secondary";
   editBtn.textContent = "Edit";
 
+  const diffBtn = document.createElement("button");
+  diffBtn.className = "btn btn-secondary";
+  diffBtn.textContent = "Diff";
+  if (!hasPreviousContent) {
+    diffBtn.disabled = true;
+    diffBtn.title = "No previous version recorded for this update — nothing to diff against";
+  }
+
   const rejectBtn = document.createElement("button");
   rejectBtn.className = "btn btn-danger";
   rejectBtn.textContent = " Reject";
@@ -268,19 +333,60 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   rejectSvg.appendChild(x2);
   rejectBtn.prepend(rejectSvg);
 
+  const regenerateBtn = document.createElement("button");
+  regenerateBtn.className = "btn btn-secondary";
+  regenerateBtn.textContent = "Regenerate";
+  regenerateBtn.style.display = "none";
+
   actions.appendChild(approveBtn);
   actions.appendChild(editBtn);
+  actions.appendChild(diffBtn);
   actions.appendChild(rejectBtn);
+  actions.appendChild(regenerateBtn);
+
+  // Stale banner — shown when a 409 approve conflict tells us the page
+  // changed since this update was proposed (see isStaleConflict above).
+  const staleBanner = document.createElement("div");
+  staleBanner.className = "pending-stale-banner";
+  staleBanner.textContent = "Stale — page changed since this was proposed";
+  staleBanner.style.display = "none";
 
   card.appendChild(header);
+  card.appendChild(staleBanner);
   card.appendChild(label);
   card.appendChild(contentPreview);
+  card.appendChild(diffContainer);
   card.appendChild(textarea);
   card.appendChild(actions);
 
-  // Edit toggle
+  function markStale(): void {
+    card.classList.add("stale");
+    staleBanner.style.display = "";
+    regenerateBtn.style.display = "";
+  }
+
+  // Edit / Diff / Proposed view toggles. Proposed (rendered markdown) is the
+  // default; Edit and Diff are mutually exclusive with each other and with
+  // Proposed, so switching to one closes the other.
   let editing = false;
+  let showingDiff = false;
+
+  function closeDiff(): void {
+    if (!showingDiff) return;
+    showingDiff = false;
+    diffContainer.style.display = "none";
+    diffBtn.textContent = "Diff";
+  }
+
+  function closeEdit(): void {
+    if (!editing) return;
+    editing = false;
+    textarea.style.display = "none";
+    editBtn.textContent = "Edit";
+  }
+
   editBtn.addEventListener("click", () => {
+    closeDiff();
     editing = !editing;
     if (editing) {
       contentPreview.style.display = "none";
@@ -294,6 +400,23 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
     }
   });
 
+  diffBtn.addEventListener("click", () => {
+    if (!hasPreviousContent) return;
+    closeEdit();
+    showingDiff = !showingDiff;
+    if (showingDiff) {
+      contentPreview.style.display = "none";
+      // safe: renderDiffHtml HTML-escapes every line before interpolating it
+      diffContainer.innerHTML = renderDiffHtml(update.previousContent ?? "", textarea.value);
+      diffContainer.style.display = "";
+      diffBtn.textContent = "Proposed";
+    } else {
+      diffContainer.style.display = "none";
+      contentPreview.style.display = "";
+      diffBtn.textContent = "Diff";
+    }
+  });
+
   // Approve
   approveBtn.addEventListener("click", async () => {
     approveBtn.classList.add("loading");
@@ -304,8 +427,34 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
       log("info", `Approved update: ${update.theme}`, edited ? "with edits" : "as-is");
       await loadPending(listEl);
       updateReviewBadge();
-    } catch (e: any) {
-      log("error", `Failed to approve: ${update.theme}`, String(e));
+    } catch (e: unknown) {
+      if (isStaleConflict(e)) {
+        log("warn", `Approve blocked — page changed since proposed: ${update.theme}`);
+        markStale();
+        approveBtn.classList.remove("loading");
+        approveBtn.disabled = false;
+      } else {
+        log("error", `Failed to approve: ${update.theme}`, String(e));
+        approveBtn.classList.remove("loading");
+        approveBtn.disabled = false;
+      }
+    }
+  });
+
+  // Regenerate — asks the server to merge this stale proposal onto the
+  // current on-disk page, then refreshes the card with the replacement.
+  regenerateBtn.addEventListener("click", async () => {
+    regenerateBtn.disabled = true;
+    regenerateBtn.classList.add("loading");
+    try {
+      await regeneratePendingUpdate(update.id);
+      log("info", `Regenerated update against current page: ${update.theme}`);
+      await loadPending(listEl);
+      updateReviewBadge();
+    } catch (e: unknown) {
+      log("error", `Failed to regenerate: ${update.theme}`, String(e));
+      regenerateBtn.disabled = false;
+      regenerateBtn.classList.remove("loading");
     }
   });
 

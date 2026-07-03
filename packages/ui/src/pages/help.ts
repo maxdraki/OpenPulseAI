@@ -32,7 +32,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     },
     {
       title: "Connect Claude Desktop",
-      body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server. Restart Claude Desktop to pick up the change.`,
+      body: `Go to Settings → Connections and click "Connect" next to Claude Desktop. This automatically adds OpenPulse as a local MCP server (stdio — Claude Desktop spawns the process itself, so it's inherently trusted; no token needed). Restart Claude Desktop to pick up the change.`,
       code: JSON.stringify({
         mcpServers: {
           openpulse: {
@@ -47,6 +47,10 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
         ["Windows", "%APPDATA%\\Claude\\claude_desktop_config.json"],
         ["Linux", "~/.config/Claude/claude_desktop_config.json"],
       ],
+    },
+    {
+      title: "Remote MCP over HTTPS (custom connector)",
+      body: `Prefer a URL-based connector (Claude Desktop's "Add custom connector" dialog) over the stdio setup above? Run: node packages/mcp-server/dist/http.js --port 3002. On first run it generates a self-signed cert and a bearer token (${vaultPath}/mcp-token, mode 0600), then prints the full connector URL with the token embedded, e.g. https://localhost:3002/mcp?token=<64 hex chars>. Paste the whole URL — including the token — into the connector dialog. Every /mcp request requires that token (CORS alone doesn't stop a local process from reaching this port). Delete the mcp-token file to rotate it.`,
     },
     {
       title: "Connect Claude Code",

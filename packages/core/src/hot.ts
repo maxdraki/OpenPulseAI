@@ -20,6 +20,18 @@ const TIMESTAMP_RE = /^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m;
 const THEME_RE = /^\*\*Theme:\*\*\s*(.+)/m;
 const SOURCE_RE = /^\*\*Source:\*\*\s*(.+)/m;
 
+/**
+ * Unambiguous entry-record delimiter. The legacy delimiter was a bare `\n---\n`
+ * line, which collides with entry bodies that legitimately contain a horizontal
+ * rule or YAML frontmatter (LLM-authored summaries do this routinely), silently
+ * fracturing one entry into multiple malformed blocks. An HTML comment marker
+ * can't collide with normal markdown content.
+ */
+export const ENTRY_MARKER = "<!-- openpulse:entry -->";
+const ENTRY_MARKER_RE = /\n<!-- openpulse:entry -->\n/;
+const LEGACY_DELIMITER_RE = /\n---\n/;
+const HEADER_RE_G = /^## \d{4}-\d{2}-\d{2}T[\d:.]+Z/gm;
+
 export function parseActivityBlock(block: string): ParsedActivityBlock | null {
   const tsMatch = block.match(TIMESTAMP_RE);
   if (!tsMatch) return null;
@@ -43,9 +55,61 @@ export function parseActivityBlock(block: string): ParsedActivityBlock | null {
   };
 }
 
+/**
+ * Splits raw hot-file content into individual entry-record strings.
+ *
+ * Strategy: split on the new unambiguous marker first. Everything from the
+ * first marker onward is guaranteed to already be marker-delimited (each
+ * post-upgrade `appendActivity` call terminates its entry with a marker), so
+ * those segments are used as-is. Only the segment *before* the first marker
+ * can contain pre-upgrade content still using the old bare `\n---\n`
+ * delimiter — that segment alone is a legacy-split *candidate*.
+ *
+ * That pre-marker segment is ambiguous on its own: it might be several
+ * concatenated legacy entries (mixed-file case), or it might just be the
+ * single marker-delimited entry that precedes the first marker and happens
+ * to contain a literal `\n---\n` in its own body (pure marker-file case). We
+ * disambiguate using the one structural fact that tells them apart: a legacy
+ * entry always starts with its own `## <timestamp>` header, so multiple
+ * concatenated legacy entries contain multiple such headers, while a single
+ * entry (marker or legacy) contains exactly one. Only legacy-split when more
+ * than one header is present in that segment.
+ *
+ * A marker-only file has an empty (or single-entry) pre-marker segment
+ * (splitting is a no-op); a legacy-only file has no marker at all, so
+ * "everything" is the pre-marker segment and gets legacy-split normally.
+ *
+ * This still cannot be done losslessly if a marker-delimited entry's own
+ * body happens to contain `\n---\n` while sharing a file with *multiple*
+ * legacy entries preceding it — that's the same inherent ambiguity the new
+ * marker exists to eliminate, and it can only be fully removed once no
+ * legacy-delimited files remain (e.g. after they're archived).
+ */
+export function splitHotFileBlocks(fileContent: string): string[] {
+  const markerIndex = fileContent.search(ENTRY_MARKER_RE);
+  if (markerIndex === -1) {
+    // No marker anywhere: the whole file is pre-upgrade content.
+    return fileContent.split(LEGACY_DELIMITER_RE);
+  }
+  const preMarker = fileContent.slice(0, markerIndex);
+  const fromFirstMarker = fileContent.slice(markerIndex);
+  const headerCount = preMarker.match(HEADER_RE_G)?.length ?? 0;
+  const legacyBlocks =
+    headerCount > 1
+      ? preMarker.split(LEGACY_DELIMITER_RE).filter((b) => b.trim())
+      : [preMarker].filter((b) => b.trim());
+  const markerBlocks = fromFirstMarker.split(ENTRY_MARKER_RE);
+  return [...legacyBlocks, ...markerBlocks];
+}
+
+/** Re-serializes entry blocks back into hot-file content using the new marker. */
+export function joinHotFileBlocks(blocks: string[]): string {
+  if (blocks.length === 0) return "";
+  return blocks.join(`\n\n${ENTRY_MARKER}\n\n`) + `\n\n${ENTRY_MARKER}\n\n`;
+}
+
 export function parseActivityBlocks(fileContent: string): ParsedActivityBlock[] {
-  return fileContent
-    .split(/\n---\n/)
+  return splitHotFileBlocks(fileContent)
     .filter((b) => b.trim())
     .map(parseActivityBlock)
     .filter((b): b is ParsedActivityBlock => b !== null);
@@ -68,7 +132,7 @@ function formatEntry(entry: ActivityEntry): string {
   const parts = [`## ${entry.timestamp}`];
   if (entry.theme) parts.push(`**Theme:** ${entry.theme}`);
   if (entry.source) parts.push(`**Source:** ${entry.source}`);
-  parts.push("", entry.log, "", "---", "");
+  parts.push("", entry.log, "", ENTRY_MARKER, "");
   return parts.join("\n");
 }
 

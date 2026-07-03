@@ -263,6 +263,45 @@ async function saveStateAtomic(vaultRoot: string, state: OrchestratorState): Pro
   }
 }
 
+/**
+ * Scoped read-modify-write for a single top-level section of OrchestratorState.
+ *
+ * Short-lived CLI subprocesses (compact-cli, schema-evolve-cli) historically
+ * loaded the *whole* state at startup, mutated their one sub-object, and saved
+ * the whole state back at the end of a run that can take minutes (LLM calls
+ * per theme). Meanwhile the long-running orchestrator process keeps writing
+ * its own sections (collector lastRun/nextRun, heartbeat, ...) the entire
+ * time. A whole-object save from the CLI at the end clobbers any orchestrator
+ * writes that happened in between with the CLI's stale in-memory copy.
+ *
+ * This helper re-reads the state file immediately before writing — shrinking
+ * the race window from "the CLI's entire run" down to "between this read and
+ * this write" — and replaces ONLY the given section, so it can never stomp on
+ * sections it didn't touch.
+ *
+ * Known limitation: this does not eliminate a race between two writers that
+ * both update the SAME section concurrently (e.g. two CLI invocations racing
+ * on `compactionPipeline`, or the orchestrator toggling `cp.running` at the
+ * same instant a CLI's updater is composing its own copy of the section) —
+ * whichever write wins last still replaces the whole section, so the loser's
+ * change to that section is lost. Closing that residual window needs the CLI
+ * to route state mutations through an orchestrator RPC instead of touching
+ * the state file directly.
+ */
+export function updateStateSection<K extends keyof OrchestratorState>(
+  vaultRoot: string,
+  key: K,
+  updater: (section: OrchestratorState[K]) => OrchestratorState[K]
+): Promise<void> {
+  const next = saveQueue.then(async () => {
+    const fresh = await loadState(vaultRoot);
+    fresh[key] = updater(fresh[key]);
+    await saveStateAtomic(vaultRoot, fresh);
+  });
+  saveQueue = next.catch(() => {});
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Orchestrator class
 // ---------------------------------------------------------------------------
@@ -561,6 +600,10 @@ export class Orchestrator {
     const allRunSinceDream = enabledCollectors.every((n) => {
       const col = this.state.collectors[n];
       if (!col?.lastRun) return false;
+      // A failed run still advances lastRun (so retries/backoff have a timestamp to
+      // reason about) but must NOT satisfy the barrier — Dream should wait for a
+      // successful run of every collector, not merely "attempted since last dream".
+      if (col.lastResult !== "success") return false;
       return new Date(col.lastRun).getTime() > dreamLastRun;
     });
 

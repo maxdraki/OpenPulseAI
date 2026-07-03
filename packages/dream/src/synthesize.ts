@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFile, appendFile, mkdir, readFile } from "node:fs/promises";
+import { writeFile, appendFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type Vault,
@@ -14,6 +14,7 @@ import {
   normaliseSkill,
   stripCodeFences,
   vaultLog,
+  checkStaleness,
 } from "@openpulse/core";
 import { loadSchema } from "./schema.js";
 import { entryId, extractSources } from "./provenance.js";
@@ -26,6 +27,19 @@ async function ensureFactsDir(vault: Vault): Promise<string> {
 }
 
 const VALID_STATUS = new Set<ProjectStatus>(PROJECT_STATUSES);
+
+/**
+ * Interim ceiling on whole-page synthesis output while pages are still
+ * regenerated in full on every Dream run (see the truncation guard below).
+ * A later phase replaces whole-page regeneration with append/patch
+ * synthesis, at which point this cap — and the guard around it — goes away.
+ */
+export const MAX_SYNTHESIS_OUTPUT_TOKENS = 16384;
+
+/** Below this fraction of the existing page's length, a proposed update is
+ *  treated as suspect shrinkage rather than legitimate editing (see the
+ *  shrinkage guard below). */
+export const SHRINKAGE_THRESHOLD = 0.8;
 
 /**
  * Parse the optional <meta>status: X\nreason: Y</meta> block emitted by the
@@ -85,12 +99,19 @@ async function readFactsText(factsDir: string, theme: string): Promise<string> {
   }
 }
 
+export interface SynthesizeOptions {
+  /** Called when a theme's synthesis fails (after the provider's own retries
+   *  are exhausted) so the caller can decide which entries stay unprocessed. */
+  onThemeFailure?: (theme: string, error: unknown) => void;
+}
+
 export async function synthesizeToPending(
   vault: Vault,
   classified: ClassificationResult[],
   provider: LlmProvider,
   model: string,
-  proposedTypes?: Record<string, ThemeType>
+  proposedTypes?: Record<string, ThemeType>,
+  opts?: SynthesizeOptions
 ): Promise<PendingUpdate[]> {
   const batchId = new Date().toISOString();
 
@@ -118,10 +139,46 @@ export async function synthesizeToPending(
   // Load backlinks once for the whole run (shared by all themes in this batch)
   const backlinks = await buildBacklinks(vault);
 
+  // Fold at source: if a theme already has a pending, non-stale, dream-synthesis
+  // pending update sitting in the review queue, synthesize against ITS
+  // proposedContent instead of the (older) on-disk page, and replace it —
+  // rather than stacking a second pending for the same theme. Only dream-kind
+  // pendings are eligible (no lintFix/compaction/schema/queryback sub-kind);
+  // those are left alone and synthesized against the on-disk page as before,
+  // relying on approval-time staleness (checkStaleness in the UI server) to
+  // protect ordering between them and a fresh dream proposal.
+  const foldablePendings = await loadFoldableDreamPendings(vault, themesByName);
+
   const pending: PendingUpdate[] = [];
 
   for (const [theme, items] of byTheme) {
+    try {
+      await synthesizeOneTheme(theme, items);
+    } catch (err) {
+      // Per-theme isolation: one theme failing (after the provider's own
+      // retries are exhausted) must not abort the rest of the batch. The
+      // caller (runDreamPipeline) uses onThemeFailure to keep this theme's
+      // entries out of the processed-entry ledger so they're retried next run.
+      console.error(`[dream] Synthesis failed for theme "${theme}" — skipping, entries deferred:`, err);
+      await vaultLog("error", `Synthesis failed for theme "${theme}", entries deferred for retry`, String(err));
+      opts?.onThemeFailure?.(theme, err);
+    }
+  }
+
+  return pending;
+
+  async function synthesizeOneTheme(theme: string, items: ClassificationResult[]): Promise<void> {
     const existing = themesByName.get(theme) ?? null;
+
+    // Fold at source: when a non-stale dream-kind pending for this theme is
+    // already sitting in the review queue, synthesize against its
+    // proposedContent (the most up-to-date proposal) instead of the on-disk
+    // page, and replace it below. `existing` (the on-disk doc) still drives
+    // page metadata (type/sources/related/skills/status) and — critically —
+    // the resulting update's `previousContent`, which must remain the actual
+    // on-disk content regardless of folding.
+    const folded = foldablePendings.get(theme);
+    const synthesisBaseContent = folded?.proposedContent ?? existing?.content;
 
     const pageType: ThemeType = existing?.type ?? proposedTypes?.[theme] ?? "project";
     const template = schema[pageType];
@@ -134,8 +191,8 @@ export async function synthesizeToPending(
       .map((e) => `<entry timestamp="${e.timestamp}" source="${e.source ?? "unknown"}">\n${e.log}\n</entry>`)
       .join("\n");
 
-    const existingSection = existing?.content
-      ? `Current content of "${theme}":\n${existing.content}\n\n`
+    const existingSection = synthesisBaseContent
+      ? `Current content of "${theme}":\n${synthesisBaseContent}\n\n`
       : "";
 
     const otherThemes = allThemeNames.filter((t) => t !== theme);
@@ -160,8 +217,9 @@ export async function synthesizeToPending(
       sharingThemes.length > 0 ? `Themes that share sources with this one: ${sharingThemes.map((t) => `[[${t}]]`).join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
-    const existingTokenEstimate = Math.ceil((existing?.content ?? "").length / 4);
-    const maxTokens = Math.min(4096, Math.max(1024, existingTokenEstimate + 1024));
+    const existingTokenEstimate = Math.ceil((synthesisBaseContent ?? "").length / 4);
+    const headroom = Math.max(1024, Math.ceil(existingTokenEstimate * 0.25));
+    const maxTokens = Math.min(MAX_SYNTHESIS_OUTPUT_TOKENS, existingTokenEstimate + headroom);
 
     const provenanceIds = newEntries.map((e) => entryId(e.timestamp, e.source));
     const provenanceBlock = `After every factual claim, add a ^[src:entry-id] footnote. Available entry IDs:\n${newEntries.map((e, idx) => `- ${provenanceIds[idx]} (${e.timestamp.slice(0, 10)})`).join("\n")}`;
@@ -284,6 +342,35 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       proposedContent = stripMetaBlock(proposedContent);
     }
 
+    // Truncation guard (interim, until whole-page regeneration is replaced by
+    // append/patch synthesis — see MAX_SYNTHESIS_OUTPUT_TOKENS above). Whole-page
+    // synthesis regenerates the ENTIRE page in one completion; if that completion
+    // hit the provider's output-token limit, the proposed content is a truncated
+    // fragment, not a complete page. Never emit that as a pending update — fail
+    // this theme through the same per-theme isolation path as a synthesis error
+    // so its entries stay unprocessed in the ledger and are retried next run.
+    if (provider.wasLastCompletionTruncated?.() === true) {
+      const msg = `Synthesis for theme "${theme}" was truncated by the provider's output-token limit — refusing to emit a lossy pending update.`;
+      console.warn(`[dream] ${msg}`);
+      await vaultLog("warn", msg);
+      throw new Error(msg);
+    }
+
+    // Shrinkage guard: even when truncation can't be confirmed (provider doesn't
+    // report a stop/finish reason), a proposed page that's materially shorter
+    // than the existing one is suspect — whole-page synthesis is instructed to
+    // "preserve all historical entries", so a big drop in length usually means
+    // content was silently dropped rather than genuinely edited down. This path
+    // is never reached by the compaction pipeline (compact-cli.ts constructs its
+    // PendingUpdates directly, without going through synthesizeToPending).
+    const existingLength = (synthesisBaseContent ?? "").length;
+    if (existingLength > 0 && proposedContent.length < existingLength * SHRINKAGE_THRESHOLD) {
+      const msg = `proposed update would shrink page ${theme} from ${existingLength} to ${proposedContent.length} chars; refusing`;
+      console.warn(`[dream] ${msg}`);
+      await vaultLog("warn", msg);
+      throw new Error(msg);
+    }
+
     // Roll up ^[src:] markers and merge with existing sources
     const rolledUpSources = extractSources(proposedContent);
     if (rolledUpSources.length === 0) {
@@ -316,8 +403,141 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       "utf-8"
     );
 
+    // Fold at source: the new pending replaces the folded one — remove its
+    // file so the theme never ends up with two stacked proposals.
+    if (folded) {
+      await rm(join(vault.pendingDir, `${folded.id}.json`)).catch(() => {
+        // Best-effort: if it's already gone (e.g. concurrently approved/
+        // rejected), there's nothing left to clean up.
+      });
+    }
+
     pending.push(update);
   }
+}
 
-  return pending;
+/**
+ * Regenerate a stale pending update against the CURRENT on-disk page.
+ *
+ * Used by the Review UI's "Regenerate" action (see `packages/ui/server.ts`'s
+ * `POST /api/pending/:id/regenerate`) when a 409-stale approve tells the user
+ * the page changed since the proposal was created. Rather than re-running
+ * full classification (which needs the original hot entries, not always
+ * cheaply available at approval time), this asks the LLM to merge the stale
+ * proposal's NEW information onto the current page — reusing the same
+ * anti-hallucination framing and truncation/shrinkage guards as whole-page
+ * synthesis (see `synthesizeOneTheme` above). Refuses (throws) rather than
+ * emit a lossy merge, exactly like the main synthesis path.
+ *
+ * Writes the replacement pending file and removes the stale one so the
+ * theme never carries two proposals — mirrors the "fold at source" behavior
+ * in `synthesizeToPending`, just triggered from the approval side instead of
+ * a fresh Dream run.
+ */
+export async function regenerateStaleUpdate(
+  vault: Vault,
+  staleUpdate: PendingUpdate,
+  currentContent: string | null,
+  provider: LlmProvider,
+  model: string
+): Promise<PendingUpdate> {
+  const current = currentContent ?? "";
+  const existingTokenEstimate = Math.ceil(current.length / 4);
+  const headroom = Math.max(1024, Math.ceil(existingTokenEstimate * 0.25));
+  const maxTokens = Math.min(MAX_SYNTHESIS_OUTPUT_TOKENS, existingTokenEstimate + headroom);
+
+  const merged = await provider.complete({
+    model,
+    prompt: `You are reconciling a stale proposed update for the wiki page "${staleUpdate.theme}". The page changed after this proposal was drafted, so it can no longer be applied as-is.
+
+Current content of "${staleUpdate.theme}" (the up-to-date page — this is the source of truth):
+${current || "(page does not exist yet)"}
+
+Stale proposed update (drafted against an older version of this page — may contain information not yet reflected above):
+${staleUpdate.proposedContent}
+
+Merge the two: keep everything from the current content, and add whatever NEW information the stale proposal contributed that isn't already present. Do not remove or contradict anything already in the current content. Do not invent information that appears in neither version.
+
+Return ONLY the merged Markdown content, no fences or explanations.`,
+    systemPrompt: `You are a work journal assistant reconciling two versions of the same wiki page. NEVER invent, fabricate, or drop information present in either version. If you are unsure whether something should be kept, keep it.`,
+    maxTokens,
+    temperature: 0.1,
+  });
+
+  if (provider.wasLastCompletionTruncated?.() === true) {
+    const msg = `Regeneration for theme "${staleUpdate.theme}" was truncated by the provider's output-token limit — refusing to emit a lossy merge.`;
+    console.warn(`[dream] ${msg}`);
+    await vaultLog("warn", msg);
+    throw new Error(msg);
+  }
+
+  if (current.length > 0 && merged.length < current.length * SHRINKAGE_THRESHOLD) {
+    const msg = `Regenerated update for theme "${staleUpdate.theme}" would shrink the page from ${current.length} to ${merged.length} chars; refusing`;
+    console.warn(`[dream] ${msg}`);
+    await vaultLog("warn", msg);
+    throw new Error(msg);
+  }
+
+  const rolledUpSources = extractSources(merged);
+  const mergedSources = [...new Set([...(staleUpdate.sources ?? []), ...rolledUpSources])];
+
+  const replacement: PendingUpdate = {
+    ...staleUpdate,
+    id: randomUUID(),
+    proposedContent: merged,
+    previousContent: currentContent,
+    createdAt: new Date().toISOString(),
+    status: "pending",
+    sources: mergedSources.length > 0 ? mergedSources : undefined,
+  };
+
+  await writeFile(
+    join(vault.pendingDir, `${replacement.id}.json`),
+    JSON.stringify(replacement, null, 2),
+    "utf-8"
+  );
+  await rm(join(vault.pendingDir, `${staleUpdate.id}.json`)).catch(() => {
+    // Best-effort: fine if it's already gone.
+  });
+
+  return replacement;
+}
+
+/**
+ * Scan `vault/warm/_pending/` for pending, dream-synthesis-kind updates (no
+ * lintFix/compactionType/schemaEvolution/querybackSource sub-kind) that are
+ * still fresh relative to the on-disk page — i.e. not already stale per
+ * `checkStaleness`. Keyed by theme; used by `synthesizeToPending` to fold a
+ * fresh synthesis onto the latest un-approved proposal instead of stacking a
+ * second pending for the same theme (see module docs above).
+ */
+async function loadFoldableDreamPendings(
+  vault: Vault,
+  themesByName: Map<string, ThemeDocument>
+): Promise<Map<string, PendingUpdate>> {
+  const result = new Map<string, PendingUpdate>();
+  let files: string[];
+  try {
+    files = await readdir(vault.pendingDir);
+  } catch {
+    return result;
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    let update: PendingUpdate;
+    try {
+      const raw = await readFile(join(vault.pendingDir, file), "utf-8");
+      update = JSON.parse(raw) as PendingUpdate;
+    } catch {
+      continue; // malformed/unreadable — ignore
+    }
+    if (update.status !== "pending") continue;
+    if (update.lintFix || update.compactionType || update.schemaEvolution || update.querybackSource) continue;
+    if (result.has(update.theme)) continue; // one per theme is expected; first wins
+    const currentContent = themesByName.get(update.theme)?.content ?? null;
+    const { stale } = checkStaleness(update.previousContent, currentContent);
+    if (stale) continue;
+    result.set(update.theme, update);
+  }
+  return result;
 }
