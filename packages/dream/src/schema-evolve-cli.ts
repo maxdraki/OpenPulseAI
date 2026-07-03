@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   Vault, loadConfig, createProvider, initLogger, vaultLog, listThemes, readTheme, stripCodeFences,
+  loadState,
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeType } from "@openpulse/core";
 
@@ -109,11 +110,15 @@ If no changes warranted, proposed_schema_content must be null.`;
   return true;
 }
 
+// Read-only: this CLI never writes orchestrator-state.json (schemaEvolutionPipeline.lastRun
+// is recorded by the orchestrator process itself, in-process, after this subprocess exits —
+// see Orchestrator.runSchemaEvolve in orchestrator.ts), so there's no whole-object-clobbering
+// write race here to guard against, only a stale read if state changes after this check.
+// Uses the shared typed loadState (with defaults merging) instead of ad-hoc JSON.parse.
 async function alreadyRanThisMonth(vaultRoot: string): Promise<boolean> {
-  const path = join(vaultRoot, "vault", "orchestrator-state.json");
   try {
-    const state = JSON.parse(await readFile(path, "utf-8"));
-    const last = state?.schemaEvolutionPipeline?.lastRun;
+    const state = await loadState(vaultRoot);
+    const last = state.schemaEvolutionPipeline.lastRun;
     if (!last) return false;
     const now = new Date();
     const lastDate = new Date(last);

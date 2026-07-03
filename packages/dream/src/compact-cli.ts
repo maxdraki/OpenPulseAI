@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
   Vault, loadConfig, createProvider, initLogger, vaultLog,
   listThemes, readTheme, stripCodeFences,
-  loadState, saveState,
+  loadState, updateStateSection,
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeDocument, ThemeType } from "@openpulse/core";
 
@@ -158,6 +158,13 @@ export async function compactTheme(vault: Vault, theme: string, provider: LlmPro
 
 // State I/O is delegated to the shared atomic helpers in @openpulse/core so
 // the subprocess cannot crash the orchestrator with a tmp-file rename race.
+// The final write uses updateStateSection (scoped read-modify-write, re-reads
+// immediately before writing) rather than a whole-object saveState, since this
+// CLI's run can take minutes (one LLM call per theme) — long enough for the
+// orchestrator process to have advanced collector/dream/lint state several
+// times in the meantime. A whole-object save at the end would silently
+// clobber all of that with this process's stale in-memory copy. See the
+// residual-race note on updateStateSection's doc comment.
 
 async function main() {
   initLogger(VAULT_ROOT);
@@ -207,9 +214,11 @@ async function main() {
     }
   }
 
-  state.compactionPipeline.perThemeLastCompacted = perThemeLastCompacted;
-  state.compactionPipeline.sizeQueue = [];
-  await saveState(VAULT_ROOT, state);
+  await updateStateSection(VAULT_ROOT, "compactionPipeline", (cp) => ({
+    ...cp,
+    perThemeLastCompacted,
+    sizeQueue: [],
+  }));
 
   await vaultLog("info", `[compact] Done — ${compacted} pending update(s) created`);
 }

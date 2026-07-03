@@ -9,6 +9,7 @@ import {
   defaultState,
   loadState,
   saveState,
+  updateStateSection,
   Orchestrator,
   type OrchestratorCallbacks,
 } from "../src/orchestrator.js";
@@ -214,5 +215,57 @@ describe("Dream barrier — failed collectors must not count as 'ran'", () => {
     expect(statusAfterSuccess.collectors["collector-b"].lastResult).toBe("success");
 
     await orch.stop();
+  });
+});
+
+describe("updateStateSection — scoped read-modify-write", () => {
+  it("survives a concurrent whole-object write to a different section", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-section-"));
+
+    // Seed initial state with one collector.
+    const initial = defaultState();
+    initial.collectors["github-activity"] = {
+      enabled: true,
+      schedules: [{ time: "09:00", days: ["mon"] }],
+      lastRun: null,
+      lastResult: "never",
+      nextRun: null,
+    };
+    await saveState(tmp, initial);
+
+    // Simulate a CLI (e.g. compact-cli) that read state at the start of a
+    // long-running job...
+    const cliSnapshot = await loadState(tmp);
+
+    // ...while it's running, the orchestrator process writes fresh collector
+    // state (a real run completing) — a whole-object write, just like the
+    // orchestrator's own saveState calls.
+    const collectorUpdate = await loadState(tmp);
+    collectorUpdate.collectors["github-activity"] = {
+      ...collectorUpdate.collectors["github-activity"],
+      lastRun: "2026-04-20T12:00:00.000Z",
+      lastResult: "success",
+    };
+    await saveState(tmp, collectorUpdate);
+
+    // The CLI now finishes and writes back ONLY its own section, using its
+    // stale `cliSnapshot` as the updater's starting point for that section.
+    await updateStateSection(tmp, "compactionPipeline", (cp) => ({
+      ...cp,
+      perThemeLastCompacted: { "project-x": "2026-04-20T12:05:00.000Z" },
+      sizeQueue: [],
+    }));
+
+    const final = await loadState(tmp);
+    // The concurrent collector update must survive — updateStateSection must
+    // NOT have clobbered it with the CLI's stale (pre-update) snapshot.
+    expect(final.collectors["github-activity"].lastRun).toBe("2026-04-20T12:00:00.000Z");
+    expect(final.collectors["github-activity"].lastResult).toBe("success");
+    // And the CLI's own section update took effect.
+    expect(final.compactionPipeline.perThemeLastCompacted).toEqual({
+      "project-x": "2026-04-20T12:05:00.000Z",
+    });
+
+    void cliSnapshot; // documents what the CLI would have held onto pre-fix
   });
 });
