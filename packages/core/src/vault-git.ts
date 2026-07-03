@@ -27,7 +27,18 @@ const execFileAsync = promisify(execFile);
  *  or spawning a process again — set the first time `git` itself turns out
  *  to be missing (ENOENT). */
 let gitUnavailable = false;
-let warnedUnavailable = false;
+
+/** The one message that latches permanently: once `git` itself is confirmed
+ *  missing, `gitUnavailable` already short-circuits every subsequent call, so
+ *  repeating this exact warning would be pure noise. */
+const GIT_MISSING_MESSAGE = "git binary not found — vault history disabled for this process";
+
+/** Distinct warning messages already emitted this process. Deliberately
+ *  keyed per-message (not a single global flag, see M3): a transient failure
+ *  in one operation (e.g. one bad `git commit`) must not permanently silence
+ *  warnings about a DIFFERENT kind of failure (e.g. `git add`) for the rest
+ *  of the process — only repeats of the *same* message are deduped. */
+const warnedMessages = new Set<string>();
 
 /** Vault dirs (by resolved `<root>/vault` path) already confirmed to have a
  *  usable git repo — avoids re-running `rev-parse`/`show-toplevel` on every
@@ -35,8 +46,8 @@ let warnedUnavailable = false;
 const ensuredRoots = new Set<string>();
 
 async function warnOnce(message: string, detail?: string): Promise<void> {
-  if (warnedUnavailable) return;
-  warnedUnavailable = true;
+  if (warnedMessages.has(message)) return;
+  warnedMessages.add(message);
   console.warn(`[vault-git] ${message}${detail ? `: ${detail}` : ""}`);
   try {
     await vaultLog("warn", `[vault-git] ${message}`, detail);
@@ -67,7 +78,7 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult | null> {
     const err = e as { code?: number | string; stdout?: string; stderr?: string; message?: string };
     if (err?.code === "ENOENT") {
       gitUnavailable = true;
-      await warnOnce("git binary not found — vault history disabled for this process");
+      await warnOnce(GIT_MISSING_MESSAGE);
       return null;
     }
     return {
@@ -90,7 +101,13 @@ async function tryRealpath(path: string): Promise<string> {
   }
 }
 
-const VAULT_GITIGNORE = ["logs/", ".dream.lock", "hot/.processed.json", "*.tmp", ""].join("\n");
+// `orchestrator-state.json` gets a heartbeat write every ~60s (see
+// orchestrator.ts's `saveState`) plus its uniquely-named `.tmp` siblings
+// (`orchestrator-state.json.<pid>.<random>.tmp`, already covered by the
+// `*.tmp` pattern below) — without ignoring it, every heartbeat would pollute
+// the vault's commit history (M2). It has no legacy `.prev` backup file (that
+// 3-step dance was dropped — see orchestrator.ts's `saveState` docstring).
+const VAULT_GITIGNORE = ["logs/", ".dream.lock", "hot/.processed.json", "orchestrator-state.json", "*.tmp", ""].join("\n");
 
 /**
  * Adopts the vault directory as a self-contained git repo, if it isn't one

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,5 +47,29 @@ describe("vault-git — graceful degradation when git is unavailable", () => {
 
     await ensureVaultRepo(vault);
     await expect(commitVault(vault, "should be a silent no-op")).resolves.toBeUndefined();
+  });
+
+  it("warns only once for the git-missing (ENOENT) condition even across many calls (M3)", async () => {
+    const vault = new Vault(tempDir);
+    await vault.init();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await ensureVaultRepo(vault);
+      await commitVault(vault, "first");
+      await commitVault(vault, "second");
+      await commitVault(vault, "third");
+
+      // The module-level latch is per-process, not per-test — an earlier
+      // test in this same file may already have triggered (and consumed) the
+      // one-time warning, so this test's own window can legitimately see
+      // zero. What must never happen is MORE than one across the many calls
+      // made here.
+      const gitMissingWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("git binary not found")
+      );
+      expect(gitMissingWarnings.length).toBeLessThanOrEqual(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

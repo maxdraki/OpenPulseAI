@@ -63,6 +63,10 @@ describe("vault-git", () => {
     expect(gitignore).toContain("logs/");
     expect(gitignore).toContain(".dream.lock");
     expect(gitignore).toContain("hot/.processed.json");
+    // M2: orchestrator heartbeat state (+ its *.tmp siblings, already covered
+    // by the "*.tmp" pattern) must not pollute vault commit history.
+    expect(gitignore).toContain("orchestrator-state.json");
+    expect(gitignore).toContain("*.tmp");
   });
 
   it("is idempotent — calling ensureVaultRepo twice does not error or duplicate init", async () => {
