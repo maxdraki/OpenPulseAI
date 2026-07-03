@@ -997,6 +997,30 @@ a.wiki-link:hover {
   line-height: 1.55;
 }
 
+/* ---- Themes search box ---- */
+.themes-search-box {
+  margin-bottom: 1rem;
+}
+
+.themes-search-input {
+  max-width: 420px;
+}
+
+.theme-search-result {
+  cursor: pointer;
+}
+
+.theme-search-result:hover {
+  border-color: var(--accent);
+}
+
+.theme-search-snippet {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  max-height: none;
+  overflow: visible;
+}
+
 /* ---- Warm theme cards ---- */
 .theme-card {
   background: var(--bg-surface);

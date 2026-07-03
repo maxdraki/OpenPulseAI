@@ -10,6 +10,10 @@ export class Vault {
   readonly pendingDir: string;
   readonly coldDir: string;
   readonly sessionsDir: string;
+  /** Disposable SQLite FTS5 search index — never git-tracked (see
+   *  `VAULT_GITIGNORE` in vault-git.ts) and safe to delete any time; it is
+   *  rebuilt from the warm themes on demand (see `search/index-db.ts`). */
+  readonly searchIndexPath: string;
 
   constructor(root: string) {
     this.root = root;
@@ -19,6 +23,7 @@ export class Vault {
     this.pendingDir = join(root, "vault", "warm", "_pending");
     this.coldDir = join(root, "vault", "cold");
     this.sessionsDir = join(root, "vault", "sessions");
+    this.searchIndexPath = join(root, "vault", ".search-index.sqlite");
   }
 
   async init(): Promise<void> {

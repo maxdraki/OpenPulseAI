@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
 import type { ChatSession, LlmProvider } from "@openpulse/core";
-import { handleChatWithPulse } from "../src/tools/chat-with-pulse.js";
+import { handleChatWithPulse, assembleChatContext } from "../src/tools/chat-with-pulse.js";
 
 function mockProvider(response: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(response) };
@@ -219,6 +219,31 @@ describe("chat_with_pulse tool", () => {
     expect(pending.length).toBe(0);
   });
 
+  it("dedups a chunk that matches multiple keywords instead of duplicating its section", async () => {
+    // Single chunk (one "## Current Status" section) that contains both
+    // "deploy" and "release" — a two-keyword query fans out into two
+    // searchIndex calls, both of which hit this SAME chunk. FTS5's
+    // snippet() highlights whichever term matched, so the two hits render
+    // different snippet strings even though it's the same underlying
+    // chunk (same contentHash). A second, unrelated section proves that a
+    // false "2 distinct hits" reading doesn't trigger the full-theme
+    // promotion (MULTI_HIT_THRESHOLD) off this single chunk.
+    await writeTheme(
+      vault,
+      "widgets-status",
+      "## Current Status\n\nWe deploy every gizmo through an automated pipeline; the gizmo notes and deploy checklist both live here.\n\n## Other Notes\n\nCompletely unrelated notes about weather and snacks.",
+    );
+
+    const result = await assembleChatContext(vault, "deploy gizmo");
+
+    const headingOccurrences = (result.context.match(/### Current Status/g) ?? []).length;
+    expect(headingOccurrences).toBe(1);
+
+    // Full-theme promotion must not have fired off a false multi-hit count —
+    // the unrelated section's content should not have been pulled in.
+    expect(result.context).not.toContain("weather and snacks");
+  });
+
   it("uses index.md to find relevant themes when available", async () => {
     // Write a second theme and an index.md
     await writeTheme(vault, "hiring", "Hiring pipeline is active. 5 candidates in review.");
@@ -232,5 +257,28 @@ describe("chat_with_pulse tool", () => {
     const callArgs = (provider.complete as any).mock.calls[0][0];
     // Should load hiring theme via index lookup, not auth
     expect(callArgs.systemPrompt).toContain("Hiring pipeline");
+  });
+
+  it("caps the index.md section itself when it alone exceeds the context budget (M4)", async () => {
+    // A huge index.md, far bigger than CONTEXT_CHAR_CAP (~24k chars) on its own.
+    const hugeIndex = "x".repeat(30_000);
+    await writeFile(join(vault.warmDir, "index.md"), hugeIndex, "utf-8");
+
+    const result = await assembleChatContext(vault, "zzz-no-match-query");
+
+    // Never throws, never returns an uncapped multi-tens-of-KB context.
+    expect(result.context.length).toBeLessThanOrEqual(24_000 + "...".length);
+  });
+
+  it("counts the section joiners toward the context budget (M4)", async () => {
+    // Several themes, each individually small, so the only way to blow the
+    // cap is for the joiners between sections to go uncounted.
+    for (let i = 0; i < 5; i++) {
+      await writeTheme(vault, `theme-${i}`, `## Widgets ${i}\n\nNotes about widgets batch ${i}.`);
+    }
+
+    const result = await assembleChatContext(vault, "widgets");
+
+    expect(result.context.length).toBeLessThanOrEqual(24_000);
   });
 });

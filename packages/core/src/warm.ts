@@ -84,45 +84,53 @@ function asStringArray(x: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+/**
+ * Splits a raw warm theme markdown file into its parsed YAML frontmatter
+ * block (if any) and the body that follows. Shared by `parseThemeFile` and
+ * the search chunker (`search/chunker.ts`) so there is exactly one place
+ * that understands the on-disk frontmatter format.
+ */
+export function parseFrontmatterBlock(raw: string): {
+  frontmatter: Record<string, unknown>;
+  body: string;
+} {
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fmMatch) {
+    return { frontmatter: {}, body: raw.trim() };
+  }
+
+  let frontmatter: Record<string, unknown> = {};
+  try {
+    const parsed = parseYaml(fmMatch[1]);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      frontmatter = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Malformed frontmatter — fall through with defaults, don't throw.
+  }
+
+  return { frontmatter, body: raw.slice(fmMatch[0].length).trim() };
+}
+
 function parseThemeFile(
   theme: string,
   path: string,
   raw: string
 ): ThemeDocument {
-  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n/);
+  const { frontmatter: fm, body: content } = parseFrontmatterBlock(raw);
 
-  let lastUpdated = new Date().toISOString();
+  const lastUpdated = asString(fm.lastUpdated) ?? new Date().toISOString();
   let type: ThemeType | undefined;
-  let sources: string[] | undefined;
-  let related: string[] | undefined;
-  let created: string | undefined;
-  let skills: string[] | undefined;
+  const typeVal = asString(fm.type);
+  if (typeVal && VALID_THEME_TYPES.has(typeVal)) type = typeVal as ThemeType;
+  const created = asString(fm.created);
+  const sources = asStringArray(fm.sources);
+  const related = asStringArray(fm.related);
+  const skills = asStringArray(fm.skills);
   let status: ProjectStatus | undefined;
-  let statusReason: string | undefined;
+  const statusVal = asString(fm.status);
+  if (statusVal && VALID_PROJECT_STATUSES.has(statusVal as ProjectStatus)) status = statusVal as ProjectStatus;
+  const statusReason = asString(fm.statusReason);
 
-  if (fmMatch) {
-    let fm: Record<string, unknown> = {};
-    try {
-      const parsed = parseYaml(fmMatch[1]);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        fm = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Malformed frontmatter — fall through with defaults, don't throw.
-    }
-
-    lastUpdated = asString(fm.lastUpdated) ?? lastUpdated;
-    const typeVal = asString(fm.type);
-    if (typeVal && VALID_THEME_TYPES.has(typeVal)) type = typeVal as ThemeType;
-    created = asString(fm.created);
-    sources = asStringArray(fm.sources);
-    related = asStringArray(fm.related);
-    skills = asStringArray(fm.skills);
-    const statusVal = asString(fm.status);
-    if (statusVal && VALID_PROJECT_STATUSES.has(statusVal as ProjectStatus)) status = statusVal as ProjectStatus;
-    statusReason = asString(fm.statusReason);
-  }
-
-  const content = fmMatch ? raw.slice(fmMatch[0].length).trim() : raw.trim();
   return { theme, path, content, lastUpdated, type, sources, related, created, skills, status, statusReason };
 }

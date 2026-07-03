@@ -16,11 +16,21 @@ mkdir -p dist
 
 echo "==> Bundling $PACKAGE with esbuild..."
 
+# @huggingface/transformers (local embeddings — see
+# packages/core/src/search/embeddings.ts) is only ever reached via a lazy
+# `import()` behind a try/catch, but esbuild still tries to statically
+# bundle it, which drags in onnxruntime-node's native platform binaries
+# (.node files) esbuild can't load and fails the whole bundle. Marking it
+# external keeps the bundle buildable; at runtime the dynamic import will
+# simply fail to resolve inside a SEA binary (module not on disk next to
+# it), which is exactly the "embeddings unavailable, degrade to FTS-only"
+# path embeddings.ts already handles.
 npx esbuild "$ENTRY" \
   --bundle \
   --platform=node \
   --target=node20 \
   --format=cjs \
+  --external:@huggingface/transformers \
   --outfile="$OUT.cjs"
 
 echo "    Bundle: $OUT.cjs ($(du -h "$OUT.cjs" | cut -f1))"

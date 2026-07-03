@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Vault, writeTheme } from "../../core/dist/index.js";
+import { Vault, writeTheme, searchIndex, rebuildIndex } from "../../core/dist/index.js";
 import type { PendingUpdate, LlmProvider } from "../../core/dist/index.js";
 import {
   gateOnStaleness,
@@ -341,6 +341,86 @@ describe("approvePendingUpdate", () => {
 
     const after = await gitLog(vault);
     expect(after.length).toBe(before.length);
+  });
+
+  it("is searchable immediately after approve — the search index is updated in the same call", async () => {
+    await writeTheme(vault, "project-zeta", "## Current Status\n\nZeta original.");
+    await rebuildIndex(vault); // seed the index with the pre-approve content
+
+    const update = basePending({
+      id: "index-fresh-id",
+      theme: "project-zeta",
+      proposedContent: "## Current Status\n\nZeta now mentions a brand new gizmoquartz widget.",
+      previousContent: "## Current Status\n\nZeta original.",
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "index-fresh-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    // No manual rebuild in between — approve itself must have refreshed the index.
+    const results = await searchIndex(vault, "gizmoquartz");
+    expect(results.some((r) => r.theme === "project-zeta")).toBe(true);
+  });
+
+  it("removes a merged/deleted theme's chunks from the index and re-indexes the canonical theme", async () => {
+    await writeTheme(vault, "project-eta-src", "## Current Status\n\nEta source has a uniquefrobnitz marker.");
+    await writeTheme(vault, "project-eta-dst", "## Current Status\n\nEta destination content.");
+    await rebuildIndex(vault);
+
+    const update = basePending({
+      id: "merge-index-id",
+      theme: "project-eta-src",
+      lintFix: "merge",
+      related: ["project-eta-dst"],
+      previousContent: null,
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "merge-index-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    // The source theme is gone — searching its distinctive content should no
+    // longer surface "project-eta-src" (its chunks moved into the canonical
+    // theme's content, which mergeThemes already handles on disk).
+    const results = await searchIndex(vault, "uniquefrobnitz");
+    expect(results.some((r) => r.theme === "project-eta-src")).toBe(false);
+  });
+
+  it("re-indexes a THIRD theme whose [[wiki-link]] mergeThemes rewrote, not just the merged/canonical pair", async () => {
+    // mergeThemes rewrites [[source]] -> [[canonical]] across every OTHER
+    // warm file too (see merge-themes.ts's rewriteLinks) — a third theme
+    // that merely links to the merged-away theme gets its on-disk content
+    // changed even though it isn't part of the merge pair itself. The
+    // search index must reflect that changed content, not just the
+    // source/canonical pair.
+    await writeTheme(vault, "project-theta-src", "## Current Status\n\nTheta source content.");
+    await writeTheme(vault, "project-theta-dst", "## Current Status\n\nTheta destination content.");
+    await writeTheme(
+      vault,
+      "project-theta-third",
+      "## Current Status\n\nSee [[project-theta-src]] for zzyzxquokka details.",
+    );
+    await rebuildIndex(vault);
+
+    const update = basePending({
+      id: "merge-third-id",
+      theme: "project-theta-src",
+      lintFix: "merge",
+      related: ["project-theta-dst"],
+      previousContent: null,
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "merge-third-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    // The third theme's on-disk link text now reads [[project-theta-dst]] —
+    // searching for that new link text should surface project-theta-third,
+    // proving its stale index entry (still referencing project-theta-src)
+    // was refreshed by the merge, not left behind.
+    const results = await searchIndex(vault, "project-theta-dst");
+    expect(results.some((r) => r.theme === "project-theta-third")).toBe(true);
   });
 });
 

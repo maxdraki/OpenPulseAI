@@ -53,7 +53,7 @@ The key insight (from [Karpathy's LLM Wiki](https://gist.github.com/karpathy/442
 ```
 packages/
 ├── core/           # Vault I/O, LLM providers, skills system, orchestrator, security
-├── mcp-server/     # MCP tools: record_activity, query_memory, chat_with_pulse
+├── mcp-server/     # MCP server: 7 tools, 1 resource, 2 prompts (see "MCP Tools" below)
 ├── dream/          # Dream Pipeline: classify → synthesize → index → review
 ├── ui/             # Control Center (Vite + vanilla TS) with dev API server
 └── src-tauri/      # Tauri v2 desktop wrapper (Rust backend)
@@ -209,11 +209,15 @@ config:
 
 | Tool | Description |
 |------|-------------|
-| `record_activity` | Log what an AI agent just did |
+| `record_activity` | Log what an AI agent just did (accepts an optional `source`) |
 | `ingest_document` | Save a Markdown doc for processing |
-| `submit_update` | Push a status update from an external source |
-| `query_memory` | Search themes for status information |
+| `submit_update` | Deprecated — thin alias for `record_activity`, kept for backward compatibility |
+| `search_index` | Narrow-then-read search: ranked snippets across all themes — pair with `read_theme` |
+| `read_theme` | Fetch the full Markdown of one theme page by name |
+| `query_memory` | Search themes for status information (single-step alternative to search_index + read_theme) |
 | `chat_with_pulse` | Conversation with your knowledge base (uses index.md for targeted loading) |
+
+The server also exposes an `openpulse://index` MCP resource (the wiki map, `vault/warm/index.md`) and two prompts, `summarize_my_week` and `what_do_i_know_about` (takes a `topic` argument), that walk a client through the narrow-then-read pattern. See `packages/mcp-server/skill/SKILL.md` for a Claude-oriented skill describing how to use this server well.
 
 ## Inspiration
 
@@ -222,7 +226,7 @@ OpenPulse draws from [Andrej Karpathy's LLM Wiki pattern](https://gist.github.co
 ## Project Status
 
 - [x] Core vault (hot/warm/cold layers)
-- [x] MCP server (stdio + HTTPS transports, 5 tools)
+- [x] MCP server (stdio + HTTPS transports, 7 tools, 1 resource, 2 prompts)
 - [x] Wiki-style Dream Pipeline (multi-tag classify, cross-references, index.md, log.md)
 - [x] BYO LLM (Anthropic, OpenAI, Gemini, Ollama)
 - [x] Control Center UI (Dashboard, Review, Data Sources, Schedule, Logs, Settings, Help)

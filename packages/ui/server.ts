@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry } from "../core/dist/index.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
@@ -803,6 +803,30 @@ app.get("/api/warm-themes", async (_req, res) => {
   }
 });
 
+/**
+ * Ranked snippet search over the local hybrid index (see @openpulse/core's
+ * search module) — extracted from the route handler so it's directly
+ * unit-testable against a temp vault (same pattern as approve.ts). An
+ * empty/blank query short-circuits to no results. Empty index → one
+ * rebuild + retry (same pattern as the MCP search_index tool).
+ */
+export async function searchThemesForApi(vaultRoot: string, q: string) {
+  if (!q.trim()) return [];
+  const vault = new Vault(vaultRoot);
+  await vault.init();
+  return searchWithRebuildRetry(vault, q);
+}
+
+// Backs the Themes page's search box.
+app.get("/api/search", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  try {
+    res.json(await searchThemesForApi(VAULT_ROOT, q));
+  } catch {
+    res.json([]);
+  }
+});
+
 app.get("/api/skills", async (_req, res) => {
   try {
     const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
@@ -1504,6 +1528,29 @@ app.post("/api/orchestrator-toggle", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// Warm the search index on startup if it hasn't been built yet (fresh vault,
+// or an upgrade from before the index existed) — kicked off in the
+// background so it never gates server startup on a full vault scan.
+// Skipped under vitest: UI tests import this module for its exported
+// helpers (see test/*.test.ts), and without this guard every `vitest run`
+// would stat/rebuild the index at the REAL VAULT_ROOT (typically
+// ~/OpenPulseAI/vault) as an import side effect, writing
+// .search-index.sqlite there — never desired for a test run.
+if (!process.env.VITEST) void (async () => {
+  try {
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
+    const exists = await stat(vault.searchIndexPath).then(() => true).catch(() => false);
+    if (!exists) {
+      console.log("[openpulse-ui] Search index missing — rebuilding in background...");
+      await rebuildIndex(vault);
+      console.log("[openpulse-ui] Search index rebuild complete.");
+    }
+  } catch (err) {
+    console.error("[openpulse-ui] Background search index rebuild failed:", err);
+  }
+})();
 
 app.listen(PORT, HOST, () => {
   console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
