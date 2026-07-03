@@ -197,6 +197,28 @@ describe("query_memory — query-back (task-14 §B)", () => {
     expect(await listPending()).toEqual([]);
   });
 
+  it("never files a second pending concept page when one already exists for the same proposed theme (query-back dedup)", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = { complete: judgeYes("auth-strategy") };
+
+    // First identical query files a pending concept page.
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+    expect(await listPending()).toHaveLength(1);
+
+    // Second identical query, judge proposes the same theme again — should
+    // file nothing while the first pending update still exists.
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+    expect(await listPending()).toHaveLength(1);
+  });
+
   it("judge failure never affects the query_memory response", async () => {
     await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
     const provider = { complete: vi.fn().mockRejectedValue(new Error("LLM timeout")) };

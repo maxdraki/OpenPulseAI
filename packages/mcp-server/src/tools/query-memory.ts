@@ -5,6 +5,7 @@ import type { LlmProvider, PendingUpdate, SearchResult, Vault } from "@openpulse
 import { listThemes, sanitizeThemeSlug, vaultLog } from "@openpulse/core";
 import { searchWithRebuildRetry } from "./search-helpers.js";
 import { judgeAndRefine } from "./chat-with-pulse.js";
+import { skipIfQuerybackPending } from "./query-back.js";
 
 export interface QueryMemoryInput {
   query: string;
@@ -45,7 +46,11 @@ function formatResults(query: string, results: SearchResult[]): string {
  * Feedback-loop guard: never files a pending page for a query whose slug
  * already matches an existing theme name (the answer already lives there —
  * see task-14 brief §B), nor when the judge's own proposed page name
- * collides with an existing theme.
+ * collides with an existing theme, nor when a pending update already
+ * proposes that same theme via an earlier query-back (see
+ * `skipIfQuerybackPending` in query-back.ts — shared with chat_with_pulse's
+ * auto-file path so repeated/similar queries don't pile up duplicate
+ * pending concept pages).
  */
 async function maybeFileQueryBack(
   vault: Vault,
@@ -72,6 +77,7 @@ async function maybeFileQueryBack(
 
     const themeName = sanitizeThemeSlug(judgment.proposed_name);
     if (!themeName || themeSet.has(themeName)) return; // proposed name collides with an existing theme
+    if (await skipIfQuerybackPending(vault, themeName, "query_memory")) return;
 
     const update: PendingUpdate = {
       id: randomUUID(),

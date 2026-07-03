@@ -34,7 +34,7 @@ pnpm workspace monorepo with 4 packages:
 
 ```bash
 pnpm install && pnpm build    # Build all packages
-pnpm vitest run               # Run all tests (~2344 tests)
+pnpm vitest run               # Run all tests (~3188 tests)
 pnpm build:sea:mcp            # SEA binary for MCP server
 pnpm build:sea:skills         # SEA binary for skills CLI
 pnpm build:desktop            # Full Tauri desktop build
@@ -52,7 +52,7 @@ Both processes read the same auto-generated bearer token from `~/OpenPulseAI/ui-
 
 ## Current state
 
-- 4 packages, 2344 tests passing
+- 4 packages, 3188 tests passing
 - MCP server works with Claude Desktop (one-click setup from Settings page)
 - Wiki-style dream pipeline with multi-tag classification and cross-references
 - Orchestrator with visual Schedule page and barrier-based auto-triggering
@@ -60,6 +60,7 @@ Both processes read the same auto-generated bearer token from `~/OpenPulseAI/ui-
 - Security scanner for untrusted skills
 - Light/dark/system theme toggle
 - Tauri v2 desktop wrapper built (needs end-to-end testing)
+- Phase 3 wiki quality: append/patch synthesis for project/source-summary pages (`onPatchOutcome`/`patchSynthesis` result field), fact-store hygiene (dedup-on-ingest, supersession, compaction), per-item review selection on the Review page (checkbox per pending update + select-all, not just "Approve All"/"Reject All" — see `packages/ui/src/pages/review.ts`), self-organizing lint checks (`packages/dream/src/lint-*.ts`: broken links, orphans, schema compliance, stale pages, duplicate dated sections, low-value/near-duplicate/low-provenance pages, pages with no inbound links, possibly-stale claims, coverage gaps), and query-back (`query_memory`/`chat_with_pulse` propose a durable-knowledge concept page from a query/chat answer, deduped against already-pending query-back proposals via `packages/mcp-server/src/tools/query-back.ts`). Note: `_lint.md`'s two "missing concept page" signals are distinct — "concept candidates" are terms seen often in classification (raw entry-mention frequency, ≥3 entries, tracked in `_concept-candidates.json`), while "coverage gaps" are dangling `[[wiki-links]]` referenced by ≥3 *themes* with no page yet (computed fresh each lint run from the link graph, `COVERAGE_GAP_MIN_MENTIONS` in `lint-structural.ts`) — same threshold, different data source.
 
 ## Design docs
 

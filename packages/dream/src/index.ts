@@ -44,6 +44,12 @@ export interface DreamPipelineResult {
    *  the patch path entirely (new/small pages, concept/entity pages) are
    *  not counted in either bucket. */
   patchSynthesis: { patch: number; fallback: number };
+  /** Aggregate fact-hygiene totals across every concept/entity theme
+   *  synthesized this run (see synthesize.ts's two-pass concept/entity
+   *  path) — how many extracted facts were newly added, skipped as
+   *  duplicates, or marked as superseding an earlier fact. Zeros when no
+   *  concept/entity theme ran this run. */
+  factHygiene: { added: number; skipped: number; superseded: number };
 }
 
 /** Correlates a raw hot-file entry with its classification result. Only
@@ -157,11 +163,19 @@ export async function runDreamPipeline(
     // eligible for the patch path — see synthesize.ts's tryPatchSynthesis).
     // Purely observability: doesn't affect which pendings get written.
     const patchSynthesis = { patch: 0, fallback: 0 };
+    // Aggregate fact-hygiene totals across every concept/entity theme this
+    // run — purely observability, mirrors patchSynthesis above.
+    const factHygiene = { added: 0, skipped: 0, superseded: 0 };
     let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
     try {
       pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes, {
         onThemeFailure: (theme) => failedThemes.push(theme),
         onPatchOutcome: (_theme, outcome) => { patchSynthesis[outcome]++; },
+        onFactHygiene: (_theme, counts) => {
+          factHygiene.added += counts.added;
+          factHygiene.skipped += counts.skipped;
+          factHygiene.superseded += counts.superseded;
+        },
       });
     } catch (err) {
       console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
@@ -216,10 +230,13 @@ export async function runDreamPipeline(
     const patchSummary = (patchSynthesis.patch + patchSynthesis.fallback) > 0
       ? ` | patch synthesis: ${patchSynthesis.patch} patched, ${patchSynthesis.fallback} fell back to whole-page`
       : "";
+    const factHygieneSummary = (factHygiene.added + factHygiene.skipped + factHygiene.superseded) > 0
+      ? ` | facts: +${factHygiene.added} ~${factHygiene.skipped} dups skipped, ${factHygiene.superseded} superseded`
+      : "";
     await appendLog(
       vault,
       "dream",
-      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}${patchSummary}`
+      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}${patchSummary}${factHygieneSummary}`
     );
 
     await archiveProcessedHotFiles(vault);
@@ -233,7 +250,7 @@ export async function runDreamPipeline(
     );
     console.error("[dream] Hot files archived. Dream complete.");
 
-    return { pending, failedThemes, deferredEntryCount, usage, patchSynthesis };
+    return { pending, failedThemes, deferredEntryCount, usage, patchSynthesis, factHygiene };
   } finally {
     await releaseLock();
   }

@@ -277,6 +277,36 @@ describe("synthesizeToPending", () => {
     expect(lines).toHaveLength(1); // the duplicate was skipped, not appended again
   });
 
+  it("reports fact-hygiene counts via onFactHygiene for a concept theme (mirrors onPatchOutcome)", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    await writeFile(
+      join(vault.warmDir, "_facts", "hygiene-theme.jsonl"),
+      JSON.stringify({ claim: "X uses SQLite.", sourceId: "2026-04-17-github-activity", confidence: "high", extractedAt: "2026-04-17T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        // Pass 1 re-extracts the SAME claim (duplicate, skipped) — matches
+        // the "skips re-extracting a duplicate fact" test above.
+        .mockResolvedValueOnce('[{"claim":"x   uses sqlite!!","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce("## Definition\nX uses SQLite. ^[src:2026-04-17-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-17T00:00:00Z", log: "X uses SQLite.", source: "github-activity" },
+        themes: ["hygiene-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    const onFactHygiene = vi.fn();
+    await synthesizeToPending(vault, classified, provider, "gpt", { "hygiene-theme": "concept" }, { onFactHygiene });
+
+    expect(onFactHygiene).toHaveBeenCalledWith("hygiene-theme", { added: 0, skipped: 1, superseded: 0 });
+  });
+
   it("applies supersession signaled by pass-1 extraction and excludes the superseded fact from the pass-2 prompt", async () => {
     await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
     await writeFile(

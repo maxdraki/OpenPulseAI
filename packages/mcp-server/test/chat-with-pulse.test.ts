@@ -120,6 +120,34 @@ describe("chat_with_pulse tool", () => {
     expect(((pending[0].querybackSource as any).themesConsulted as string[]).length).toBeGreaterThanOrEqual(2);
   });
 
+  it("never files a second pending concept page when one already exists for the same proposed theme (query-back dedup)", async () => {
+    await writeTheme(vault, "project-billing", "Billing migration to Stripe is ongoing.");
+
+    const judgeYesResponse = JSON.stringify({
+      verdict: "yes",
+      proposed_name: "jwt-session-tokens",
+      one_line_definition: "JWT tokens used across auth and billing.",
+      refined_content: "## Definition\n\nShared JWT token model.\n\n## Key Claims\n\n## Related Concepts\n\n## Sources\n",
+    });
+
+    // First turn: answer + judge "yes" — files a pending concept page.
+    const provider1 = queueProvider(["Auth and billing both rely on JWT session tokens.", judgeYesResponse]);
+    await handleChatWithPulse(vault, provider1, "test-model", {
+      message: "how do auth and billing share tokens?",
+    });
+    expect(await listPending(vault)).toHaveLength(1);
+
+    // Second, separate turn asking a similar question — judge proposes the
+    // same theme again — should file nothing while the first pending
+    // update still exists.
+    const provider2 = queueProvider(["Auth and billing both rely on JWT session tokens.", judgeYesResponse]);
+    const result2 = await handleChatWithPulse(vault, provider2, "test-model", {
+      message: "how do auth and billing share tokens?",
+    });
+    expect(result2.content[0].text).not.toContain("Filed [[jwt-session-tokens]]");
+    expect(await listPending(vault)).toHaveLength(1);
+  });
+
   it("stores pendingFile in session when judge returns maybe", async () => {
     await writeTheme(vault, "project-billing", "Billing migration to Stripe is ongoing.");
 

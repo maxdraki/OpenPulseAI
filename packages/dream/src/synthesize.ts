@@ -412,6 +412,12 @@ export interface SynthesizeOptions {
    *  whole-page rewrite. Not called for themes that bypassed the patch path
    *  entirely (brand-new/small pages, concept/entity two-pass pages). */
   onPatchOutcome?: (theme: string, outcome: "patch" | "fallback") => void;
+  /** Called once per concept/entity theme that ran fact extraction+ingest
+   *  this run (see the two-pass path below), reporting that theme's
+   *  fact-hygiene counts so the caller can aggregate totals across the
+   *  whole run (mirrors `onPatchOutcome`). Not called for project/
+   *  source-summary themes, which don't use the fact store. */
+  onFactHygiene?: (theme: string, counts: { added: number; skipped: number; superseded: number }) => void;
 }
 
 export async function synthesizeToPending(
@@ -581,6 +587,7 @@ export async function synthesizeToPending(
           unknownSupersedeIds.length > 0 ? JSON.stringify(unknownSupersedeIds) : undefined
         );
       }
+      opts?.onFactHygiene?.(theme, { added: factsAdded, skipped: factsSkipped, superseded: factsSuperseded });
 
       // Pass 2: read only ACTIVE facts + existing page + resynthesize. Superseded
       // facts stay in the file as history but must never reach the synthesis
