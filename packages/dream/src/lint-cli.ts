@@ -38,6 +38,7 @@ import {
 } from "@openpulse/core";
 import { runStructuralChecks, type StructuralIssue } from "./lint-structural.js";
 import { findStubCandidates, findContradictions, type SemanticIssue } from "./lint-semantic.js";
+import { findLinkSuggestions, type LinkSuggestion } from "./lint-links.js";
 import { ABSENCE_LINE } from "./classify.js";
 
 /** Escape regex metacharacters so a runtime string can be embedded in a pattern. */
@@ -116,6 +117,9 @@ const TYPE_LABELS: Record<StructuralIssue["type"], string> = {
   "low-value": "Low-value pages",
   "duplicate-theme": "Near-duplicate themes",
   "low-provenance": "Low-provenance pages",
+  "no-inbound-links": "Pages with no inbound links",
+  "stale-claim": "Possibly stale claims",
+  "coverage-gap": "Coverage gaps (missing concept pages)",
 };
 
 // ---------------------------------------------------------------------------
@@ -126,10 +130,11 @@ async function writeLintReport(
   structural: StructuralIssue[],
   stubs: SemanticIssue[],
   contradictions: SemanticIssue[],
-  themeCount: number
+  themeCount: number,
+  linkSuggestions: LinkSuggestion[] = []
 ): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
-  const totalIssues = structural.length + stubs.length + contradictions.length;
+  const totalIssues = structural.length + stubs.length + contradictions.length + linkSuggestions.length;
 
   const lines: string[] = [];
   lines.push(`# Wiki Lint — ${today}`);
@@ -160,6 +165,9 @@ async function writeLintReport(
       "low-value",
       "duplicate-theme",
       "low-provenance",
+      "no-inbound-links",
+      "stale-claim",
+      "coverage-gap",
     ];
 
     for (const type of orderedTypes) {
@@ -190,6 +198,17 @@ async function writeLintReport(
         lines.push(`- ${themePart}${c.detail}`);
       }
       lines.push(``, `Contradictions require manual review.`);
+    }
+
+    // Link suggestions section — embedding-based cross-reference candidates
+    // (task-14 §A). Flag-only: never auto-applied, see runLint below.
+    if (linkSuggestions.length > 0) {
+      lines.push(``, `## Link suggestions (${linkSuggestions.length})`, ``);
+      for (const s of linkSuggestions) {
+        lines.push(
+          `- **${s.theme}**: consider linking [[${s.target}]] (related: ${s.headingA || "(preamble)"} ↔ ${s.headingB || "(preamble)"}, similarity ${s.similarity.toFixed(2)})`
+        );
+      }
     }
   }
 
@@ -901,6 +920,7 @@ export interface LintResult {
   stubs: number;
   contradictions: number;
   themeCount: number;
+  linkSuggestions: number;
 }
 
 export async function runLint(opts: LintOptions): Promise<LintResult> {
@@ -909,16 +929,19 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
   const structural = await runStructuralChecks(vault);
   const stubs = await findStubCandidates(vault, provider, model);
   const contradictions = await findContradictions(vault, provider, model);
+  // Deterministic, embeddings-only — never throws, degrades to [] silently
+  // when embeddings are unavailable (see lint-links.ts).
+  const linkSuggestions = await findLinkSuggestions(vault);
 
   const themeNames = await listThemes(vault);
   const themeCount = themeNames.length;
-  await writeLintReport(vault, structural, stubs, contradictions, themeCount);
+  await writeLintReport(vault, structural, stubs, contradictions, themeCount, linkSuggestions);
   // writeLintReport writes _lint.md directly to warm/, bypassing the
   // approve-path commit (see task-5 brief §B's "note any direct-write
   // exceptions" — this is one) — commit it here.
   await commitVault(vault, "lint: refresh report");
 
-  const totalIssues = structural.length + stubs.length + contradictions.length;
+  const totalIssues = structural.length + stubs.length + contradictions.length + linkSuggestions.length;
   console.error(
     `[lint] ${totalIssues} issue(s) found across ${themeCount} themes — see vault/warm/_lint.md`
   );
@@ -928,6 +951,7 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
     stubs: stubs.length,
     contradictions: contradictions.length,
     themeCount,
+    linkSuggestions: linkSuggestions.length,
   };
 
   if (fix === "rename") {

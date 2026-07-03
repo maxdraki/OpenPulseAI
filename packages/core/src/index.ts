@@ -72,4 +72,17 @@ export {
   type SearchResult,
   type SearchSignal,
 } from "./search/search.js";
-export { rebuildIndex, updateThemeInIndex, removeThemeFromIndex } from "./search/index-db.js";
+export {
+  rebuildIndex,
+  updateThemeInIndex,
+  removeThemeFromIndex,
+  getAllEmbeddings,
+  type EmbeddingRow,
+} from "./search/index-db.js";
+export {
+  cosineSimilarity,
+  setEmbedderForTests,
+  embedTexts,
+  EMBEDDING_MODEL,
+  EMBEDDING_DIM,
+} from "./search/embeddings.js";

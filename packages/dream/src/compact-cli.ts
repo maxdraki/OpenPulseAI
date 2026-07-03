@@ -9,6 +9,7 @@ import {
 } from "@openpulse/core";
 import type { LlmProvider, PendingUpdate, ThemeDocument, ThemeType } from "@openpulse/core";
 import { readFactsFile, activeFacts, compactFactStore } from "./facts.js";
+import { acquireDreamLock } from "./lock.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const VERBATIM_LIMIT = 14;
@@ -176,6 +177,82 @@ export async function compactTheme(vault: Vault, theme: string, provider: LlmPro
 // clobber all of that with this process's stale in-memory copy. See the
 // residual-race note on updateStateSection's doc comment.
 
+/**
+ * Runs compaction against an already-initialised vault. Mirrors
+ * `runDreamPipeline`'s locking (see `index.ts`): compaction mutates the same
+ * `_facts/<theme>.jsonl` files the dream pipeline reads and rewrites (via
+ * `compactFactStore`'s read-modify-write), so both must hold the same
+ * vault-level lock — otherwise a dream run and a compaction run racing each
+ * other can each read a stale copy of a fact file and the loser's write
+ * silently drops a concurrently-ingested fact. Acquiring here means a
+ * manually-invoked `openpulse-compact` CLI run is guarded even when the
+ * orchestrator (which separately checks `isDreamLockHeld`/`dp.running`
+ * before spawning this process — see `orchestrator.ts`'s `runCompact`) isn't
+ * involved at all. Throws (same as `acquireDreamLock`) if the dream pipeline
+ * already holds a live, fresh lock — callers should treat that as "compaction
+ * deferred, try again later", not a fatal error.
+ */
+export async function runCompaction(
+  vault: Vault,
+  provider: LlmProvider,
+  model: string,
+  opts?: { themes?: string[]; force?: boolean }
+): Promise<number> {
+  const releaseLock = await acquireDreamLock(vault);
+  try {
+    const explicitThemes = opts?.themes ?? [];
+    const force = opts?.force ?? false;
+
+    // loadState uses core's typed defaults, so these sub-states are always well-formed
+    const state = await loadState(VAULT_ROOT);
+    const perThemeLastCompacted = state.compactionPipeline.perThemeLastCompacted;
+    const sizeQueue = state.compactionPipeline.sizeQueue;
+
+    let themes: string[];
+    if (explicitThemes.length > 0) {
+      themes = explicitThemes;
+    } else {
+      const allThemes = await listThemes(vault);
+      themes = [...new Set([...sizeQueue, ...allThemes])];
+      if (!force) {
+        themes = themes.filter((t) => {
+          if (sizeQueue.includes(t)) return true;
+          const last = perThemeLastCompacted[t];
+          if (!last) return true;
+          const days = (Date.now() - new Date(last).getTime()) / 86_400_000;
+          return days >= SKIP_DAYS;
+        });
+      }
+    }
+
+    await vaultLog("info", `[compact] Starting compaction for ${themes.length} theme(s)`);
+
+    let compacted = 0;
+    for (const theme of themes) {
+      try {
+        const did = await compactTheme(vault, theme, provider, model);
+        if (did) {
+          compacted++;
+          perThemeLastCompacted[theme] = new Date().toISOString();
+        }
+      } catch (err) {
+        await vaultLog("error", `[compact] Failed for ${theme}`, String(err));
+      }
+    }
+
+    await updateStateSection(VAULT_ROOT, "compactionPipeline", (cp) => ({
+      ...cp,
+      perThemeLastCompacted,
+      sizeQueue: [],
+    }));
+
+    await vaultLog("info", `[compact] Done — ${compacted} pending update(s) created`);
+    return compacted;
+  } finally {
+    await releaseLock();
+  }
+}
+
 async function main() {
   initLogger(VAULT_ROOT);
   const config = await loadConfig(VAULT_ROOT);
@@ -187,50 +264,7 @@ async function main() {
   const explicitThemes = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   const force = process.argv.includes("--force");
 
-  // loadState uses core's typed defaults, so these sub-states are always well-formed
-  const state = await loadState(VAULT_ROOT);
-  const perThemeLastCompacted = state.compactionPipeline.perThemeLastCompacted;
-  const sizeQueue = state.compactionPipeline.sizeQueue;
-
-  let themes: string[];
-  if (explicitThemes.length > 0) {
-    themes = explicitThemes;
-  } else {
-    const allThemes = await listThemes(vault);
-    themes = [...new Set([...sizeQueue, ...allThemes])];
-    if (!force) {
-      themes = themes.filter((t) => {
-        if (sizeQueue.includes(t)) return true;
-        const last = perThemeLastCompacted[t];
-        if (!last) return true;
-        const days = (Date.now() - new Date(last).getTime()) / 86_400_000;
-        return days >= SKIP_DAYS;
-      });
-    }
-  }
-
-  await vaultLog("info", `[compact] Starting compaction for ${themes.length} theme(s)`);
-
-  let compacted = 0;
-  for (const theme of themes) {
-    try {
-      const did = await compactTheme(vault, theme, provider, model);
-      if (did) {
-        compacted++;
-        perThemeLastCompacted[theme] = new Date().toISOString();
-      }
-    } catch (err) {
-      await vaultLog("error", `[compact] Failed for ${theme}`, String(err));
-    }
-  }
-
-  await updateStateSection(VAULT_ROOT, "compactionPipeline", (cp) => ({
-    ...cp,
-    perThemeLastCompacted,
-    sizeQueue: [],
-  }));
-
-  await vaultLog("info", `[compact] Done — ${compacted} pending update(s) created`);
+  await runCompaction(vault, provider, model, { themes: explicitThemes, force });
 }
 
 // Only run main when executed directly, not when imported from tests

@@ -14,6 +14,7 @@ import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js"
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
 import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry } from "../core/dist/index.js";
+import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
@@ -1480,6 +1481,11 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
     const userDir = join(VAULT_ROOT, "skills");
     const skills = await discoverSkills([builtinDir, userDir]);
     return skills.map(s => s.name);
+  },
+  async isDreamLockHeld(): Promise<boolean> {
+    // Vault construction is pure path setup (no I/O) — safe to build a
+    // throwaway instance here rather than threading a shared one through.
+    return isDreamLockHeld(new Vault(VAULT_ROOT));
   },
 };
 

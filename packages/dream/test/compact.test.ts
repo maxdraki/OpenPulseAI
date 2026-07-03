@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Vault } from "@openpulse/core";
-import { bucketActivityLog, compactTheme, parseProjectPage } from "../src/compact-cli.js";
+import { bucketActivityLog, compactTheme, parseProjectPage, runCompaction } from "../src/compact-cli.js";
+import { acquireDreamLock } from "../src/lock.js";
 
 describe("bucketActivityLog", () => {
   it("keeps last 14 sections verbatim and groups rest by ISO week", () => {
@@ -24,6 +25,24 @@ describe("bucketActivityLog", () => {
     const { verbatim, grouped } = bucketActivityLog(sections);
     expect(verbatim).toHaveLength(10);
     expect(Object.keys(grouped)).toHaveLength(0);
+  });
+});
+
+describe("runCompaction — dream lock guard", () => {
+  it("refuses to run (and never touches state) while the dream lock is held", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "openpulse-compact-lock-"));
+    const vault = new Vault(tempDir);
+    await vault.init();
+
+    const release = await acquireDreamLock(vault);
+    try {
+      const provider = { complete: vi.fn() } as any;
+      await expect(runCompaction(vault, provider, "gpt")).rejects.toThrow(/already running/i);
+      // The compaction loop never started — no LLM call was made.
+      expect(provider.complete).not.toHaveBeenCalled();
+    } finally {
+      await release();
+    }
   });
 });
 

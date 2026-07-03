@@ -74,6 +74,30 @@ function isPidAlive(pid: number): boolean {
 }
 
 /**
+ * Non-destructive probe: true if the dream lock is currently held by a live
+ * process within the fresh window — i.e. exactly the condition under which
+ * `acquireDreamLock` would refuse rather than steal. Never mutates the
+ * lockfile (no steal, no create) — callers that just need to decide whether
+ * to defer other work (e.g. the compaction pipeline) use this instead of
+ * acquiring/releasing the lock themselves. Returns `false` (never throws) if
+ * the lockfile doesn't exist or is unreadable/corrupt.
+ */
+export async function isDreamLockHeld(vault: Vault): Promise<boolean> {
+  const file = lockPath(vault);
+  let info: LockInfo;
+  try {
+    const raw = await readFile(file, "utf-8");
+    info = JSON.parse(raw) as LockInfo;
+  } catch {
+    return false;
+  }
+
+  const ageMs = lockAgeMs(info);
+  const fresh = Number.isFinite(ageMs) && ageMs < STALE_LOCK_MS;
+  return fresh && isPidAlive(info.pid);
+}
+
+/**
  * Acquire the Dream Pipeline lock, stealing a stale/dead-owner lock if found.
  * Throws if a live, fresh (< 30 min old) lock is already held by another process.
  * Returns a release function — callers MUST call it in a `finally` block.

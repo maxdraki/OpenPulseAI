@@ -218,6 +218,94 @@ describe("Dream barrier — failed collectors must not count as 'ran'", () => {
   });
 });
 
+describe("runCompact — defers while the dream pipeline is active (race fix, task-14 §D)", () => {
+  function baseCallbacks(overrides: Partial<OrchestratorCallbacks> = {}): OrchestratorCallbacks & { compactionCalls: number } {
+    const cb = {
+      compactionCalls: 0,
+      async runCollector() {},
+      async runDreamPipeline() {},
+      async runLintPipeline() {},
+      async runCompactionPipeline() {
+        cb.compactionCalls++;
+      },
+      async runSchemaEvolutionPipeline() {},
+      async getSkillNames() {
+        return [];
+      },
+      ...overrides,
+    };
+    return cb;
+  }
+
+  it("defers compaction while an in-process dream run is mid-flight (dreamPipeline.running)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-compact-guard-"));
+    let resolveDream: () => void = () => {};
+    const gate = new Promise<void>((res) => {
+      resolveDream = res;
+    });
+    const callbacks = baseCallbacks({
+      async runDreamPipeline() {
+        await gate;
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const dreamPromise = orch.triggerRun("dreamPipeline");
+    // Let the dream run advance far enough to flip dreamPipeline.running = true
+    // (it awaits an fs write before reaching the gated callback).
+    await new Promise((r) => setTimeout(r, 20));
+
+    await orch.triggerCompact();
+    expect(callbacks.compactionCalls).toBe(0);
+
+    resolveDream();
+    await dreamPromise;
+    await orch.stop();
+  });
+
+  it("defers compaction when isDreamLockHeld() reports the lock held externally (manual CLI dream run)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-compact-lockheld-"));
+    const callbacks = baseCallbacks({
+      async isDreamLockHeld() {
+        return true;
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    await orch.triggerCompact();
+    expect(callbacks.compactionCalls).toBe(0);
+    await orch.stop();
+  });
+
+  it("runs compaction normally when neither signal indicates the dream pipeline is active", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-compact-normal-"));
+    const callbacks = baseCallbacks({
+      async isDreamLockHeld() {
+        return false;
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    await orch.triggerCompact();
+    expect(callbacks.compactionCalls).toBe(1);
+    await orch.stop();
+  });
+
+  it("runs compaction normally when isDreamLockHeld is not provided by the host (backward compatible)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-compact-nolockcb-"));
+    const callbacks = baseCallbacks();
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    await orch.triggerCompact();
+    expect(callbacks.compactionCalls).toBe(1);
+    await orch.stop();
+  });
+});
+
 describe("updateStateSection — scoped read-modify-write", () => {
   it("survives a concurrent whole-object write to a different section", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "orch-section-"));

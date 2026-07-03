@@ -89,6 +89,16 @@ export interface OrchestratorCallbacks {
   runSchemaEvolutionPipeline(): Promise<void>;
   /** Return currently known skill names. */
   getSkillNames(): Promise<string[]>;
+  /**
+   * Probe whether the vault-level Dream Pipeline lockfile (`packages/dream`'s
+   * `lock.ts`) is currently held by a live process. Optional because core
+   * cannot depend on `@openpulse/dream` (the dependency runs the other way);
+   * the orchestrator's host process (e.g. the UI's `server.ts`) wires this to
+   * `isDreamLockHeld` when it's available. Used by `runCompact` as a
+   * cross-process guard in addition to the in-process `dreamPipeline.running`
+   * flag — see that method's doc comment for why both checks are needed.
+   */
+  isDreamLockHeld?(): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -774,9 +784,38 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Compaction and the Dream Pipeline both mutate `_facts/<theme>.jsonl` —
+   * compaction's read-modify-write (`compactFactStore`) can drop a fact the
+   * dream pipeline concurrently ingested if the two run at the same time
+   * (see task-14 brief §D). Two independent checks are needed, not one:
+   * `dreamPipeline.running` only reflects a dream run *this orchestrator
+   * process* triggered (in-memory), while `isDreamLockHeld` catches a
+   * manually-invoked `openpulse-dream` CLI run this process never scheduled.
+   * Either signal defers compaction — the caller (a cron tick or a manual
+   * trigger) will simply try again next time; there's no queueing.
+   */
+  private async isDreamActive(): Promise<boolean> {
+    if (this.state.dreamPipeline.running) return true;
+    if (!this.callbacks.isDreamLockHeld) return false;
+    try {
+      return await this.callbacks.isDreamLockHeld();
+    } catch {
+      // Probe failure must never block compaction indefinitely — treat as "not held".
+      return false;
+    }
+  }
+
   private async runCompact(themes?: string[]): Promise<void> {
     const cp = this.state.compactionPipeline;
     if (cp.running) return;
+    if (await this.isDreamActive()) {
+      await vaultLog(
+        "info",
+        "[orchestrator] Deferring compaction — dream pipeline is active (in-process or lockfile)"
+      );
+      return;
+    }
     const startedAt = new Date().toISOString();
     cp.running = true;
     await saveState(this.vaultRoot, this.state);

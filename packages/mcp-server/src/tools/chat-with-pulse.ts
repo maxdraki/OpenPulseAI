@@ -238,7 +238,7 @@ interface JudgeResult {
   refined_content: string | null;
 }
 
-async function judgeAndRefine(
+export async function judgeAndRefine(
   provider: LlmProvider,
   model: string,
   question: string,

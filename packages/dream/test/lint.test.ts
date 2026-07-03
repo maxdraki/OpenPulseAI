@@ -592,6 +592,149 @@ describe("runStructuralChecks — new checks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// runStructuralChecks — task-14 §C: no-inbound-links, stale-claim, coverage-gap
+// ---------------------------------------------------------------------------
+describe("runStructuralChecks — no-inbound-links (task-14 §C.1)", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    ({ vault, tempDir } = await setup());
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("flags a theme with outbound links but zero inbound links", async () => {
+    // theme-a links out to theme-b but nothing links to theme-a — under the
+    // stricter "orphan" check this is NOT an orphan (has outbound), but it
+    // still has no inbound links.
+    await writeTheme(vault, "theme-a", "Links to [[theme-b]].");
+    await writeTheme(vault, "theme-b", "No outbound links.");
+    const issues = await runStructuralChecks(vault);
+    const noInbound = issues.filter((i) => i.type === "no-inbound-links");
+    const themes = noInbound.map((i) => i.theme);
+    expect(themes).toContain("theme-a");
+    expect(themes).not.toContain("theme-b"); // theme-b has an inbound link from theme-a
+  });
+
+  it("does not flag a theme that has an inbound link", async () => {
+    await writeTheme(vault, "theme-a", "Links to [[theme-b]].");
+    await writeTheme(vault, "theme-b", "No outbound links.");
+    const issues = await runStructuralChecks(vault);
+    const noInbound = issues.filter((i) => i.type === "no-inbound-links");
+    expect(noInbound.map((i) => i.theme)).not.toContain("theme-b");
+  });
+});
+
+describe("runStructuralChecks — stale-claim (task-14 §C.2)", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    ({ vault, tempDir } = await setup());
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("flags a theme older than 60 days that's referenced by a newer page", async () => {
+    const oldDate = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const newDate = new Date(Date.now() - 1 * 86_400_000).toISOString();
+    await writeFile(
+      join(vault.warmDir, "old-claim.md"),
+      `---\ntheme: old-claim\nlastUpdated: ${oldDate}\n---\n\nSome old claim.\n`,
+      "utf-8"
+    );
+    await writeFile(
+      join(vault.warmDir, "new-referrer.md"),
+      `---\ntheme: new-referrer\nlastUpdated: ${newDate}\n---\n\nSee [[old-claim]] for background.\n`,
+      "utf-8"
+    );
+    const issues = await runStructuralChecks(vault);
+    const staleClaims = issues.filter((i) => i.type === "stale-claim");
+    expect(staleClaims.map((i) => i.theme)).toContain("old-claim");
+    expect(staleClaims.find((i) => i.theme === "old-claim")?.detail).toContain("new-referrer");
+  });
+
+  it("does not flag an old theme with no newer referrers", async () => {
+    const oldDate = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    await writeFile(
+      join(vault.warmDir, "lonely-old.md"),
+      `---\ntheme: lonely-old\nlastUpdated: ${oldDate}\n---\n\nNothing links here.\n`,
+      "utf-8"
+    );
+    const issues = await runStructuralChecks(vault);
+    const staleClaims = issues.filter((i) => i.type === "stale-claim");
+    expect(staleClaims.map((i) => i.theme)).not.toContain("lonely-old");
+  });
+
+  it("does not flag a theme referenced by an OLDER page", async () => {
+    const oldDate = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const olderDate = new Date(Date.now() - 120 * 86_400_000).toISOString();
+    await writeFile(
+      join(vault.warmDir, "old-claim2.md"),
+      `---\ntheme: old-claim2\nlastUpdated: ${oldDate}\n---\n\nClaim.\n`,
+      "utf-8"
+    );
+    await writeFile(
+      join(vault.warmDir, "older-referrer.md"),
+      `---\ntheme: older-referrer\nlastUpdated: ${olderDate}\n---\n\nSee [[old-claim2]].\n`,
+      "utf-8"
+    );
+    const issues = await runStructuralChecks(vault);
+    const staleClaims = issues.filter((i) => i.type === "stale-claim");
+    expect(staleClaims.map((i) => i.theme)).not.toContain("old-claim2");
+  });
+});
+
+describe("runStructuralChecks — coverage-gap (task-14 §C.3)", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    ({ vault, tempDir } = await setup());
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("flags a dangling [[link]] mentioned by >= 3 distinct themes", async () => {
+    await writeTheme(vault, "theme-a", "Discusses [[missing-concept]] here.");
+    await writeTheme(vault, "theme-b", "Also mentions [[missing-concept]].");
+    await writeTheme(vault, "theme-c", "Refers to [[missing-concept]] too.");
+    const issues = await runStructuralChecks(vault);
+    const gaps = issues.filter((i) => i.type === "coverage-gap");
+    const gap = gaps.find((i) => i.theme === "missing-concept");
+    expect(gap).toBeDefined();
+    expect(gap?.detail).toContain("theme-a");
+    expect(gap?.detail).toContain("theme-b");
+    expect(gap?.detail).toContain("theme-c");
+  });
+
+  it("does not flag a dangling link mentioned by fewer than 3 themes", async () => {
+    await writeTheme(vault, "theme-a", "Discusses [[rare-concept]] here.");
+    await writeTheme(vault, "theme-b", "Also mentions [[rare-concept]].");
+    const issues = await runStructuralChecks(vault);
+    const gaps = issues.filter((i) => i.type === "coverage-gap");
+    expect(gaps.map((i) => i.theme)).not.toContain("rare-concept");
+  });
+
+  it("does not flag a link target that already has a real theme page", async () => {
+    await writeTheme(vault, "theme-a", "Discusses [[real-theme]] here.");
+    await writeTheme(vault, "theme-b", "Also mentions [[real-theme]].");
+    await writeTheme(vault, "theme-c", "Refers to [[real-theme]] too.");
+    await writeTheme(vault, "real-theme", "The real page.");
+    const issues = await runStructuralChecks(vault);
+    const gaps = issues.filter((i) => i.type === "coverage-gap");
+    expect(gaps.map((i) => i.theme)).not.toContain("real-theme");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // runLint — CLI orchestration
 // ---------------------------------------------------------------------------
 describe("runLint", () => {
@@ -629,6 +772,29 @@ describe("runLint", () => {
     await runLint({ vault, provider: mockProvider as any, model: "m" });
     const report = await readFile(join(vault.warmDir, "_lint.md"), "utf-8");
     expect(report).toContain("# Wiki Lint");
+  });
+
+  it("report includes sections for the new task-14 checks (no-inbound-links, stale-claim, coverage-gap)", async () => {
+    const oldDate = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const newDate = new Date(Date.now() - 1 * 86_400_000).toISOString();
+    await writeFile(
+      join(vault.warmDir, "old-claim.md"),
+      `---\ntheme: old-claim\nlastUpdated: ${oldDate}\n---\n\nSome old claim. Mentions [[dangling-concept]].\n`,
+      "utf-8"
+    );
+    await writeFile(
+      join(vault.warmDir, "new-referrer.md"),
+      `---\ntheme: new-referrer\nlastUpdated: ${newDate}\n---\n\nSee [[old-claim]]. Also [[dangling-concept]].\n`,
+      "utf-8"
+    );
+    await writeTheme(vault, "third-referrer", "Also mentions [[dangling-concept]] here.");
+
+    await runLint({ vault, provider: mockProvider as any, model: "m" });
+    const report = await readFile(join(vault.warmDir, "_lint.md"), "utf-8");
+    expect(report).toContain("Pages with no inbound links");
+    expect(report).toContain("Possibly stale claims");
+    expect(report).toContain("Coverage gaps");
+    expect(report).toContain("dangling-concept");
   });
 
   it("default run (no fix flag) proposes pending updates for all categories", async () => {
