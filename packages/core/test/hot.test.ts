@@ -173,6 +173,37 @@ describe("Hot Layer", () => {
       expect(blocks[0].log).toBe("Legacy entry one.");
       expect(blocks[1].log).toBe("Legacy entry two.");
     });
+
+    it("still parses a marker-only file", () => {
+      const markerContent =
+        `## 2026-04-18T10:00:00Z\n**Source:** a\n\nMarker entry one.\n\n${"<!-- openpulse:entry -->"}\n\n` +
+        `## 2026-04-18T11:00:00Z\n**Source:** b\n\nMarker entry two.\n\n${"<!-- openpulse:entry -->"}\n\n`;
+      const blocks = parseActivityBlocks(markerContent);
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0].log).toBe("Marker entry one.");
+      expect(blocks[1].log).toBe("Marker entry two.");
+    });
+
+    it("splits a mixed file: legacy entries followed by an appended marker entry, into all 3 correctly", () => {
+      // Simulates a hot file written before the delimiter upgrade (two legacy
+      // entries separated by bare '---'), to which a post-upgrade appendActivity
+      // call has appended a third, marker-delimited entry.
+      const legacyPortion =
+        `## 2026-04-18T10:00:00Z\n**Source:** a\n\nLegacy entry one.\n\n---\n\n` +
+        `## 2026-04-18T11:00:00Z\n**Source:** b\n\nLegacy entry two.\n\n---\n`;
+      const markerPortion =
+        `\n## 2026-04-18T12:00:00Z\n**Source:** c\n\nNew marker entry.\n\n${"<!-- openpulse:entry -->"}\n\n`;
+      const mixedContent = legacyPortion + markerPortion;
+
+      const blocks = parseActivityBlocks(mixedContent);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0].source).toBe("a");
+      expect(blocks[0].log).toBe("Legacy entry one.");
+      expect(blocks[1].source).toBe("b");
+      expect(blocks[1].log).toBe("Legacy entry two.");
+      expect(blocks[2].source).toBe("c");
+      expect(blocks[2].log).toBe("New marker entry.");
+    });
   });
 
   describe("saveIngestedDocument", () => {

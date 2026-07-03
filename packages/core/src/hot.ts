@@ -30,6 +30,7 @@ const SOURCE_RE = /^\*\*Source:\*\*\s*(.+)/m;
 export const ENTRY_MARKER = "<!-- openpulse:entry -->";
 const ENTRY_MARKER_RE = /\n<!-- openpulse:entry -->\n/;
 const LEGACY_DELIMITER_RE = /\n---\n/;
+const HEADER_RE_G = /^## \d{4}-\d{2}-\d{2}T[\d:.]+Z/gm;
 
 export function parseActivityBlock(block: string): ParsedActivityBlock | null {
   const tsMatch = block.match(TIMESTAMP_RE);
@@ -57,25 +58,48 @@ export function parseActivityBlock(block: string): ParsedActivityBlock | null {
 /**
  * Splits raw hot-file content into individual entry-record strings.
  *
- * Parses the new unambiguous marker first; a file (or a legacy tail segment
- * within it) that contains no new marker at all falls back to the old bare
- * `\n---\n` splitting so pre-existing vault files keep parsing correctly.
+ * Strategy: split on the new unambiguous marker first. Everything from the
+ * first marker onward is guaranteed to already be marker-delimited (each
+ * post-upgrade `appendActivity` call terminates its entry with a marker), so
+ * those segments are used as-is. Only the segment *before* the first marker
+ * can contain pre-upgrade content still using the old bare `\n---\n`
+ * delimiter — that segment alone is a legacy-split *candidate*.
  *
- * Known limitation: a file that mixes legacy entries (written before this
- * delimiter change) with newly-appended marker-delimited entries will only
- * legacy-split the portion *before* the first marker — if that pre-marker
- * portion itself concatenates multiple legacy entries, they're still split
- * correctly (no marker present in that span to short-circuit on), but this
- * cannot be done losslessly if a marker-delimited entry's own body happens to
- * contain `\n---\n` while sharing a file with legacy entries. This is the same
- * inherent ambiguity the new marker exists to eliminate; it can only be fully
- * removed once no legacy-delimited files remain (e.g. after they're archived).
+ * That pre-marker segment is ambiguous on its own: it might be several
+ * concatenated legacy entries (mixed-file case), or it might just be the
+ * single marker-delimited entry that precedes the first marker and happens
+ * to contain a literal `\n---\n` in its own body (pure marker-file case). We
+ * disambiguate using the one structural fact that tells them apart: a legacy
+ * entry always starts with its own `## <timestamp>` header, so multiple
+ * concatenated legacy entries contain multiple such headers, while a single
+ * entry (marker or legacy) contains exactly one. Only legacy-split when more
+ * than one header is present in that segment.
+ *
+ * A marker-only file has an empty (or single-entry) pre-marker segment
+ * (splitting is a no-op); a legacy-only file has no marker at all, so
+ * "everything" is the pre-marker segment and gets legacy-split normally.
+ *
+ * This still cannot be done losslessly if a marker-delimited entry's own
+ * body happens to contain `\n---\n` while sharing a file with *multiple*
+ * legacy entries preceding it — that's the same inherent ambiguity the new
+ * marker exists to eliminate, and it can only be fully removed once no
+ * legacy-delimited files remain (e.g. after they're archived).
  */
 export function splitHotFileBlocks(fileContent: string): string[] {
-  if (!fileContent.includes(ENTRY_MARKER)) {
+  const markerIndex = fileContent.search(ENTRY_MARKER_RE);
+  if (markerIndex === -1) {
+    // No marker anywhere: the whole file is pre-upgrade content.
     return fileContent.split(LEGACY_DELIMITER_RE);
   }
-  return fileContent.split(ENTRY_MARKER_RE);
+  const preMarker = fileContent.slice(0, markerIndex);
+  const fromFirstMarker = fileContent.slice(markerIndex);
+  const headerCount = preMarker.match(HEADER_RE_G)?.length ?? 0;
+  const legacyBlocks =
+    headerCount > 1
+      ? preMarker.split(LEGACY_DELIMITER_RE).filter((b) => b.trim())
+      : [preMarker].filter((b) => b.trim());
+  const markerBlocks = fromFirstMarker.split(ENTRY_MARKER_RE);
+  return [...legacyBlocks, ...markerBlocks];
 }
 
 /** Re-serializes entry blocks back into hot-file content using the new marker. */

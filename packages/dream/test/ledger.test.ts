@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault } from "@openpulse/core";
+import { Vault, parseActivityBlocks } from "@openpulse/core";
 import {
   computeEntryId,
   loadProcessedLedger,
@@ -71,5 +71,28 @@ describe("ledger", () => {
 
     const unchanged = pruneLedgerForEntries([{ timestamp: "2026-01-01T00:00:00Z", log: "not present" }], pruned);
     expect(unchanged).toBe(pruned);
+  });
+
+  it("computeEntryId for legacy entries is stable before and after a marker entry is appended to the same hot file", () => {
+    // This is the actual data-integrity property the splitHotFileBlocks fix protects:
+    // if parsing corrupts/merges the legacy blocks once a marker entry is appended,
+    // their content-derived ledger IDs would change and previously-processed
+    // entries would look "new" again, causing reprocessing/duplicate pendings.
+    const legacyPortion =
+      `## 2026-04-18T10:00:00Z\n**Source:** a\n\nLegacy entry one.\n\n---\n\n` +
+      `## 2026-04-18T11:00:00Z\n**Source:** b\n\nLegacy entry two.\n\n---\n`;
+
+    const idsBefore = parseActivityBlocks(legacyPortion).map(computeEntryId);
+    expect(idsBefore).toHaveLength(2);
+
+    const markerPortion =
+      `\n## 2026-04-18T12:00:00Z\n**Source:** c\n\nNew marker entry.\n\n${"<!-- openpulse:entry -->"}\n\n`;
+    const mixedContent = legacyPortion + markerPortion;
+
+    const blocksAfter = parseActivityBlocks(mixedContent);
+    expect(blocksAfter).toHaveLength(3);
+    const idsAfter = blocksAfter.slice(0, 2).map(computeEntryId);
+
+    expect(idsAfter).toEqual(idsBefore);
   });
 });
