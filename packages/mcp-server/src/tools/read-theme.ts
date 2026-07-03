@@ -1,7 +1,4 @@
-import { isSafeThemeName, readTheme, type Vault } from "@openpulse/core";
-// Deep import — see search-index.ts for why this doesn't go through the
-// @openpulse/core barrel.
-import { searchIndex } from "@openpulse/core/dist/search/search.js";
+import { isSafeThemeName, readTheme, searchIndex, type Vault } from "@openpulse/core";
 
 export interface ReadThemeInput {
   theme: string;

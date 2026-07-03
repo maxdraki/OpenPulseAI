@@ -1,10 +1,5 @@
-import type { Vault } from "@openpulse/core";
-// Deep import: @openpulse/core doesn't (yet) re-export the search module from
-// its barrel, and this task's scope boundary forbids editing packages/core.
-// The package has no "exports" map restricting subpath resolution, so this
-// is a stable, buildable path.
-import { searchIndex, type SearchResult } from "@openpulse/core/dist/search/search.js";
-import { rebuildIndex } from "@openpulse/core/dist/search/index-db.js";
+import type { SearchResult, Vault } from "@openpulse/core";
+import { searchWithRebuildRetry } from "./search-helpers.js";
 
 export interface SearchIndexInput {
   query: string;
@@ -28,12 +23,7 @@ export async function handleSearchIndex(
   vault: Vault,
   input: SearchIndexInput
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-  let results = await searchIndex(vault, input.query, { limit: input.limit });
-
-  if (results.length === 0) {
-    await rebuildIndex(vault);
-    results = await searchIndex(vault, input.query, { limit: input.limit });
-  }
+  const results = await searchWithRebuildRetry(vault, input.query, { limit: input.limit });
 
   if (results.length === 0) {
     return {

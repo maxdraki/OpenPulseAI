@@ -57,7 +57,7 @@ export async function createServer(vaultRoot: string, opts?: { provider?: LlmPro
 
   server.tool(
     "query_memory",
-    "Retrieve full curated theme pages relevant to a query, keyword-matched over warm (already-synthesized) themes. For a lighter-weight narrow-then-read flow, prefer search_index (ranked snippets across all themes) followed by read_theme (fetch one page in full) — query_memory is the older, single-step alternative.",
+    "Retrieve ranked chunks (theme, heading, snippet) relevant to a query, grouped by theme best-first, from the local hybrid search index over warm (already-synthesized) themes. This returns snippets, not whole pages — follow up with read_theme (using one of the theme names returned) to fetch a page in full. Functionally similar to search_index; prefer whichever narrow-then-read shape suits the caller.",
     { query: z.string() },
     logged("query_memory", (i) => `query: ${i.query}`,
       (input) => handleQueryMemory(vault, input))

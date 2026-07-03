@@ -63,3 +63,11 @@ export { sanitizeThemeSlug } from "./theme-slug.js";
 export { SEED_SKILLS, isKnownSkill, isValidSkillTag, normaliseSkill } from "./skills-taxonomy.js";
 export { checkStaleness, normalizeContentForCompare, type StalenessResult } from "./staleness.js";
 export { ensureVaultRepo, commitVault } from "./vault-git.js";
+export {
+  searchIndex,
+  fuseRankings,
+  sanitizeFtsQuery,
+  type SearchResult,
+  type SearchSignal,
+} from "./search/search.js";
+export { rebuildIndex, updateThemeInIndex, removeThemeFromIndex } from "./search/index-db.js";

@@ -298,6 +298,21 @@ export async function getWarmThemes(): Promise<WarmTheme[]> {
   return apiGet("/warm-themes");
 }
 
+export interface ThemeSearchResult {
+  theme: string;
+  heading: string;
+  snippet: string;
+  score: number;
+  rank: number;
+}
+
+/** Backs the Themes page's search box — ranked snippet search over the
+ *  local hybrid index (`GET /api/search`). Not yet wired up for Tauri. */
+export async function searchThemes(query: string): Promise<ThemeSearchResult[]> {
+  if (isTauri) throw new Error("Search is not yet available in the desktop app");
+  return apiGet(`/search?q=${encodeURIComponent(query)}`);
+}
+
 export async function getBacklinks(): Promise<Record<string, string[]>> {
   if (isTauri) return {};
   return apiGet("/backlinks");

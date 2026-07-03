@@ -25,6 +25,8 @@ import {
   isSafeThemeName,
   checkStaleness,
   commitVault,
+  updateThemeInIndex,
+  removeThemeFromIndex,
   type PendingUpdate,
   type LlmProvider,
 } from "../../../core/dist/index.js";
@@ -55,6 +57,33 @@ export type ApproveOutcome = ApproveSuccess | ApproveFailure;
  * source/canonical themes involved, everything else gets a generic
  * `approve(<theme>): <kind> batch=<batchId>` (see task-5 brief §B).
  */
+/**
+ * Keeps the local search index in sync with a write this approve just made
+ * — structural lintFix kinds (merge/rename/delete) rewrite the wiki graph
+ * (see `mergeThemes`), so the source theme's chunks are removed and the
+ * canonical theme's are re-indexed; a normal content write re-indexes just
+ * that theme. `_schema.md` isn't a warm theme page, so it's never indexed.
+ * Never throws — an index hiccup here must never turn an otherwise-
+ * successful approve into a failure (updateThemeInIndex/removeThemeFromIndex
+ * already degrade gracefully on their own, but this is belt-and-braces).
+ */
+async function syncSearchIndex(vault: Vault, update: PendingUpdate, related0: string | undefined): Promise<void> {
+  try {
+    if (update.lintFix === "merge" || update.lintFix === "rename") {
+      await removeThemeFromIndex(vault, update.theme);
+      if (related0) await updateThemeInIndex(vault, related0);
+    } else if (update.lintFix === "delete") {
+      await removeThemeFromIndex(vault, update.theme);
+    } else if (update.schemaEvolution || update.theme === "_schema") {
+      // _schema.md is not a warm theme page — not part of the search index.
+    } else {
+      await updateThemeInIndex(vault, update.theme);
+    }
+  } catch {
+    // Swallow — see doc comment above.
+  }
+}
+
 function commitMessageForApprove(update: PendingUpdate, related0: string | undefined): string {
   const batch = update.batchId ?? update.id;
   if (update.lintFix === "merge" && related0) return `merge(${update.theme}->${related0}) batch=${batch}`;
@@ -195,6 +224,11 @@ export async function approvePendingUpdate(
     }
 
     await rm(pendingPath);
+
+    // Keep the search index fresh so an approved page/merge/rename/delete is
+    // searchable immediately, without ever failing an otherwise-successful
+    // approve if the index update itself hiccups (see syncSearchIndex below).
+    await syncSearchIndex(vault, update, related[0]);
 
     if (opts.commit !== false) {
       // Fire-and-forget audit commit — commitVault never throws (see

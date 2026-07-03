@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault, writeTheme } from "@openpulse/core";
-import { rebuildIndex } from "@openpulse/core/dist/search/index-db.js";
+import { Vault, writeTheme, rebuildIndex } from "@openpulse/core";
 import { handleSearchIndex } from "../src/tools/search-index.js";
 
 describe("search_index tool", () => {

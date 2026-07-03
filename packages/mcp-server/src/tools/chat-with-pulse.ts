@@ -1,10 +1,181 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { PendingUpdate, Vault, LlmProvider, ThemeDocument } from "@openpulse/core";
-import { readAllThemes, readTheme, sanitizeThemeSlug, stripCodeFences } from "@openpulse/core";
+import type { PendingUpdate, Vault, LlmProvider, SearchResult } from "@openpulse/core";
+import { readTheme, sanitizeThemeSlug, stripCodeFences, searchIndex, rebuildIndex } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
-import { searchWarmFiles } from "../search.js";
+
+/**
+ * Common English stopwords stripped from a chat message before it's turned
+ * into search-index queries — see `extractKeywords`. Deliberately small and
+ * conservative (better to under-strip than accidentally drop a real content
+ * word); it only needs to cover the connective tissue of a typical
+ * question, not be an exhaustive stopword list.
+ */
+const CHAT_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "is", "are", "was", "were", "to", "of", "in",
+  "on", "for", "with", "how", "do", "does", "did", "what", "whats", "who",
+  "whom", "this", "that", "these", "those", "it", "its", "be", "been",
+  "being", "as", "at", "by", "from", "about", "into", "over", "after",
+  "before", "between", "up", "down", "out", "off", "again", "then", "once",
+  "here", "there", "when", "where", "why", "which", "can", "will", "would",
+  "should", "could", "not", "no", "so", "than", "too", "very", "just",
+  "also", "i", "you", "we", "they", "he", "she", "me", "my", "your", "our",
+]);
+
+/**
+ * Pulls the content-bearing words out of a free-text chat message — see
+ * `searchChatChunks` for why these become independent search-index queries
+ * rather than one long AND'd phrase.
+ */
+function extractKeywords(message: string): string[] {
+  const words = message
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !CHAT_STOPWORDS.has(w));
+  return Array.from(new Set(words));
+}
+
+/**
+ * Search-index retrieval for a conversational chat message. `searchIndex`'s
+ * query sanitizer ANDs every whitespace-separated term together (see
+ * `sanitizeFtsQuery`) — appropriate for a short keyword query, but a full
+ * question like "how do auth and billing share tokens?" would require
+ * every one of those words to appear verbatim in the same chunk, which
+ * essentially never happens for a multi-topic conversational question. So
+ * instead of one AND'd query over the whole message, this fans out one
+ * query per content-bearing keyword and fuses the per-keyword rankings
+ * locally (reciprocal-rank-style) — a theme relevant to only one clause of
+ * the question still surfaces, and a chunk matching multiple keywords still
+ * ranks higher than one matching only one. One rebuild+retry is attempted
+ * only if EVERY keyword query comes back empty (an empty/never-built
+ * index), not per keyword.
+ */
+async function searchChatChunks(vault: Vault, message: string, limit: number): Promise<SearchResult[]> {
+  const keywords = extractKeywords(message);
+  const queries = keywords.length > 0 ? keywords : [message];
+
+  const runAll = () => Promise.all(queries.map((q) => searchIndex(vault, q, { limit })));
+
+  let perQuery = await runAll();
+  if (perQuery.every((r) => r.length === 0)) {
+    await rebuildIndex(vault);
+    perQuery = await runAll();
+  }
+
+  const scores = new Map<string, number>();
+  const entries = new Map<string, SearchResult>();
+  for (const results of perQuery) {
+    results.forEach((r, i) => {
+      const key = `${r.theme}::${r.heading}::${r.snippet}`;
+      scores.set(key, (scores.get(key) ?? 0) + 1 / (60 + i + 1));
+      entries.set(key, entries.get(key) ?? r);
+    });
+  }
+
+  return Array.from(scores.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([key], i) => ({ ...entries.get(key)!, rank: i + 1 }));
+}
+
+/**
+ * Hard cap on the assembled chat context (index.md map + every included
+ * theme/chunk section), in characters. ~24k chars is roughly 6k tokens —
+ * generous headroom for the answer + judge call on top of even a small
+ * hosted context window, while still bounding cost/latency regardless of
+ * how many themes match. Never exceeded: sections are only added while
+ * `used < CONTEXT_CHAR_CAP`, and a section that would push past the cap is
+ * skipped rather than truncated mid-content.
+ */
+const CONTEXT_CHAR_CAP = 24_000;
+/** Top-K chunks pulled from the hybrid index per turn — wide enough to
+ *  cover a handful of themes before ranking/grouping trims it down to what
+ *  actually fits under the cap. */
+const CHUNK_FETCH_LIMIT = 20;
+/** A theme with at least this many distinct chunk hits is treated as
+ *  "strongly" relevant — worth swapping in the full page (better coherence
+ *  than disjoint fragments) if it still fits under the cap. */
+const MULTI_HIT_THRESHOLD = 2;
+
+interface AssembledContext {
+  /** Markdown context to inject into the system prompt (index map + theme sections). */
+  context: string;
+  /** Themes whose content actually contributed to `context` this turn. */
+  themesConsulted: string[];
+  /** False when the index (even after a rebuild) had nothing relevant — the
+   *  caller should tell the model no relevant pages were found. */
+  matched: boolean;
+}
+
+async function loadIndexMap(vault: Vault): Promise<string> {
+  try {
+    return await readFile(join(vault.warmDir, "index.md"), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Context assembly for chat_with_pulse: top-K chunks from the hybrid search
+ * index, grouped by theme (best-first), plus the index.md page map for
+ * orientation. A theme with multiple strong chunk hits is swapped for its
+ * full page when that still fits under `CONTEXT_CHAR_CAP` (better
+ * coherence than disjoint fragments); otherwise the chunk fragments are
+ * used as-is. Themes are added in rank order until the cap is hit — later
+ * themes are simply omitted, never truncated mid-section. No matches (even
+ * after one rebuild+retry, see `searchChatChunks`) falls back to the
+ * index.md map alone, with `matched: false` so the caller's system prompt
+ * can say so instead of silently loading every theme in the vault.
+ */
+export async function assembleChatContext(vault: Vault, message: string): Promise<AssembledContext> {
+  const indexMap = await loadIndexMap(vault);
+  const chunks = await searchChatChunks(vault, message, CHUNK_FETCH_LIMIT);
+
+  const indexSection = indexMap ? `## Wiki Index (page map)\n\n${indexMap}` : "";
+
+  if (chunks.length === 0) {
+    return { context: indexSection, themesConsulted: [], matched: false };
+  }
+
+  const byTheme = new Map<string, SearchResult[]>();
+  for (const c of chunks) {
+    const list = byTheme.get(c.theme) ?? [];
+    list.push(c);
+    byTheme.set(c.theme, list);
+  }
+
+  const sections: string[] = [];
+  const themesConsulted: string[] = [];
+  let used = 0;
+
+  if (indexSection) {
+    sections.push(indexSection);
+    used += indexSection.length;
+  }
+
+  for (const [theme, themeChunks] of byTheme) {
+    if (used >= CONTEXT_CHAR_CAP) break;
+
+    let section = `## ${theme}\n\n` + themeChunks.map((c) => `### ${c.heading}\n${c.snippet}`).join("\n\n");
+
+    if (themeChunks.length >= MULTI_HIT_THRESHOLD) {
+      const full = await readTheme(vault, theme);
+      if (full && used + full.content.length <= CONTEXT_CHAR_CAP) {
+        section = `## ${theme}\n\n${full.content}`;
+      }
+    }
+
+    if (used + section.length > CONTEXT_CHAR_CAP) continue; // doesn't fit — skip, don't truncate
+
+    sections.push(section);
+    themesConsulted.push(theme);
+    used += section.length;
+  }
+
+  return { context: sections.join("\n\n---\n\n"), themesConsulted, matched: true };
+}
 
 export interface ChatWithPulseInput {
   message: string;
@@ -103,48 +274,13 @@ export async function handleChatWithPulse(
     };
   }
 
-  // Find relevant warm themes
-  let allThemes: ThemeDocument[] | undefined;
-  try {
-    const indexContent = await readFile(join(vault.warmDir, "index.md"), "utf-8");
-    const themeEntries = [...indexContent.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]);
-
-    // Find relevant themes: query words match theme name or index summary
-    const queryWords = input.message.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    const indexLower = indexContent.toLowerCase();
-
-    const relevant = themeEntries.filter(name => {
-      const nameLower = name.toLowerCase();
-      return queryWords.some(w => nameLower.includes(w)) ||
-             queryWords.some(w => {
-               // Check the line containing this theme for query matches
-               const lineStart = indexLower.indexOf(`[[${nameLower}]]`);
-               if (lineStart < 0) return false;
-               const lineEnd = indexContent.indexOf('\n', lineStart);
-               const line = indexLower.slice(lineStart, lineEnd > 0 ? lineEnd : undefined);
-               return line.includes(w);
-             });
-    });
-
-    if (relevant.length > 0) {
-      const loaded = await Promise.all(relevant.map((name) => readTheme(vault, name)));
-      allThemes = loaded.filter((t): t is ThemeDocument => t !== null);
-    }
-  } catch { /* index.md doesn't exist yet */ }
-
-  // Fallback
-  if (!allThemes || allThemes.length === 0) {
-    const relevantThemes = await searchWarmFiles(vault, input.message);
-    allThemes = relevantThemes.length > 0 ? relevantThemes : await readAllThemes(vault);
-  }
+  // Find relevant context via the hybrid search index (top-K chunks, full
+  // pages for strong multi-hit themes when they fit) — see assembleChatContext.
+  const assembled = await assembleChatContext(vault, input.message);
   session.themesConsulted = [...new Set([
     ...session.themesConsulted,
-    ...allThemes.map((t) => t.theme),
+    ...assembled.themesConsulted,
   ])];
-
-  const context = allThemes
-    .map((t) => `## ${t.theme}\n${t.content}`)
-    .join("\n\n---\n\n");
 
   const history = session.messages
     .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
@@ -157,16 +293,20 @@ export async function handleChatWithPulse(
     `User: ${input.message}`,
   ].join("");
 
+  const noMatchNotice = assembled.matched
+    ? ""
+    : " No pages in the knowledge base matched this query directly — you're only working from the page map below, so say you don't have data on this rather than guessing.";
+
   const systemPrompt = `You are a work assistant that helps the user understand what's happening across their projects and work activity. You have access to curated status pages (called "themes") that are maintained from automated data collection.
 
-Answer questions based ONLY on the knowledge below. Be concise and accurate. If the knowledge doesn't contain information about something, say "I don't have data on that" rather than guessing. Never invent repository names, PR numbers, project names, dates, or any details not present below.
+Answer questions based ONLY on the knowledge below. Be concise and accurate. If the knowledge doesn't contain information about something, say "I don't have data on that" rather than guessing. Never invent repository names, PR numbers, project names, dates, or any details not present below.${noMatchNotice}
 
-${context}`;
+${assembled.context}`;
 
   let response = await provider.complete({ model, prompt, systemPrompt, temperature: 0.5 });
 
   // Themes actually consulted in THIS turn (not cumulative across session).
-  const thisCallThemes = allThemes.map((t) => t.theme);
+  const thisCallThemes = assembled.themesConsulted;
 
   // Query-back: judge + refine when ≥ 2 themes consulted. Cheap LLM call decides
   // whether this answer is durable knowledge worth a concept page.

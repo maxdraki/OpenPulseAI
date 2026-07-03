@@ -71,7 +71,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
         ["ingest_document", "Ingest a markdown document for thematic processing."],
         ["search_index", "Narrow-then-read search: ranked snippets across all themes. Pair with read_theme."],
         ["read_theme", "Fetch the full markdown of one theme page by name."],
-        ["query_memory", "Query your vault for status summaries (single-step alternative to search_index + read_theme)."],
+        ["query_memory", "Query your vault for ranked chunks — theme, heading, snippet — grouped by theme (single-step alternative to search_index + read_theme)."],
         ["submit_update", "Deprecated — thin alias for record_activity, kept for backward compatibility."],
         ["chat_with_pulse", "Have a conversation about your recorded activities. Requires an LLM provider configured in Settings."],
       ],
@@ -84,7 +84,7 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
       title: "Vault Structure",
       items: [
         [`Journals (${vaultPath}/vault/hot/)`, "Daily activity entries from collectors. One file per day."],
-        [`Themes (${vaultPath}/vault/warm/)`, "Wiki-style knowledge pages with [[cross-references]]."],
+        [`Themes (${vaultPath}/vault/warm/)`, "Wiki-style knowledge pages with [[cross-references]]. The Themes page has a search box (ranked snippets from the same local search index MCP tools use) for jumping straight to the relevant page."],
         [`Index (${vaultPath}/vault/warm/index.md)`, "Auto-generated catalog of all themes."],
         [`Log (${vaultPath}/vault/warm/log.md)`, "Append-only record of pipeline activity."],
         [`Pending (${vaultPath}/vault/warm/_pending/)`, "AI-proposed updates awaiting batch review."],
