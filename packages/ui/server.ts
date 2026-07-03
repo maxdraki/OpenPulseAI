@@ -10,33 +10,32 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { timingSafeEqual } from "node:crypto";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
 import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig } from "../core/dist/index.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
+import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
 const execFileAsync = promisify(execFile);
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = 3001;
 // Bind to loopback by default so the dev server is never exposed on an external
-// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy,
-// and ALWAYS set OPENPULSE_API_TOKEN when you do.
+// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy.
 const HOST = process.env.OPENPULSE_HOST ?? "127.0.0.1";
-// When set, every /api request must send `Authorization: Bearer <token>`.
-const API_TOKEN = process.env.OPENPULSE_API_TOKEN ?? "";
+// The bearer guard is ALWAYS on — this API can run skills, install deps, and
+// write Claude Desktop config, so there's no safe "open" posture even on
+// loopback (any local process/browser tab could otherwise hit it). An explicit
+// OPENPULSE_API_TOKEN env var wins (e.g. a shared/production deployment);
+// otherwise a persistent token is auto-generated and stored in the config dir
+// (~/OpenPulseAI/ui-token, mode 0600) the first time the server starts, and
+// reused on every subsequent start. vite.config.ts reads the same file so the
+// browser bundle can authenticate — see VITE_OPENPULSE_TOKEN there.
+const API_TOKEN = process.env.OPENPULSE_API_TOKEN || (await loadOrCreateToken(VAULT_ROOT));
 
 /** Guard against path traversal in :name params */
 const SAFE_NAME = /^[\w-]+$/;
-
-/** Constant-time string compare (avoids leaking the token via timing). */
-function tokensMatch(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual(ab, bb);
-}
 
 /** Mask a secret for display — never expose the full value to a client. */
 function maskKey(key: string | undefined): string | undefined {
@@ -74,15 +73,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Auth guard. With no token configured the server is loopback-only (see HOST),
-// so local dev keeps working without credentials. Any externally-reachable
-// deployment MUST set OPENPULSE_API_TOKEN, which makes /api reject unauthenticated
-// requests — closing the hole that let API keys be harvested from a public instance.
+// Auth guard — always on (see API_TOKEN above for how the token is sourced).
+// This API can run skills, install deps, and write Claude Desktop config, so
+// there's no endpoint exempted from it: the browser bundle gets the token at
+// build time via vite.config.ts, so there's no unauthenticated bootstrap step
+// that legitimately needs an exemption.
 app.use("/api", (req, res, next) => {
-  if (!API_TOKEN) return next();
-  const header = req.header("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token && tokensMatch(token, API_TOKEN)) return next();
+  if (isAuthorizedHeader(req.header("authorization"), API_TOKEN)) return next();
   res.status(401).json({ error: "Unauthorized" });
 });
 
@@ -1507,11 +1504,16 @@ app.post("/api/orchestrator-toggle", async (req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
   console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
+  if (process.env.OPENPULSE_API_TOKEN) {
+    console.log(`[openpulse-ui] /api auth: using OPENPULSE_API_TOKEN from the environment.`);
+  } else {
+    console.log(`[openpulse-ui] /api auth: token auto-generated at ${tokenPath(VAULT_ROOT)} (delete to rotate).`);
+  }
   const exposed = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
-  if (exposed && !API_TOKEN) {
+  if (exposed) {
     console.warn(
-      `[openpulse-ui] WARNING: bound to ${HOST} with no OPENPULSE_API_TOKEN set — ` +
-      `/api is unauthenticated and reachable off this machine. Set OPENPULSE_API_TOKEN before exposing it.`,
+      `[openpulse-ui] WARNING: bound to ${HOST} — /api is reachable off this machine. ` +
+      `It IS authenticated, but keep the token file (or OPENPULSE_API_TOKEN) secret.`,
     );
   }
 });

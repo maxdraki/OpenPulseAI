@@ -49,6 +49,18 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 const API_BASE = "http://localhost:3001/api";
 export const apiBase = API_BASE;
 
+// The dev-server's bearer guard is on by default (see server.ts) — vite.config.ts
+// reads the same auto-generated token file and exposes it here so the browser can
+// authenticate. Empty when this bundle wasn't built by our vite config (e.g. a
+// stray import in a non-vite test context).
+const DEV_TOKEN = (import.meta.env.VITE_OPENPULSE_TOKEN as string | undefined) ?? "";
+
+/** Auth header for /api calls. Exported so call sites that can't go through
+ *  apiGet/apiPost (e.g. a raw fetch for a non-JSON response) still attach it. */
+export function authHeaders(): Record<string, string> {
+  return DEV_TOKEN ? { Authorization: `Bearer ${DEV_TOKEN}` } : {};
+}
+
 // --- Transport layer (exported for logger.ts) ---
 
 export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -56,7 +68,7 @@ export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -90,7 +102,7 @@ async function parseErrorBody(res: Response): Promise<unknown> {
 export async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(res.status, await parseErrorBody(res));
@@ -260,7 +272,7 @@ export interface HotEntry {
 
 export async function deleteHotEntry(id: string): Promise<void> {
   if (isTauri) return tauriInvoke("delete_hot_entry", { id });
-  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -420,7 +432,7 @@ export async function getChatSession(id: string): Promise<ChatSessionLoadResult>
 
 export async function deleteChatSession(id: string): Promise<void> {
   if (isTauri) throw new Error("Chat is not yet available in the desktop app");
-  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
@@ -437,7 +449,7 @@ export async function installSkill(repo: string): Promise<string> {
 
 export async function removeSkill(name: string): Promise<void> {
   if (isTauri) return tauriInvoke("remove_skill", { name });
-  const res = await fetch(`${API_BASE}/skills/${name}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/skills/${name}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

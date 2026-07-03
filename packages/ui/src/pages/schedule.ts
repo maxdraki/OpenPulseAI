@@ -5,6 +5,7 @@ import {
   triggerOrchestratorRun,
   toggleOrchestratorSchedule,
   apiBase,
+  authHeaders,
   type OrchestratorSchedule,
   type OrchestratorCollector,
   type OrchestratorStatus,
@@ -565,7 +566,7 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
     try {
       const res = await fetch(`${apiBase}${opts.triggerPath}`, {
         method: "POST",
-        headers: opts.triggerBody ? { "Content-Type": "application/json" } : {},
+        headers: { ...(opts.triggerBody ? { "Content-Type": "application/json" } : {}), ...authHeaders() },
         body: opts.triggerBody ? JSON.stringify(opts.triggerBody) : undefined,
       });
       if (!res.ok) {
