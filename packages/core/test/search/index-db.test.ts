@@ -138,4 +138,53 @@ describe("search index-db", () => {
     const rows = await queryIndex(vault, "", 10);
     expect(rows).toEqual([]);
   });
+
+  it("degrades instead of throwing when another connection holds an exclusive write lock on the DB", async () => {
+    // Establish the schema/file first so the locker connection opens the
+    // same on-disk WAL-mode database as the module under test.
+    await writeTheme(vault, "locked-theme", "## Section\n\nContent written before the lock is taken.");
+    await rebuildIndex(vault);
+    const before = await rowsFor(vault, "locked-theme");
+    expect(before.length).toBeGreaterThan(0);
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const locker = new DatabaseSync(vault.searchIndexPath);
+    // Force the OS-level exclusive lock to actually engage (not just the
+    // WAL "writer" lock, which does not block readers) by combining
+    // EXCLUSIVE locking mode with an in-progress write transaction —
+    // this is what makes even plain reads see SQLITE_BUSY/"database is
+    // locked", mirroring cross-process contention.
+    locker.exec("PRAGMA locking_mode = EXCLUSIVE;");
+    locker.exec("BEGIN IMMEDIATE;");
+    locker.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("probe", "1");
+
+    try {
+      await expect(rebuildIndex(vault)).resolves.toBeUndefined();
+      await expect(updateThemeInIndex(vault, "locked-theme")).resolves.toBeUndefined();
+
+      const q = sanitizeFtsQuery("content");
+      await expect(queryIndex(vault, q, 10)).resolves.toEqual([]);
+    } finally {
+      locker.exec("ROLLBACK;");
+      locker.close();
+    }
+
+    // Once the lock is released, normal operation resumes and the data
+    // that existed before contention was never corrupted/wiped.
+    const rows = await rowsFor(vault, "locked-theme");
+    expect(rows.length).toBeGreaterThan(0);
+  }, 20000);
+
+  it("keys the incremental diff on (heading, contentHash) so a heading rename is seen as a change", async () => {
+    await writeTheme(vault, "renamed", "## Old Heading\n\nThe body text stays exactly the same.");
+    await rebuildIndex(vault);
+
+    await writeTheme(vault, "renamed", "## New Heading\n\nThe body text stays exactly the same.");
+    await updateThemeInIndex(vault, "renamed");
+
+    const q = sanitizeFtsQuery("New Heading");
+    const rows = await queryIndex(vault, q, 10);
+    expect(rows.some((r) => r.heading === "New Heading")).toBe(true);
+    expect(rows.some((r) => r.heading === "Old Heading")).toBe(false);
+  });
 });

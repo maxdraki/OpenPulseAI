@@ -29,7 +29,25 @@ import { listThemes } from "../warm.js";
 import type { Vault } from "../vault.js";
 import { chunkTheme, type Chunk } from "./chunker.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+/** How long a connection waits for a lock held by another connection
+ *  (same process or another) before SQLite gives up and raises
+ *  SQLITE_BUSY/"database is locked". Set on every open so transient
+ *  cross-process contention (another writer mid-transaction) just waits
+ *  instead of immediately failing the caller. */
+const BUSY_TIMEOUT_MS = 3000;
+
+/** Recognizes SQLite's "busy"/"locked" family of errors (SQLITE_BUSY = 5,
+ *  SQLITE_LOCKED = 6, plus the string forms node:sqlite surfaces) so they
+ *  can be treated as transient contention — never as file corruption, and
+ *  never rethrown to a caller. */
+function isBusyOrLockedError(e: unknown): boolean {
+  const errcode = (e as { errcode?: number } | null)?.errcode;
+  if (errcode === 5 || errcode === 6) return true;
+  const message = e instanceof Error ? e.message : String(e);
+  return /database is locked|database table is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message);
+}
 
 type NodeSqliteModule = typeof import("node:sqlite");
 type DatabaseSyncCtor = NodeSqliteModule["DatabaseSync"];
@@ -72,6 +90,7 @@ async function getDatabaseSyncCtor(): Promise<DatabaseSyncCtor | null> {
  *  `SCHEMA_VERSION` (including a brand-new, empty DB file). Disposability
  *  means this is simpler than writing a migration path. */
 function ensureSchema(db: DatabaseSyncInstance): void {
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
 
@@ -102,7 +121,14 @@ function ensureSchema(db: DatabaseSyncInstance): void {
 /** Opens the index DB, deleting and recreating the file once if it turns
  *  out to be corrupt (e.g. `new DatabaseSync()` throws on a non-SQLite
  *  file). Returns `null` (never throws) if `node:sqlite` is unavailable or
- *  the file is unusable even after a fresh start. */
+ *  the file is unusable even after a fresh start.
+ *
+ *  Busy/locked errors (another connection — same process or a different
+ *  one — mid-transaction) are deliberately NOT treated as corruption: with
+ *  `busy_timeout` set, they only surface once the timeout has already been
+ *  exhausted, and deleting a perfectly healthy but momentarily-contended
+ *  index file would destroy it for no reason. Those errors bubble up to
+ *  `withIndexDb`, which degrades gracefully instead. */
 async function openIndexDb(vault: Vault): Promise<DatabaseSyncInstance | null> {
   const Ctor = await getDatabaseSyncCtor();
   if (!Ctor) return null;
@@ -111,9 +137,25 @@ async function openIndexDb(vault: Vault): Promise<DatabaseSyncInstance | null> {
 
   try {
     const db = new Ctor(vault.searchIndexPath);
-    ensureSchema(db);
+    try {
+      ensureSchema(db);
+    } catch (e) {
+      if (isBusyOrLockedError(e)) {
+        db.close();
+        throw e;
+      }
+      throw e;
+    }
     return db;
   } catch (e) {
+    if (isBusyOrLockedError(e)) {
+      await warnOnce(
+        "search index busy — another connection holds a lock; degrading for this call",
+        e instanceof Error ? e.message : String(e)
+      );
+      return null;
+    }
+
     await warnOnce(
       "search index file unusable — deleting and rebuilding",
       e instanceof Error ? e.message : String(e)
@@ -142,7 +184,10 @@ async function openIndexDb(vault: Vault): Promise<DatabaseSyncInstance | null> {
 /** Opens the index DB, runs `fn`, and always closes the handle afterward —
  *  no long-lived global connection (SQLite's own WAL locking handles
  *  cross-process concurrency). Returns `null` (without calling `fn`) when
- *  the index is unavailable. */
+ *  the index is unavailable, and also catches any error `fn` throws (e.g.
+ *  SQLITE_BUSY on a write that outlasted `busy_timeout`) so contention
+ *  degrades the same way for every caller: writers no-op, readers see `[]`,
+ *  nobody crashes. */
 async function withIndexDb<T>(
   vault: Vault,
   fn: (db: DatabaseSyncInstance) => T
@@ -151,8 +196,18 @@ async function withIndexDb<T>(
   if (!db) return null;
   try {
     return fn(db);
+  } catch (e) {
+    await warnOnce(
+      "search index operation failed — degrading for this call",
+      e instanceof Error ? e.message : String(e)
+    );
+    return null;
   } finally {
-    db.close();
+    try {
+      db.close();
+    } catch {
+      // best-effort close; nothing more we can do if it also fails
+    }
   }
 }
 
