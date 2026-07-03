@@ -814,6 +814,31 @@ describe("synthesizeToPending", () => {
       expect(call.prompt).toContain(PATCH_MARKER);
     });
 
+    function bigRenamedStatusPage(): string {
+      return (
+        "## Status Overview\n\n" + manyLines("status", 20) + "\n" +
+        "## Activity Log\n\n### 2026-04-01\n" + manyLines("activity", 20) + "\n" +
+        "## Skills Demonstrated\n\n" + "z".repeat(600) + "\n"
+      );
+    }
+
+    it("includes the full text of a renamed status section AND a stock Activity Log section, even though only one matches literally", async () => {
+      await writeTheme(vault, "renamed-status-project", bigRenamedStatusPage());
+
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue("[]") };
+      await synthesizeToPending(vault, classifiedFor("renamed-status-project"), provider, "test-model", { "renamed-status-project": "project" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // "Activity Log" matches the literal heading for the project page type,
+      // but "Status Overview" does not (it was renamed from "Current
+      // Status" via a custom _schema.md). Both sections' full text — not
+      // just the outline's 2-line preview — must still make it into the
+      // prompt so the LLM can patch either one correctly.
+      expect(call.prompt).toContain("status line 19");
+      expect(call.prompt).toContain("activity line 19");
+      expect(call.prompt).toContain(PATCH_MARKER);
+    });
+
     it("runs the end-to-end patch flow for a source-summary page (mock LLM emitting ops)", async () => {
       await writeTheme(vault, "source-doc-2", bigSourceSummaryPage());
 

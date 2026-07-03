@@ -143,33 +143,46 @@ function buildPatchPrompt(
   // page type (see RELEVANT_HEADINGS above) so source-summary pages (whose
   // headings never match the project-tuned regex fallback) still get full
   // section text to verify against and avoid duplicating. Falls back to the
-  // generic status/current + activity/log regex heuristics for pages with
-  // nonstandard structure (a custom _schema.md renamed the headings, or the
-  // page type has no literal-heading spec at all).
+  // generic status/current + activity/log regex heuristics on a PER-SLOT
+  // basis for pages with nonstandard structure (a custom _schema.md renamed
+  // one heading while others stayed literal, or the page type has no
+  // literal-heading spec at all). Per-slot (rather than page-wide) gating
+  // matters: if "Activity Log" stays literal but "Current Status" gets
+  // renamed to "Status Overview", a page-wide "any literal match found, skip
+  // all fallbacks" gate would silently drop the renamed section's full text
+  // even though it still needs full-text coverage.
   const spec = RELEVANT_HEADINGS[pageType];
-  const matchedHeadings = new Set<string>();
+  const claimedSections = new Set<PageSections["sections"][number]>();
+  let statusSlotMatched = false;
+  let activitySlotMatched = false;
   if (spec) {
     for (const section of sections.sections) {
       if (headingMatches(section.heading, spec.fullText)) {
         relevantParts.push(`Section "${section.heading}" (full text):\n${section.headingLine}${section.body}`.trim());
-        matchedHeadings.add(section.heading);
+        claimedSections.add(section);
+        statusSlotMatched = true;
       } else if (headingMatches(section.heading, spec.recentOnly)) {
         const chunk = extractMostRecentDatedChunk(section.body);
         relevantParts.push(`Section "${section.heading}" — most recent dated entry only (full text):\n${chunk}`.trim());
-        matchedHeadings.add(section.heading);
+        claimedSections.add(section);
+        activitySlotMatched = true;
       }
     }
   }
 
-  if (matchedHeadings.size === 0) {
-    const statusSection = sections.sections.find((s) => /status|current/i.test(s.heading));
+  if (!spec || !statusSlotMatched) {
+    const statusSection = sections.sections.find((s) => !claimedSections.has(s) && /status|current/i.test(s.heading));
     if (statusSection) {
       relevantParts.push(`Section "${statusSection.heading}" (full text):\n${statusSection.headingLine}${statusSection.body}`.trim());
+      claimedSections.add(statusSection);
     }
-    const activitySection = sections.sections.find((s) => /activity|log/i.test(s.heading));
+  }
+  if (!spec || !activitySlotMatched) {
+    const activitySection = sections.sections.find((s) => !claimedSections.has(s) && /activity|log/i.test(s.heading));
     if (activitySection) {
       const chunk = extractMostRecentDatedChunk(activitySection.body);
       relevantParts.push(`Section "${activitySection.heading}" — most recent dated entry only (full text):\n${chunk}`.trim());
+      claimedSections.add(activitySection);
     }
   }
 
