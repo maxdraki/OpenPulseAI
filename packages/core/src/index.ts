@@ -67,6 +67,7 @@ export {
   searchIndex,
   fuseRankings,
   sanitizeFtsQuery,
+  RRF_K,
   type SearchResult,
   type SearchSignal,
 } from "./search/search.js";

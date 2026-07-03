@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
 import type { ChatSession, LlmProvider } from "@openpulse/core";
-import { handleChatWithPulse } from "../src/tools/chat-with-pulse.js";
+import { handleChatWithPulse, assembleChatContext } from "../src/tools/chat-with-pulse.js";
 
 function mockProvider(response: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(response) };
@@ -217,6 +217,31 @@ describe("chat_with_pulse tool", () => {
 
     const pending = await listPending(vault);
     expect(pending.length).toBe(0);
+  });
+
+  it("dedups a chunk that matches multiple keywords instead of duplicating its section", async () => {
+    // Single chunk (one "## Current Status" section) that contains both
+    // "deploy" and "release" — a two-keyword query fans out into two
+    // searchIndex calls, both of which hit this SAME chunk. FTS5's
+    // snippet() highlights whichever term matched, so the two hits render
+    // different snippet strings even though it's the same underlying
+    // chunk (same contentHash). A second, unrelated section proves that a
+    // false "2 distinct hits" reading doesn't trigger the full-theme
+    // promotion (MULTI_HIT_THRESHOLD) off this single chunk.
+    await writeTheme(
+      vault,
+      "widgets-status",
+      "## Current Status\n\nWe deploy every gizmo through an automated pipeline; the gizmo notes and deploy checklist both live here.\n\n## Other Notes\n\nCompletely unrelated notes about weather and snacks.",
+    );
+
+    const result = await assembleChatContext(vault, "deploy gizmo");
+
+    const headingOccurrences = (result.context.match(/### Current Status/g) ?? []).length;
+    expect(headingOccurrences).toBe(1);
+
+    // Full-theme promotion must not have fired off a false multi-hit count —
+    // the unrelated section's content should not have been pulled in.
+    expect(result.context).not.toContain("weather and snacks");
   });
 
   it("uses index.md to find relevant themes when available", async () => {

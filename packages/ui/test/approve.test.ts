@@ -386,6 +386,42 @@ describe("approvePendingUpdate", () => {
     const results = await searchIndex(vault, "uniquefrobnitz");
     expect(results.some((r) => r.theme === "project-eta-src")).toBe(false);
   });
+
+  it("re-indexes a THIRD theme whose [[wiki-link]] mergeThemes rewrote, not just the merged/canonical pair", async () => {
+    // mergeThemes rewrites [[source]] -> [[canonical]] across every OTHER
+    // warm file too (see merge-themes.ts's rewriteLinks) — a third theme
+    // that merely links to the merged-away theme gets its on-disk content
+    // changed even though it isn't part of the merge pair itself. The
+    // search index must reflect that changed content, not just the
+    // source/canonical pair.
+    await writeTheme(vault, "project-theta-src", "## Current Status\n\nTheta source content.");
+    await writeTheme(vault, "project-theta-dst", "## Current Status\n\nTheta destination content.");
+    await writeTheme(
+      vault,
+      "project-theta-third",
+      "## Current Status\n\nSee [[project-theta-src]] for zzyzxquokka details.",
+    );
+    await rebuildIndex(vault);
+
+    const update = basePending({
+      id: "merge-third-id",
+      theme: "project-theta-src",
+      lintFix: "merge",
+      related: ["project-theta-dst"],
+      previousContent: null,
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "merge-third-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    // The third theme's on-disk link text now reads [[project-theta-dst]] —
+    // searching for that new link text should surface project-theta-third,
+    // proving its stale index entry (still referencing project-theta-src)
+    // was refreshed by the merge, not left behind.
+    const results = await searchIndex(vault, "project-theta-dst");
+    expect(results.some((r) => r.theme === "project-theta-third")).toBe(true);
+  });
 });
 
 describe("regeneratePendingUpdate", () => {

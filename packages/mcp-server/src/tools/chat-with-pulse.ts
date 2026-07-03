@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { PendingUpdate, Vault, LlmProvider, SearchResult } from "@openpulse/core";
-import { readTheme, sanitizeThemeSlug, stripCodeFences, searchIndex, rebuildIndex } from "@openpulse/core";
+import { readTheme, sanitizeThemeSlug, stripCodeFences, searchIndex, rebuildIndex, fuseRankings, RRF_K } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
 
 /**
@@ -51,6 +51,17 @@ function extractKeywords(message: string): string[] {
  * ranks higher than one matching only one. One rebuild+retry is attempted
  * only if EVERY keyword query comes back empty (an empty/never-built
  * index), not per keyword.
+ *
+ * Fusion is keyed on each result's `contentHash` (scoped to theme+heading),
+ * not on `theme::heading::snippet` — FTS5's `snippet()` highlights whichever
+ * term matched, so the SAME chunk renders a DIFFERENT snippet string per
+ * keyword query. Keying on the rendered snippet would treat those as
+ * distinct results: fusion would never merge same-chunk hits, the assembled
+ * context would carry duplicate `### heading` sections wasting the char
+ * cap, and a single chunk matching two keywords could look like two
+ * "distinct" hits and wrongly trip `MULTI_HIT_THRESHOLD`'s full-theme
+ * promotion. Keying on `contentHash` collapses all of a chunk's per-keyword
+ * hits into one entry (keeping its best-ranked snippet) before ranking.
  */
 async function searchChatChunks(vault: Vault, message: string, limit: number): Promise<SearchResult[]> {
   const keywords = extractKeywords(message);
@@ -64,15 +75,26 @@ async function searchChatChunks(vault: Vault, message: string, limit: number): P
     perQuery = await runAll();
   }
 
-  const scores = new Map<string, number>();
+  const chunkKey = (r: SearchResult) => `${r.theme}::${r.heading}::${r.contentHash}`;
+
+  const rankings: Array<Map<string, number>> = [];
   const entries = new Map<string, SearchResult>();
+  const bestRank = new Map<string, number>();
   for (const results of perQuery) {
+    const ranking = new Map<string, number>();
     results.forEach((r, i) => {
-      const key = `${r.theme}::${r.heading}::${r.snippet}`;
-      scores.set(key, (scores.get(key) ?? 0) + 1 / (60 + i + 1));
-      entries.set(key, entries.get(key) ?? r);
+      const key = chunkKey(r);
+      const rank = i + 1;
+      ranking.set(key, rank);
+      if (!bestRank.has(key) || rank < bestRank.get(key)!) {
+        bestRank.set(key, rank);
+        entries.set(key, r);
+      }
     });
+    rankings.push(ranking);
   }
+
+  const scores = fuseRankings(rankings, RRF_K);
 
   return Array.from(scores.entries())
     .sort((a, b) => b[1] - a[1])

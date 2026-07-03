@@ -27,6 +27,7 @@ import {
   commitVault,
   updateThemeInIndex,
   removeThemeFromIndex,
+  rebuildIndex,
   type PendingUpdate,
   type LlmProvider,
 } from "../../../core/dist/index.js";
@@ -66,12 +67,20 @@ export type ApproveOutcome = ApproveSuccess | ApproveFailure;
  * Never throws — an index hiccup here must never turn an otherwise-
  * successful approve into a failure (updateThemeInIndex/removeThemeFromIndex
  * already degrade gracefully on their own, but this is belt-and-braces).
+ *
+ * merge/rename are handled with a full `rebuildIndex` rather than a
+ * targeted removeThemeFromIndex/updateThemeInIndex pair: `mergeThemes`
+ * rewrites `[[wiki-links]]` in every OTHER warm file that referenced the
+ * source theme (see `mergeThemes`'s link-rewrite pass), not just the
+ * source/canonical pair, so a targeted update leaves those third-party
+ * files' index entries stale (still indexed under their old link text).
+ * A full rebuild is the cheapest fix that's still correct — still swallowed
+ * on error, so it can never turn a successful approve into a failure.
  */
 async function syncSearchIndex(vault: Vault, update: PendingUpdate, related0: string | undefined): Promise<void> {
   try {
     if (update.lintFix === "merge" || update.lintFix === "rename") {
-      await removeThemeFromIndex(vault, update.theme);
-      if (related0) await updateThemeInIndex(vault, related0);
+      await rebuildIndex(vault);
     } else if (update.lintFix === "delete") {
       await removeThemeFromIndex(vault, update.theme);
     } else if (update.schemaEvolution || update.theme === "_schema") {
