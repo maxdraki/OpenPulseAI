@@ -141,6 +141,28 @@ describe("applyPatch", () => {
     expect(rejected).toHaveLength(1);
   });
 
+  it("rejects add_section when the heading already exists (exact match), leaving the page unchanged for that op", () => {
+    const before = base();
+    const { sections, rejected } = applyPatch(before, [
+      { op: "add_section", heading: "Activity Log", content: "Duplicate content." },
+    ]);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatch(/already exists/i);
+    // No duplicate heading was inserted — section count and content unchanged.
+    expect(sections.sections.map((s) => s.heading)).toEqual(before.sections.map((s) => s.heading));
+    expect(serializeSections(sections)).toBe(serializeSections(before));
+  });
+
+  it("rejects add_section when the heading already exists (case-insensitive/trimmed match)", () => {
+    const before = base();
+    const { sections, rejected } = applyPatch(before, [
+      { op: "add_section", heading: "  activity log  ", content: "Duplicate content." },
+    ]);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatch(/already exists/i);
+    expect(sections.sections).toHaveLength(before.sections.length);
+  });
+
   it("rejects an unknown op type", () => {
     const ops = [{ op: "delete_section", heading: "Current Status" } as unknown as PatchOp];
     const { rejected, sections } = applyPatch(base(), ops);

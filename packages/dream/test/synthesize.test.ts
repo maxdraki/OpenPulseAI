@@ -784,6 +784,60 @@ describe("synthesizeToPending", () => {
       expect(pending[0].proposedContent).toContain("Brand new project.");
     });
 
+    // Bodies with many lines: buildOutline's preview only ever shows the first
+    // two non-empty lines, so a line far past that (e.g. "...line 19") only
+    // ends up in the prompt if the section's FULL text was selected as
+    // relevant context — not merely from the outline.
+    function manyLines(prefix: string, count: number): string {
+      return Array.from({ length: count }, (_, i) => `- ${prefix} line ${i}: ${"x".repeat(30)}`).join("\n");
+    }
+
+    function bigSourceSummaryPage(): string {
+      return (
+        "## Source\n\n" + "s".repeat(600) + "\n" +
+        "## Key Takeaways\n\n" + manyLines("takeaway", 20) + "\n" +
+        "## Referenced In\n\n" + manyLines("reference", 20) + "\n"
+      );
+    }
+
+    it("includes the full text of Key Takeaways and Referenced In in the prompt for a source-summary page", async () => {
+      await writeTheme(vault, "source-doc", bigSourceSummaryPage());
+
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue("[]") };
+      await synthesizeToPending(vault, classifiedFor("source-doc"), provider, "test-model", { "source-doc": "source-summary" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // Lines well past the outline's 2-line preview cap — only present if the
+      // full section text was included as relevant context.
+      expect(call.prompt).toContain("takeaway line 19");
+      expect(call.prompt).toContain("reference line 19");
+      expect(call.prompt).toContain(PATCH_MARKER);
+    });
+
+    it("runs the end-to-end patch flow for a source-summary page (mock LLM emitting ops)", async () => {
+      await writeTheme(vault, "source-doc-2", bigSourceSummaryPage());
+
+      const opsResponse = '```json\n[{"op":"append_to_section","heading":"Key Takeaways","content":"- New takeaway. ^[src:2026-04-20-github-activity]\\n"}]\n```';
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue(opsResponse) };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(
+        vault,
+        classifiedFor("source-doc-2"),
+        provider,
+        "test-model",
+        { "source-doc-2": "source-summary" },
+        { onPatchOutcome }
+      );
+
+      expect(provider.complete).toHaveBeenCalledTimes(1);
+      expect(onPatchOutcome).toHaveBeenCalledWith("source-doc-2", "patch");
+      expect(pending).toHaveLength(1);
+      expect(pending[0].proposedContent).toContain("s".repeat(600)); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("reference line 19"); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("New takeaway.");
+    });
+
     it("update_meta op flows through to projectStatus exactly like the whole-page <meta> block", async () => {
       await writeTheme(vault, "patch-meta", bigExistingPage());
 

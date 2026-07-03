@@ -102,6 +102,25 @@ function extractMostRecentDatedChunk(body: string): string {
   return body.slice(start, end);
 }
 
+/** Literal, known section headings worth sending in full to the patch
+ *  synthesis prompt, per page type — as opposed to the generic
+ *  status/current + activity/log regex heuristics below, which were tuned
+ *  against the "project" template and happen to match NONE of the
+ *  source-summary template's headings (Source / Key Takeaways / Referenced
+ *  In — see schema.ts). Matching is exact-then-case-insensitive-trimmed,
+ *  same as page-patch.ts's heading matching. `recentOnly` headings get only
+ *  their most recent dated `###` chunk (Activity-Log-style); `fullText`
+ *  headings are sent in their entirety. */
+const RELEVANT_HEADINGS: Partial<Record<ThemeType, { fullText: string[]; recentOnly: string[] }>> = {
+  project: { fullText: ["current status"], recentOnly: ["activity log"] },
+  "source-summary": { fullText: ["key takeaways", "referenced in"], recentOnly: [] },
+};
+
+function headingMatches(heading: string, names: string[]): boolean {
+  const normalized = heading.trim().toLowerCase();
+  return names.includes(normalized);
+}
+
 function buildPatchPrompt(
   theme: string,
   pageType: ThemeType,
@@ -119,15 +138,41 @@ function buildPatchPrompt(
   if (sections.meta.trim().length > 0) {
     relevantParts.push(`Meta block (full text):\n${sections.meta.trim()}`);
   }
-  const statusSection = sections.sections.find((s) => /status|current/i.test(s.heading));
-  if (statusSection) {
-    relevantParts.push(`Section "${statusSection.heading}" (full text):\n${statusSection.headingLine}${statusSection.body}`.trim());
+
+  // Page-type-aware selection: prefer the literal known headings for this
+  // page type (see RELEVANT_HEADINGS above) so source-summary pages (whose
+  // headings never match the project-tuned regex fallback) still get full
+  // section text to verify against and avoid duplicating. Falls back to the
+  // generic status/current + activity/log regex heuristics for pages with
+  // nonstandard structure (a custom _schema.md renamed the headings, or the
+  // page type has no literal-heading spec at all).
+  const spec = RELEVANT_HEADINGS[pageType];
+  const matchedHeadings = new Set<string>();
+  if (spec) {
+    for (const section of sections.sections) {
+      if (headingMatches(section.heading, spec.fullText)) {
+        relevantParts.push(`Section "${section.heading}" (full text):\n${section.headingLine}${section.body}`.trim());
+        matchedHeadings.add(section.heading);
+      } else if (headingMatches(section.heading, spec.recentOnly)) {
+        const chunk = extractMostRecentDatedChunk(section.body);
+        relevantParts.push(`Section "${section.heading}" — most recent dated entry only (full text):\n${chunk}`.trim());
+        matchedHeadings.add(section.heading);
+      }
+    }
   }
-  const activitySection = sections.sections.find((s) => /activity|log/i.test(s.heading));
-  if (activitySection) {
-    const chunk = extractMostRecentDatedChunk(activitySection.body);
-    relevantParts.push(`Section "${activitySection.heading}" — most recent dated entry only (full text):\n${chunk}`.trim());
+
+  if (matchedHeadings.size === 0) {
+    const statusSection = sections.sections.find((s) => /status|current/i.test(s.heading));
+    if (statusSection) {
+      relevantParts.push(`Section "${statusSection.heading}" (full text):\n${statusSection.headingLine}${statusSection.body}`.trim());
+    }
+    const activitySection = sections.sections.find((s) => /activity|log/i.test(s.heading));
+    if (activitySection) {
+      const chunk = extractMostRecentDatedChunk(activitySection.body);
+      relevantParts.push(`Section "${activitySection.heading}" — most recent dated entry only (full text):\n${chunk}`.trim());
+    }
   }
+
   const relevantText = relevantParts.join("\n\n");
 
   const metaOpInstruction = pageType === "project"

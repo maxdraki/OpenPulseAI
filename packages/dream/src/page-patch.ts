@@ -158,9 +158,12 @@ function buildMetaBlock(status?: string, reason?: string): string {
  * Apply an ordered list of patch operations to a page model. Pure: does not
  * mutate `sections`. Never deletes a section — the result always contains
  * every input section (compaction owns shrinking pages, not patch
- * synthesis). Unknown ops, ops targeting a missing heading, and
- * `replace_section` ops that would shrink a section by more than 50% are
- * rejected (collected in `rejected`); the rest are still applied.
+ * synthesis). Unknown ops, ops targeting a missing heading, `add_section` ops
+ * whose heading matches an existing section (same exact/case-insensitive-
+ * trimmed matching as the other ops — `findSectionIndex` always resolves the
+ * FIRST matching section, so a second `## <heading>` would be permanently
+ * orphaned), and `replace_section` ops that would shrink a section by more
+ * than 50% are rejected (collected in `rejected`); the rest are still applied.
  */
 export function applyPatch(sections: PageSections, ops: PatchOp[]): ApplyPatchResult {
   let working: PageSections = {
@@ -205,6 +208,10 @@ export function applyPatch(sections: PageSections, ops: PatchOp[]): ApplyPatchRe
         break;
       }
       case "add_section": {
+        if (findSectionIndex(working.sections, op.heading) !== -1) {
+          rejected.push({ op, reason: `add_section heading already exists: ${op.heading}` });
+          break;
+        }
         let insertIdx: number;
         if (op.after === undefined) {
           insertIdx = working.sections.length;
