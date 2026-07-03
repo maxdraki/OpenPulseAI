@@ -107,7 +107,21 @@ async function tryRealpath(path: string): Promise<string> {
 // `*.tmp` pattern below) — without ignoring it, every heartbeat would pollute
 // the vault's commit history (M2). It has no legacy `.prev` backup file (that
 // 3-step dance was dropped — see orchestrator.ts's `saveState` docstring).
-const VAULT_GITIGNORE = ["logs/", ".dream.lock", "hot/.processed.json", "orchestrator-state.json", "*.tmp", ""].join("\n");
+// `.search-index.sqlite` (plus its WAL/SHM sidecar files) is the disposable
+// local search index (see `search/index-db.ts`) — it's rebuilt from the warm
+// themes on demand and would otherwise pollute the vault's commit history on
+// every query-triggered write, just like the other generated/ephemeral files
+// below.
+const VAULT_GITIGNORE = [
+  "logs/",
+  ".dream.lock",
+  "hot/.processed.json",
+  "orchestrator-state.json",
+  "*.tmp",
+  ".search-index.sqlite",
+  ".search-index.sqlite-*",
+  "",
+].join("\n");
 
 /**
  * Adopts the vault directory as a self-contained git repo, if it isn't one
