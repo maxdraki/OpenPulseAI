@@ -688,9 +688,11 @@ app.post("/api/save-llm-settings", async (req, res) => {
 
     await writeFile(configPath, yaml, "utf-8");
 
-    // Set API key as env var hint (Stronghold when Tauri is available)
+    // Set API key as env var hint (Stronghold when Tauri is available). Never log
+    // key material — not even a prefix; prefixes still leak entropy and provider
+    // key formats are fixed-width enough to narrow a brute-force search.
     if (apiKey) {
-      console.log(`[server] API key for ${provider} received (${apiKey.slice(0, 6)}...). Set ${PROVIDER_ENV_KEYS[provider]} env var for the dream pipeline.`);
+      console.log(`[server] API key for ${provider} received (hasKey: true). Set ${PROVIDER_ENV_KEYS[provider]} env var for the dream pipeline.`);
     }
 
     res.json({ ok: true });
