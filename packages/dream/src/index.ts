@@ -38,6 +38,12 @@ export interface DreamPipelineResult {
   /** Cumulative LLM token/call/retry totals for this run, when the provider
    *  reports usage (see `LlmProvider.getUsageTotals`). Zeros if unavailable. */
   usage: UsageTotals;
+  /** How many project/source-summary themes eligible for append/patch
+   *  synthesis this run were actually patched vs. fell back to a whole-page
+   *  rewrite (see synthesize.ts's tryPatchSynthesis). Themes that bypassed
+   *  the patch path entirely (new/small pages, concept/entity pages) are
+   *  not counted in either bucket. */
+  patchSynthesis: { patch: number; fallback: number };
 }
 
 /** Correlates a raw hot-file entry with its classification result. Only
@@ -147,10 +153,15 @@ export async function runDreamPipeline(
     // error while loading schema/backlinks) — that's still a hard abort with
     // hot files preserved for retry, same as before.
     const failedThemes: string[] = [];
+    // Append/patch synthesis outcome counts (project/source-summary pages
+    // eligible for the patch path — see synthesize.ts's tryPatchSynthesis).
+    // Purely observability: doesn't affect which pendings get written.
+    const patchSynthesis = { patch: 0, fallback: 0 };
     let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
     try {
       pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes, {
         onThemeFailure: (theme) => failedThemes.push(theme),
+        onPatchOutcome: (_theme, outcome) => { patchSynthesis[outcome]++; },
       });
     } catch (err) {
       console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
@@ -202,10 +213,13 @@ export async function runDreamPipeline(
       ? ` | FAILED: ${failedThemes.join(", ")} (${deferredEntryCount} entr${deferredEntryCount === 1 ? "y" : "ies"} deferred)`
       : "";
     const usageSummary = ` | usage: ${usage.calls} call(s), ${usage.inputTokens} in / ${usage.outputTokens} out tok, ${usage.retries} retr${usage.retries === 1 ? "y" : "ies"}`;
+    const patchSummary = (patchSynthesis.patch + patchSynthesis.fallback) > 0
+      ? ` | patch synthesis: ${patchSynthesis.patch} patched, ${patchSynthesis.fallback} fell back to whole-page`
+      : "";
     await appendLog(
       vault,
       "dream",
-      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}`
+      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}${patchSummary}`
     );
 
     await archiveProcessedHotFiles(vault);
@@ -219,7 +233,7 @@ export async function runDreamPipeline(
     );
     console.error("[dream] Hot files archived. Dream complete.");
 
-    return { pending, failedThemes, deferredEntryCount, usage };
+    return { pending, failedThemes, deferredEntryCount, usage, patchSynthesis };
   } finally {
     await releaseLock();
   }
