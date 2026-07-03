@@ -258,4 +258,27 @@ describe("chat_with_pulse tool", () => {
     // Should load hiring theme via index lookup, not auth
     expect(callArgs.systemPrompt).toContain("Hiring pipeline");
   });
+
+  it("caps the index.md section itself when it alone exceeds the context budget (M4)", async () => {
+    // A huge index.md, far bigger than CONTEXT_CHAR_CAP (~24k chars) on its own.
+    const hugeIndex = "x".repeat(30_000);
+    await writeFile(join(vault.warmDir, "index.md"), hugeIndex, "utf-8");
+
+    const result = await assembleChatContext(vault, "zzz-no-match-query");
+
+    // Never throws, never returns an uncapped multi-tens-of-KB context.
+    expect(result.context.length).toBeLessThanOrEqual(24_000 + "...".length);
+  });
+
+  it("counts the section joiners toward the context budget (M4)", async () => {
+    // Several themes, each individually small, so the only way to blow the
+    // cap is for the joiners between sections to go uncounted.
+    for (let i = 0; i < 5; i++) {
+      await writeTheme(vault, `theme-${i}`, `## Widgets ${i}\n\nNotes about widgets batch ${i}.`);
+    }
+
+    const result = await assembleChatContext(vault, "widgets");
+
+    expect(result.context.length).toBeLessThanOrEqual(24_000);
+  });
 });

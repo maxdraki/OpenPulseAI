@@ -34,10 +34,10 @@ type FeatureExtractionPipeline = (
 
 export type Embedder = (texts: string[]) => Promise<Float32Array[] | null>;
 
-let warned = false;
+const warnedMessages = new Set<string>();
 async function warnOnce(message: string, detail?: string): Promise<void> {
-  if (warned) return;
-  warned = true;
+  if (warnedMessages.has(message)) return;
+  warnedMessages.add(message);
   console.warn(`[embeddings] ${message}${detail ? `: ${detail}` : ""}`);
   try {
     await vaultLog("warn", `[embeddings] ${message}`, detail);

@@ -131,6 +131,14 @@ interface AssembledContext {
   matched: boolean;
 }
 
+/** Hard-truncates text that alone exceeds a cap — unlike the per-theme
+ *  sections below (which are skipped whole rather than truncated), the
+ *  index map is a single unavoidable orientation section, so a huge
+ *  index.md is cut down to fit rather than dropped entirely. */
+function plainTruncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+}
+
 async function loadIndexMap(vault: Vault): Promise<string> {
   try {
     return await readFile(join(vault.warmDir, "index.md"), "utf-8");
@@ -138,6 +146,13 @@ async function loadIndexMap(vault: Vault): Promise<string> {
     return "";
   }
 }
+
+/** Joiner placed between assembled sections (see the `join()` at the end of
+ *  `assembleChatContext`) — its length must be counted in `used` too, or a
+ *  run of many small theme sections that each individually fit under the
+ *  cap could still push the final joined string over `CONTEXT_CHAR_CAP`
+ *  once every joiner between them is accounted for. */
+const SECTION_JOINER = "\n\n---\n\n";
 
 /**
  * Context assembly for chat_with_pulse: top-K chunks from the hybrid search
@@ -155,7 +170,13 @@ export async function assembleChatContext(vault: Vault, message: string): Promis
   const indexMap = await loadIndexMap(vault);
   const chunks = await searchChatChunks(vault, message, CHUNK_FETCH_LIMIT);
 
-  const indexSection = indexMap ? `## Wiki Index (page map)\n\n${indexMap}` : "";
+  let indexSection = indexMap ? `## Wiki Index (page map)\n\n${indexMap}` : "";
+  // Cap-check the index map like every other section: on a vault with a
+  // huge index.md, including it uncapped could alone blow past
+  // CONTEXT_CHAR_CAP before any theme section is even considered.
+  if (indexSection.length > CONTEXT_CHAR_CAP) {
+    indexSection = plainTruncate(indexSection, CONTEXT_CHAR_CAP);
+  }
 
   if (chunks.length === 0) {
     return { context: indexSection, themesConsulted: [], matched: false };
@@ -184,19 +205,20 @@ export async function assembleChatContext(vault: Vault, message: string): Promis
 
     if (themeChunks.length >= MULTI_HIT_THRESHOLD) {
       const full = await readTheme(vault, theme);
-      if (full && used + full.content.length <= CONTEXT_CHAR_CAP) {
+      if (full && used + SECTION_JOINER.length + full.content.length <= CONTEXT_CHAR_CAP) {
         section = `## ${theme}\n\n${full.content}`;
       }
     }
 
-    if (used + section.length > CONTEXT_CHAR_CAP) continue; // doesn't fit — skip, don't truncate
+    const addedLength = SECTION_JOINER.length + section.length;
+    if (used + addedLength > CONTEXT_CHAR_CAP) continue; // doesn't fit — skip, don't truncate
 
     sections.push(section);
     themesConsulted.push(theme);
-    used += section.length;
+    used += addedLength;
   }
 
-  return { context: sections.join("\n\n---\n\n"), themesConsulted, matched: true };
+  return { context: sections.join(SECTION_JOINER), themesConsulted, matched: true };
 }
 
 export interface ChatWithPulseInput {

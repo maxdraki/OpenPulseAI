@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { Vault, loadConfig, createProvider, initLogger, vaultLog, type LlmProvider } from "@openpulse/core";
@@ -107,7 +108,7 @@ export async function createServer(vaultRoot: string, opts?: { provider?: LlmPro
     async (uri) => {
       let text: string;
       try {
-        text = await readFile(vault.warmDir + "/index.md", "utf-8");
+        text = await readFile(join(vault.warmDir, "index.md"), "utf-8");
       } catch {
         text = "# OpenPulse Wiki Index\n\nNo themes yet — nothing has been synthesized into the warm layer.";
       }

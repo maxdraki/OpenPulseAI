@@ -11,7 +11,7 @@ pnpm workspace monorepo with 4 packages:
 | Package | Purpose |
 |---------|---------|
 | `packages/core` | Vault I/O, config, LLM provider abstraction (Anthropic/OpenAI/Gemini/Ollama), skills system (loader/runner/scheduler/eligibility/security), orchestrator, logger, shared types |
-| `packages/mcp-server` | MCP server (stdio + HTTPS) with 5 tools: `record_activity`, `ingest_document`, `query_memory`, `chat_with_pulse`, `submit_update` |
+| `packages/mcp-server` | MCP server (stdio + HTTPS) with 7 tools (`record_activity`, `ingest_document`, `query_memory`, `search_index`, `read_theme`, `chat_with_pulse`, `submit_update`), 1 resource (`openpulse://index`), and 2 prompts (`summarize_my_week`, `what_do_i_know_about`) |
 | `packages/dream` | Dream Pipeline: multi-tag classify → wiki-style synthesize with [[cross-references]] → generate index.md → append log.md → batch pending review |
 | `packages/ui` | Control Center web app (Vite + vanilla TS + custom CSS). Dev API server at `server.ts`. Pages: Dashboard, Review, Skills, Schedule, Logs, Settings, Help |
 

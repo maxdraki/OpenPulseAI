@@ -53,7 +53,7 @@ The key insight (from [Karpathy's LLM Wiki](https://gist.github.com/karpathy/442
 ```
 packages/
 ├── core/           # Vault I/O, LLM providers, skills system, orchestrator, security
-├── mcp-server/     # MCP tools: record_activity, query_memory, chat_with_pulse
+├── mcp-server/     # MCP server: 7 tools, 1 resource, 2 prompts (see "MCP Tools" below)
 ├── dream/          # Dream Pipeline: classify → synthesize → index → review
 ├── ui/             # Control Center (Vite + vanilla TS) with dev API server
 └── src-tauri/      # Tauri v2 desktop wrapper (Rust backend)
@@ -226,7 +226,7 @@ OpenPulse draws from [Andrej Karpathy's LLM Wiki pattern](https://gist.github.co
 ## Project Status
 
 - [x] Core vault (hot/warm/cold layers)
-- [x] MCP server (stdio + HTTPS transports, 5 tools)
+- [x] MCP server (stdio + HTTPS transports, 7 tools, 1 resource, 2 prompts)
 - [x] Wiki-style Dream Pipeline (multi-tag classify, cross-references, index.md, log.md)
 - [x] BYO LLM (Anthropic, OpenAI, Gemini, Ollama)
 - [x] Control Center UI (Dashboard, Review, Data Sources, Schedule, Logs, Settings, Help)

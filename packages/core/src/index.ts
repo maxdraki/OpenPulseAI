@@ -65,6 +65,7 @@ export { checkStaleness, normalizeContentForCompare, type StalenessResult } from
 export { ensureVaultRepo, commitVault } from "./vault-git.js";
 export {
   searchIndex,
+  searchWithRebuildRetry,
   fuseRankings,
   sanitizeFtsQuery,
   RRF_K,

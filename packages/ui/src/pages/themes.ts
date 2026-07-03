@@ -41,7 +41,6 @@ function renderThemeCards(themes: WarmTheme[], list: HTMLElement): void {
  *  theme list down to that one name. */
 function renderSearchResults(
   results: ThemeSearchResult[],
-  allThemes: WarmTheme[],
   list: HTMLElement,
   onSelectTheme: (theme: string) => void,
 ): void {
@@ -117,7 +116,7 @@ export async function renderThemes(container: HTMLElement): Promise<void> {
       try {
         const results = await searchThemes(query);
         if (seq !== requestSeq) return; // a newer keystroke's request already landed
-        renderSearchResults(results, allThemes, list, (theme) => {
+        renderSearchResults(results, list, (theme) => {
           searchInput.value = "";
           const match = allThemes.filter((t) => t.theme === theme);
           renderThemeCards(match.length > 0 ? match : allThemes, list);
