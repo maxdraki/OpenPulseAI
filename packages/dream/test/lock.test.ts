@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -87,6 +87,18 @@ describe("acquireDreamLock", () => {
     await release();
   });
 
+  it("does NOT steal a lock with an old startedAt but a fresh refreshedAt heartbeat, when the owner pid is alive (I1)", async () => {
+    const staleStartedAt = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+    const freshRefreshedAt = new Date().toISOString();
+    await writeFile(
+      lockFilePath(vault),
+      JSON.stringify({ pid: process.pid, startedAt: staleStartedAt, refreshedAt: freshRefreshedAt }),
+      "utf-8"
+    );
+
+    await expect(acquireDreamLock(vault)).rejects.toThrow(/already running/i);
+  });
+
   it("acquisition is atomic: two concurrent acquireDreamLock() calls racing from no lock never both succeed (TOCTOU regression)", async () => {
     // The old implementation was check-then-write (read, decide "no lock
     // exists", then write): two callers racing could both observe "no lock"
@@ -102,6 +114,28 @@ describe("acquireDreamLock", () => {
     expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(/already running/i);
 
     await (fulfilled[0] as PromiseFulfilledResult<() => Promise<void>>).value();
+  });
+
+  it("heartbeat refreshes the lock's refreshedAt periodically while held, and the timer doesn't block process exit (I1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = await acquireDreamLock(vault);
+      const before = JSON.parse(await readFile(lockFilePath(vault), "utf-8"));
+      expect(before.refreshedAt).toBeUndefined();
+
+      // Advance past the 5-minute heartbeat interval.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+
+      const after = JSON.parse(await readFile(lockFilePath(vault), "utf-8"));
+      expect(after.refreshedAt).toEqual(expect.any(String));
+      expect(after.pid).toBe(process.pid);
+
+      await release();
+      // Releasing must clear the interval — no further writes after this point.
+      await expect(stat(lockFilePath(vault))).rejects.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries the exclusive create after stealing on EEXIST, ending up with its own pid in the lock", async () => {

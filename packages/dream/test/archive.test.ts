@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readFile, mkdir, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, getLocalDate, appendActivity } from "@openpulse/core";
@@ -105,5 +105,105 @@ describe("archiveProcessedHotFiles", () => {
     const afterLedger = await loadProcessedLedger(vault);
     expect(afterLedger[computeEntryId(oldEntry)]).toBeUndefined();
     expect(afterLedger[computeEntryId(unrelatedEntry)]).toBeDefined();
+  });
+
+  // C1 (blocking): a theme's synthesis can fail/be refused, leaving some of
+  // its entries deliberately NOT marked processed in the ledger so they're
+  // retried next run. Previously `archiveProcessedHotFiles` ignored the
+  // ledger entirely and archived every non-today daily file (and every
+  // ingest file) regardless — silently losing those deferred entries forever
+  // once their file hit cold storage.
+
+  it("does NOT archive a non-today daily file that contains a deferred (unprocessed) entry", async () => {
+    const oldBlock =
+      "## 2026-04-02T09:00:00Z\n**Source:** github-activity\n\nDeferred entry, theme synth failed\n\n---\n";
+    await writeFile(vault.dailyLogPath("2026-04-02"), oldBlock, "utf-8");
+    const today = getLocalDate();
+    await writeFile(vault.dailyLogPath(today), "# Today log", "utf-8");
+
+    // Ledger has nothing for this entry — it was deferred, never marked processed.
+    await saveProcessedLedger(vault, {});
+
+    await archiveProcessedHotFiles(vault);
+
+    // File must survive so the entry is retried on the next dream run.
+    const stillThere = await readFile(vault.dailyLogPath("2026-04-02"), "utf-8");
+    expect(stillThere).toBe(oldBlock);
+    await expect(
+      readFile(join(vault.coldDir, "2026-04", "2026-04-02.md"), "utf-8")
+    ).rejects.toThrow();
+  });
+
+  it("archives a non-today daily file once ALL of its entries are marked processed", async () => {
+    const oldBlock =
+      "## 2026-04-02T09:00:00Z\n**Source:** github-activity\n\nFully processed entry\n\n---\n";
+    await writeFile(vault.dailyLogPath("2026-04-02"), oldBlock, "utf-8");
+    const today = getLocalDate();
+    await writeFile(vault.dailyLogPath(today), "# Today log", "utf-8");
+
+    const entry = { timestamp: "2026-04-02T09:00:00Z", log: "Fully processed entry", source: "github-activity" };
+    await saveProcessedLedger(vault, {
+      [computeEntryId(entry)]: { processedAt: "2026-04-02T10:00:00Z", batchId: "batch-1" },
+    });
+
+    await archiveProcessedHotFiles(vault);
+
+    await expect(stat(vault.dailyLogPath("2026-04-02"))).rejects.toThrow();
+    const archived = await readFile(join(vault.coldDir, "2026-04", "2026-04-02.md"), "utf-8");
+    expect(archived).toBe(oldBlock);
+
+    // Ledger row for the now-archived file's entry must be pruned.
+    const afterLedger = await loadProcessedLedger(vault);
+    expect(afterLedger[computeEntryId(entry)]).toBeUndefined();
+  });
+
+  it("does NOT archive a deferred (unprocessed) ingest file", async () => {
+    const ingestDir = join(vault.hotDir, "ingest");
+    await mkdir(ingestDir, { recursive: true });
+    const filePath = join(ingestDir, "doc1.md");
+    await writeFile(filePath, "Ingested content", "utf-8");
+    const mtime = new Date("2026-04-01T00:00:00Z");
+    await utimes(filePath, mtime, mtime);
+
+    // Ledger empty — this ingest entry was never marked processed.
+    await saveProcessedLedger(vault, {});
+
+    await archiveProcessedHotFiles(vault);
+
+    // File must survive in hot/ingest for retry.
+    const stillThere = await readFile(filePath, "utf-8");
+    expect(stillThere).toBe("Ingested content");
+  });
+
+  it("archives a processed ingest file and prunes its ledger row (M1)", async () => {
+    const ingestDir = join(vault.hotDir, "ingest");
+    await mkdir(ingestDir, { recursive: true });
+    const filePath = join(ingestDir, "doc1.md");
+    await writeFile(filePath, "Ingested content", "utf-8");
+    const mtime = new Date("2026-04-01T00:00:00Z");
+    await utimes(filePath, mtime, mtime);
+
+    const entry = {
+      timestamp: mtime.toISOString(),
+      log: "Ingested content",
+      theme: "ingested",
+      source: "doc1",
+    };
+    await saveProcessedLedger(vault, {
+      [computeEntryId(entry)]: { processedAt: "2026-04-01T01:00:00Z", batchId: "batch-1" },
+    });
+
+    await archiveProcessedHotFiles(vault);
+
+    await expect(stat(filePath)).rejects.toThrow();
+    // Ingest files are archived under the CURRENT month (the archive run's
+    // date), not the document's own mtime month — matches archive.ts's
+    // existing `coldIngestDir` derivation.
+    const month = new Date().toISOString().slice(0, 7);
+    const archived = await readFile(join(vault.coldDir, month, "ingest", "doc1.md"), "utf-8");
+    expect(archived).toBe("Ingested content");
+
+    const afterLedger = await loadProcessedLedger(vault);
+    expect(afterLedger[computeEntryId(entry)]).toBeUndefined();
   });
 });

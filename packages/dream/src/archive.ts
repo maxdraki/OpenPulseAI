@@ -1,7 +1,7 @@
-import { readdir, mkdir, rename, readFile } from "node:fs/promises";
+import { readdir, mkdir, rename, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { archiveHotFile, vaultLog, parseActivityBlocks, getLocalDate, type Vault } from "@openpulse/core";
-import { loadProcessedLedger, saveProcessedLedger, pruneLedgerForEntries } from "./ledger.js";
+import { archiveHotFile, vaultLog, parseActivityBlocks, getLocalDate, type Vault, type ParsedActivityBlock } from "@openpulse/core";
+import { loadProcessedLedger, saveProcessedLedger, pruneLedgerForEntries, computeEntryId, type EntryLike } from "./ledger.js";
 
 export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
   const files = await readdir(vault.hotDir);
@@ -38,19 +38,28 @@ export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
     const date = match[1];
     if (date === todayLocal || date === todayUTC) continue;
 
+    let blocks: ParsedActivityBlock[] = [];
     try {
       const content = await readFile(join(vault.hotDir, file), "utf-8");
-      ledger = pruneLedgerForEntries(parseActivityBlocks(content), ledger);
+      blocks = parseActivityBlocks(content);
     } catch {
-      // File unreadable — nothing to prune, archive still proceeds below.
+      // File unreadable — nothing to check against the ledger or prune;
+      // archive still proceeds below (matches prior behaviour for this edge case).
     }
 
+    // Ledger-aware skip (C1): a theme's synthesis can fail/be refused, which
+    // deliberately leaves some entries unmarked in the ledger so they're
+    // retried next run (see index.ts's "conservative all themes must
+    // succeed" rule). If ANY entry in this file is still unprocessed, the
+    // whole file must survive archiving — otherwise a deferred entry that
+    // happens to live in a non-today daily file would be moved to cold and
+    // never retried.
+    const hasDeferredEntry = blocks.some((b) => !originalLedger[computeEntryId(b)]);
+    if (hasDeferredEntry) continue;
+
+    ledger = pruneLedgerForEntries(blocks, ledger);
     await archiveHotFile(vault, date);
     archived++;
-  }
-
-  if (ledger !== originalLedger) {
-    await saveProcessedLedger(vault, ledger);
   }
 
   // Archive ingested documents
@@ -63,10 +72,44 @@ export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
 
     for (const file of ingestFiles) {
       if (!file.endsWith(".md")) continue;
-      await rename(join(ingestDir, file), join(coldIngestDir, file));
+      const filePath = join(ingestDir, file);
+
+      // Derive the same entry ID `index.ts`'s `readHotEntries`/`markProcessed`
+      // uses for this file, so we can tell whether it's still deferred (C1) —
+      // must round-trip exactly: timestamp from mtime, log = raw content,
+      // theme "ingested", source = filename without extension.
+      let entryId: string | null = null;
+      try {
+        const content = await readFile(filePath, "utf-8");
+        const fileStat = await stat(filePath);
+        const entry: EntryLike = {
+          timestamp: fileStat.mtime.toISOString(),
+          log: content,
+          theme: "ingested",
+          source: file.replace(/\.md$/, ""),
+        };
+        entryId = computeEntryId(entry);
+      } catch {
+        // Unreadable — can't verify processed state; archive proceeds anyway
+        // (matches the daily-file fallback above).
+      }
+
+      if (entryId && !originalLedger[entryId]) continue; // deferred — retry next run
+
+      await rename(filePath, join(coldIngestDir, file));
       archived++;
+
+      if (entryId && entryId in ledger) {
+        const next = { ...ledger };
+        delete next[entryId];
+        ledger = next;
+      }
     }
   } catch { /* ingest dir may not exist */ }
+
+  if (ledger !== originalLedger) {
+    await saveProcessedLedger(vault, ledger);
+  }
 
   await vaultLog("info", "Dream pipeline archived hot entries", `${archived} files moved to cold storage`);
 }

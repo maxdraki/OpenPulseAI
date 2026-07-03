@@ -13,6 +13,15 @@ import { type Vault, vaultLog } from "@openpulse/core";
 
 const STALE_LOCK_MS = 30 * 60 * 1000; // 30 minutes
 
+// How often the running pipeline refreshes its lockfile's `refreshedAt` (see
+// `LockInfo`) while it holds the lock. Long runs (LLM retries, slow local
+// Ollama models) can easily exceed `STALE_LOCK_MS` — without a heartbeat, a
+// perfectly healthy in-progress run would look stale to any other process
+// checking the lock and get its lock stolen out from under it (I1). Well
+// under `STALE_LOCK_MS` so a single missed tick (e.g. a slow event loop)
+// doesn't flip the lock stale.
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 // Bounded retry for the steal loop: each iteration either wins an exclusive
 // create or discovers a live/fresh lock and throws. A tight bound just
 // guards against pathological flapping between two stealers; in practice one
@@ -22,6 +31,29 @@ const MAX_ACQUIRE_ATTEMPTS = 10;
 interface LockInfo {
   pid: number;
   startedAt: string; // ISO 8601
+  /** ISO 8601 — last heartbeat write by the current holder, if any. Staleness
+   *  is judged against max(startedAt, refreshedAt) so a long-but-healthy run
+   *  never looks stale as long as its heartbeat keeps landing (I1). */
+  refreshedAt?: string;
+}
+
+/** Milliseconds since the more recent of `startedAt`/`refreshedAt`. */
+function lockAgeMs(info: LockInfo): number {
+  const started = Date.parse(info.startedAt);
+  const refreshed = info.refreshedAt ? Date.parse(info.refreshedAt) : NaN;
+  const latest = Number.isFinite(refreshed) && refreshed > started ? refreshed : started;
+  return Date.now() - latest;
+}
+
+/** Best-effort heartbeat write — if the lockfile is gone (e.g. another
+ *  process stole it, or we already released) there's nothing to refresh. */
+async function refreshLock(file: string, pid: number, startedAt: string): Promise<void> {
+  try {
+    const info: LockInfo = { pid, startedAt, refreshedAt: new Date().toISOString() };
+    await writeFile(file, JSON.stringify(info, null, 2), "utf-8");
+  } catch {
+    // Best-effort — see docstring above.
+  }
 }
 
 function lockPath(vault: Vault): string {
@@ -66,7 +98,19 @@ export async function acquireDreamLock(vault: Vault): Promise<() => Promise<void
     const info: LockInfo = { pid: process.pid, startedAt: new Date().toISOString() };
     try {
       await writeFile(file, JSON.stringify(info, null, 2), { encoding: "utf-8", flag: "wx" });
+
+      // Start the heartbeat: refresh `refreshedAt` on an interval so a long
+      // run never looks stale to another process checking the lock (I1).
+      // `unref()` so this timer alone can never keep the Node process alive
+      // (it must not block a clean exit if something else terminates the
+      // pipeline outside the normal finally/release path).
+      const timer = setInterval(() => {
+        void refreshLock(file, info.pid, info.startedAt);
+      }, HEARTBEAT_INTERVAL_MS);
+      timer.unref();
+
       return async () => {
+        clearInterval(timer);
         try {
           await unlink(file);
         } catch {
@@ -90,7 +134,7 @@ export async function acquireDreamLock(vault: Vault): Promise<() => Promise<void
     }
 
     if (existing) {
-      const ageMs = Date.now() - Date.parse(existing.startedAt);
+      const ageMs = lockAgeMs(existing);
       const fresh = Number.isFinite(ageMs) && ageMs < STALE_LOCK_MS;
       const alive = isPidAlive(existing.pid);
 
