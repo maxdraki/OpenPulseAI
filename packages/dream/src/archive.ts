@@ -5,7 +5,21 @@ import { loadProcessedLedger, saveProcessedLedger, pruneLedgerForEntries } from 
 
 export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
   const files = await readdir(vault.hotDir);
-  const today = getLocalDate();
+  // Hot filenames are derived from `entry.timestamp.slice(0, 10)` in
+  // `appendActivity` (packages/core/src/hot.ts), and entries are timestamped
+  // with `new Date().toISOString()` (UTC) — so the filename date is a UTC
+  // date, not a local one. `getLocalDate()` is only "today" in the system's
+  // local timezone. In any positive-UTC-offset timezone, the window between
+  // local midnight and UTC midnight has today-local !== today-UTC: the file
+  // still named after UTC-yesterday can still be receiving live appends
+  // (collectors write with UTC timestamps), but a local-only cutoff no
+  // longer recognises it as "today" and would archive it out from under an
+  // in-flight append — reintroducing the exact data-loss bug this module
+  // exists to close. To stay safe regardless of which convention produced a
+  // given filename (or a historical mix of both), skip a file if it matches
+  // "today" under EITHER the local or the UTC calendar.
+  const todayLocal = getLocalDate();
+  const todayUTC = new Date().toISOString().slice(0, 10);
   let archived = 0;
 
   // Prune the processed-entry ledger as we go — once a file is archived there's
@@ -22,7 +36,7 @@ export async function archiveProcessedHotFiles(vault: Vault): Promise<void> {
     const match = file.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
     if (!match) continue;
     const date = match[1];
-    if (date === today) continue;
+    if (date === todayLocal || date === todayUTC) continue;
 
     try {
       const content = await readFile(join(vault.hotDir, file), "utf-8");

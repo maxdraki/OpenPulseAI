@@ -86,4 +86,37 @@ describe("acquireDreamLock", () => {
     expect(info.startedAt).not.toBe(staleStartedAt);
     await release();
   });
+
+  it("acquisition is atomic: two concurrent acquireDreamLock() calls racing from no lock never both succeed (TOCTOU regression)", async () => {
+    // The old implementation was check-then-write (read, decide "no lock
+    // exists", then write): two callers racing could both observe "no lock"
+    // before either had written, and both would go on to succeed. The fix
+    // uses an exclusive `wx` create, so exactly one of two truly-concurrent
+    // callers can win; the other must see a live/fresh lock and refuse.
+    const results = await Promise.allSettled([acquireDreamLock(vault), acquireDreamLock(vault)]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(/already running/i);
+
+    await (fulfilled[0] as PromiseFulfilledResult<() => Promise<void>>).value();
+  });
+
+  it("retries the exclusive create after stealing on EEXIST, ending up with its own pid in the lock", async () => {
+    // Directly exercises the EEXIST branch: a dead-pid lock is present, so
+    // the first `wx` create attempt fails with EEXIST, the loop reads the
+    // existing lock, decides it's stealable, unlinks it, and retries.
+    await writeFile(
+      lockFilePath(vault),
+      JSON.stringify({ pid: deadPid(), startedAt: new Date().toISOString() }),
+      "utf-8"
+    );
+
+    const release = await acquireDreamLock(vault);
+    const raw = await readFile(lockFilePath(vault), "utf-8");
+    expect(JSON.parse(raw).pid).toBe(process.pid);
+    await release();
+  });
 });

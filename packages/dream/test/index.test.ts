@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, appendActivity, getLocalDate } from "@openpulse/core";
 import type { LlmProvider, OpenPulseConfig } from "@openpulse/core";
 import { runDreamPipeline } from "../src/index.js";
+import { loadProcessedLedger, saveProcessedLedger, markProcessed } from "../src/ledger.js";
 
 function mockProvider(response = "## Current Status\n\nDid stuff ^[src:test]"): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(response) };
@@ -88,6 +89,33 @@ describe("runDreamPipeline", () => {
 
     // Total pending updates across both runs: 2, not deduplicated into 1 and not tripled.
     expect(await pendingFiles(vault)).toHaveLength(2);
+  });
+
+  it("archives a fully-processed old hot file even when there are zero new entries to classify", async () => {
+    // Regression for the early-return bug: when `entries.length === 0` the
+    // pipeline used to return before ever calling `archiveProcessedHotFiles`,
+    // so an old (non-today) hot file whose entries were already marked
+    // processed by a previous run — but never got archived, e.g. because
+    // that run crashed between the ledger write and archiving — would sit in
+    // hot/ forever on every subsequent quiet day (no new entries appended).
+    const oldDate = "2026-04-01";
+    const oldEntry = { timestamp: `${oldDate}T09:00:00Z`, log: "Old already-processed entry", theme: "myproject" };
+    await appendActivity(vault, oldEntry);
+
+    const ledger = await loadProcessedLedger(vault);
+    await saveProcessedLedger(vault, markProcessed([oldEntry], ledger, "batch-prior"));
+
+    const provider = mockProvider();
+    const result = await runDreamPipeline(vault, makeConfig(tempDir), provider, "test-model");
+
+    expect(result).toBeNull();
+    expect(provider.complete).not.toHaveBeenCalled();
+
+    // The old hot file must have been archived despite there being no new
+    // entries to process this run.
+    await expect(stat(vault.dailyLogPath(oldDate))).rejects.toThrow();
+    const archived = await readFile(join(vault.coldDir, oldDate.slice(0, 7), `${oldDate}.md`), "utf-8");
+    expect(archived).toContain("Old already-processed entry");
   });
 
   it("keeps hot files and the ledger untouched when synthesis fails", async () => {

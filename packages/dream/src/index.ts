@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readdir, readFile, stat, writeFile, appendFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import {
   Vault,
@@ -53,6 +55,11 @@ export async function runDreamPipeline(
     const entries = filterUnprocessed(rawEntries, ledger);
     if (entries.length === 0) {
       console.error("[dream] No unprocessed hot entries to process. Exiting.");
+      // Still archive (+ prune the ledger) even with nothing new to
+      // classify: on a quiet day a fully-processed old hot file would
+      // otherwise sit in hot/ forever, since archiving only ever ran after
+      // this point (which used to return early).
+      await archiveProcessedHotFiles(vault);
       return null;
     }
     console.error(`[dream] Found ${entries.length} hot entries.`);
@@ -351,13 +358,55 @@ export async function appendLog(vault: Vault, type: string, detail: string): Pro
   await appendFile(join(vault.warmDir, "log.md"), line, "utf-8");
 }
 
-// Only run main() when invoked directly, not when imported by tests.
-// Matches the compact-cli.ts / schema-evolve-cli.ts pattern rather than
-// lint-cli.ts's import.meta.url comparison — this file is also invoked via
-// the "openpulse-dream" bin symlink, where import.meta.url (resolved through
-// the symlink) and a literal file:// wrap of process.argv[1] can diverge.
-const isMain = process.argv[1]?.endsWith("index.js");
-if (isMain) {
+/**
+ * True when this module is the process's actual entry point (a real `node
+ * dist/index.js`, the `openpulse-dream` bin symlink, or a bundled/SEA
+ * sidecar), false when it's merely imported (e.g. by tests).
+ *
+ * `process.argv[1]?.endsWith("index.js")` (the previous check) silently
+ * no-ops `main()` for every real invocation path except a literal
+ * `node .../index.js`:
+ *   - The `openpulse-dream` npm bin is a symlink (`node_modules/.bin/openpulse-dream`
+ *     -> `dist/index.js`); `process.argv[1]` is the *symlink's* path, which
+ *     doesn't end in "index.js".
+ *   - A SEA/bundled sidecar has no `index.js`-named file on disk at all.
+ *
+ * Fix: resolve `process.argv[1]` through symlinks with `realpathSync` and
+ * compare it to this module's own resolved path (`fileURLToPath(import.meta.url)`,
+ * which Node already resolves through symlinks when loading an ES module —
+ * verified empirically: invoking via a symlink leaves `import.meta.url`
+ * pointing at the real target while `process.argv[1]` keeps the symlink
+ * path, so `realpathSync` on the latter reconciles the two). When there's no
+ * comparable script path to resolve at all (no `argv[1]`, e.g. a SEA binary
+ * launched with no extra arguments; or `import.meta.url` isn't a `file://`
+ * URL, e.g. a bundled context) we can't do a path comparison — since this
+ * file is always a dedicated CLI entrypoint (never re-exported for its side
+ * effects), we fail open and run `main()`, matching how the other dedicated
+ * entrypoints in this repo (`packages/core/src/skills/cli.ts`,
+ * `packages/mcp-server/src/index.ts`) call `main()` unconditionally.
+ */
+function isMainInvocation(): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return true;
+
+  let modulePath: string;
+  try {
+    modulePath = fileURLToPath(import.meta.url);
+  } catch {
+    return true;
+  }
+
+  try {
+    return realpathSync(invoked) === realpathSync(modulePath);
+  } catch {
+    // Either path doesn't exist on disk (e.g. a bundled/SEA context where
+    // argv[1] isn't a real file) — fall back to a direct string compare
+    // rather than silently no-op'ing.
+    return invoked === modulePath;
+  }
+}
+
+if (isMainInvocation()) {
   main().catch((error) => {
     console.error("[dream] Fatal error:", error);
     process.exit(1);
