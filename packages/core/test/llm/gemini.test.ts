@@ -80,4 +80,44 @@ describe("GeminiProvider", () => {
     await expect(provider.complete({ model: "gemini-x", prompt: "hi" })).rejects.toThrow();
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("wasLastCompletionTruncated", () => {
+    it("reports true when finishReason is MAX_TOKENS", async () => {
+      generateContentMock.mockResolvedValue({
+        response: {
+          text: () => "cut off",
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          candidates: [{ finishReason: "MAX_TOKENS" }],
+        },
+      });
+
+      const provider = new GeminiProvider("key");
+      await provider.complete({ model: "gemini-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(true);
+    });
+
+    it("reports false when finishReason is STOP", async () => {
+      generateContentMock.mockResolvedValue({
+        response: {
+          text: () => "done",
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          candidates: [{ finishReason: "STOP" }],
+        },
+      });
+
+      const provider = new GeminiProvider("key");
+      await provider.complete({ model: "gemini-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(false);
+    });
+
+    it("reports undefined when candidates/finishReason are absent", async () => {
+      generateContentMock.mockResolvedValue({
+        response: { text: () => "done" },
+      });
+
+      const provider = new GeminiProvider("key");
+      await provider.complete({ model: "gemini-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBeUndefined();
+    });
+  });
 });

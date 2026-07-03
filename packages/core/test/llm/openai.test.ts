@@ -80,4 +80,39 @@ describe("OpenAIProvider", () => {
     await expect(provider.complete({ model: "gpt-x", prompt: "hi" })).rejects.toThrow();
     expect(createMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("wasLastCompletionTruncated", () => {
+    it("reports true when finish_reason is length", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "cut off" }, finish_reason: "length" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+
+      const provider = new OpenAIProvider("sk-test");
+      await provider.complete({ model: "gpt-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(true);
+    });
+
+    it("reports false when finish_reason is stop", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+
+      const provider = new OpenAIProvider("sk-test");
+      await provider.complete({ model: "gpt-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(false);
+    });
+
+    it("reports undefined when finish_reason is absent", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "done" } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+
+      const provider = new OpenAIProvider("sk-test");
+      await provider.complete({ model: "gpt-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBeUndefined();
+    });
+  });
 });

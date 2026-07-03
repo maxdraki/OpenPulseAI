@@ -6,6 +6,7 @@ import { UsageAccumulator, type UsageTotals } from "./usage.js";
 export class OllamaProvider implements LlmProvider {
   private client: OpenAI;
   private usage = new UsageAccumulator();
+  private lastTruncated: boolean | undefined;
 
   constructor(baseUrl: string = "http://localhost:11434") {
     this.client = new OpenAI({
@@ -40,11 +41,17 @@ export class OllamaProvider implements LlmProvider {
     const rawResponse = response as unknown as {
       prompt_eval_count?: number;
       eval_count?: number;
+      done_reason?: string;
     };
     this.usage.recordCall({
       inputTokens: response.usage?.prompt_tokens ?? rawResponse.prompt_eval_count ?? 0,
       outputTokens: response.usage?.completion_tokens ?? rawResponse.eval_count ?? 0,
     });
+    // Same dual-shape defensiveness as the usage fields above: prefer the
+    // OpenAI-compatible `finish_reason`, fall back to Ollama's native
+    // `done_reason` in case a given version exposes that instead.
+    const finishReason = response.choices[0]?.finish_reason ?? rawResponse.done_reason;
+    this.lastTruncated = finishReason == null ? undefined : finishReason === "length";
 
     return response.choices[0]?.message?.content ?? "";
   }
@@ -55,5 +62,9 @@ export class OllamaProvider implements LlmProvider {
 
   resetUsage(): void {
     this.usage.reset();
+  }
+
+  wasLastCompletionTruncated(): boolean | undefined {
+    return this.lastTruncated;
   }
 }

@@ -28,6 +28,19 @@ async function ensureFactsDir(vault: Vault): Promise<string> {
 const VALID_STATUS = new Set<ProjectStatus>(PROJECT_STATUSES);
 
 /**
+ * Interim ceiling on whole-page synthesis output while pages are still
+ * regenerated in full on every Dream run (see the truncation guard below).
+ * A later phase replaces whole-page regeneration with append/patch
+ * synthesis, at which point this cap — and the guard around it — goes away.
+ */
+const MAX_SYNTHESIS_OUTPUT_TOKENS = 16384;
+
+/** Below this fraction of the existing page's length, a proposed update is
+ *  treated as suspect shrinkage rather than legitimate editing (see the
+ *  shrinkage guard below). */
+const SHRINKAGE_THRESHOLD = 0.8;
+
+/**
  * Parse the optional <meta>status: X\nreason: Y</meta> block emitted by the
  * project synthesis prompt. Tolerant of missing/garbled fields — returns an
  * empty object if nothing usable is found.
@@ -184,7 +197,8 @@ export async function synthesizeToPending(
     ].filter(Boolean).join("\n");
 
     const existingTokenEstimate = Math.ceil((existing?.content ?? "").length / 4);
-    const maxTokens = Math.min(4096, Math.max(1024, existingTokenEstimate + 1024));
+    const headroom = Math.max(1024, Math.ceil(existingTokenEstimate * 0.25));
+    const maxTokens = Math.min(MAX_SYNTHESIS_OUTPUT_TOKENS, existingTokenEstimate + headroom);
 
     const provenanceIds = newEntries.map((e) => entryId(e.timestamp, e.source));
     const provenanceBlock = `After every factual claim, add a ^[src:entry-id] footnote. Available entry IDs:\n${newEntries.map((e, idx) => `- ${provenanceIds[idx]} (${e.timestamp.slice(0, 10)})`).join("\n")}`;
@@ -305,6 +319,35 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       inferredStatus = meta.status ?? existing?.status;
       inferredStatusReason = meta.reason ?? existing?.statusReason;
       proposedContent = stripMetaBlock(proposedContent);
+    }
+
+    // Truncation guard (interim, until whole-page regeneration is replaced by
+    // append/patch synthesis — see MAX_SYNTHESIS_OUTPUT_TOKENS above). Whole-page
+    // synthesis regenerates the ENTIRE page in one completion; if that completion
+    // hit the provider's output-token limit, the proposed content is a truncated
+    // fragment, not a complete page. Never emit that as a pending update — fail
+    // this theme through the same per-theme isolation path as a synthesis error
+    // so its entries stay unprocessed in the ledger and are retried next run.
+    if (provider.wasLastCompletionTruncated?.() === true) {
+      const msg = `Synthesis for theme "${theme}" was truncated by the provider's output-token limit — refusing to emit a lossy pending update.`;
+      console.warn(`[dream] ${msg}`);
+      await vaultLog("warn", msg);
+      throw new Error(msg);
+    }
+
+    // Shrinkage guard: even when truncation can't be confirmed (provider doesn't
+    // report a stop/finish reason), a proposed page that's materially shorter
+    // than the existing one is suspect — whole-page synthesis is instructed to
+    // "preserve all historical entries", so a big drop in length usually means
+    // content was silently dropped rather than genuinely edited down. This path
+    // is never reached by the compaction pipeline (compact-cli.ts constructs its
+    // PendingUpdates directly, without going through synthesizeToPending).
+    const existingLength = (existing?.content ?? "").length;
+    if (existingLength > 0 && proposedContent.length < existingLength * SHRINKAGE_THRESHOLD) {
+      const msg = `proposed update would shrink page ${theme} from ${existingLength} to ${proposedContent.length} chars; refusing`;
+      console.warn(`[dream] ${msg}`);
+      await vaultLog("warn", msg);
+      throw new Error(msg);
     }
 
     // Roll up ^[src:] markers and merge with existing sources

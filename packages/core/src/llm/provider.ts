@@ -15,6 +15,16 @@ export interface LlmProvider {
   getUsageTotals?(): UsageTotals;
   /** Optional: zero out this provider's usage accumulator. */
   resetUsage?(): void;
+  /**
+   * Optional: whether the most recent `complete()` call's response was cut
+   * off by the model's output-token limit (Anthropic `stop_reason ===
+   * "max_tokens"`, OpenAI/Ollama `finish_reason === "length"`, Gemini
+   * `finishReason === "MAX_TOKENS"`). Returns `undefined` when the provider
+   * doesn't report a stop/finish reason (or `complete()` hasn't been called
+   * yet) — callers must treat `undefined` as "unknown", never assume
+   * not-truncated.
+   */
+  wasLastCompletionTruncated?(): boolean | undefined;
 }
 
 export type { UsageTotals } from "./usage.js";

@@ -6,6 +6,7 @@ import { UsageAccumulator, type UsageTotals } from "./usage.js";
 export class AnthropicProvider implements LlmProvider {
   private client: Anthropic;
   private usage = new UsageAccumulator();
+  private lastTruncated: boolean | undefined;
 
   constructor(apiKey?: string) {
     this.client = new Anthropic(apiKey ? { apiKey } : undefined);
@@ -28,6 +29,7 @@ export class AnthropicProvider implements LlmProvider {
       inputTokens: response.usage?.input_tokens ?? 0,
       outputTokens: response.usage?.output_tokens ?? 0,
     });
+    this.lastTruncated = response.stop_reason == null ? undefined : response.stop_reason === "max_tokens";
 
     const block = response.content[0];
     return block.type === "text" ? block.text : "";
@@ -39,5 +41,9 @@ export class AnthropicProvider implements LlmProvider {
 
   resetUsage(): void {
     this.usage.reset();
+  }
+
+  wasLastCompletionTruncated(): boolean | undefined {
+    return this.lastTruncated;
   }
 }

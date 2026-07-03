@@ -103,4 +103,41 @@ describe("AnthropicProvider", () => {
     await expect(provider.complete({ model: "claude-x", prompt: "hi" })).rejects.toThrow();
     expect(createMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("wasLastCompletionTruncated", () => {
+    it("reports true when stop_reason is max_tokens", async () => {
+      createMock.mockResolvedValue({
+        content: [{ type: "text", text: "cut off" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "max_tokens",
+      });
+
+      const provider = new AnthropicProvider("sk-test");
+      await provider.complete({ model: "claude-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(true);
+    });
+
+    it("reports false when stop_reason is end_turn", async () => {
+      createMock.mockResolvedValue({
+        content: [{ type: "text", text: "done" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "end_turn",
+      });
+
+      const provider = new AnthropicProvider("sk-test");
+      await provider.complete({ model: "claude-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(false);
+    });
+
+    it("reports undefined when stop_reason is absent", async () => {
+      createMock.mockResolvedValue({
+        content: [{ type: "text", text: "done" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+
+      const provider = new AnthropicProvider("sk-test");
+      await provider.complete({ model: "claude-x", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBeUndefined();
+    });
+  });
 });

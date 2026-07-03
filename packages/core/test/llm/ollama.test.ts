@@ -80,4 +80,51 @@ describe("OllamaProvider", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(provider.getUsageTotals().retries).toBe(1);
   }, 15000);
+
+  describe("wasLastCompletionTruncated", () => {
+    it("reports true when OpenAI-shaped finish_reason is length", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "cut off" }, finish_reason: "length" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+
+      const provider = new OllamaProvider();
+      await provider.complete({ model: "llama3", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(true);
+    });
+
+    it("falls back to native done_reason 'length' when finish_reason is absent", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "cut off" } }],
+        done_reason: "length",
+        prompt_eval_count: 1,
+        eval_count: 1,
+      });
+
+      const provider = new OllamaProvider();
+      await provider.complete({ model: "llama3", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(true);
+    });
+
+    it("reports false when finish_reason is stop", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+
+      const provider = new OllamaProvider();
+      await provider.complete({ model: "llama3", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBe(false);
+    });
+
+    it("reports undefined when neither finish_reason nor done_reason is present", async () => {
+      createMock.mockResolvedValue({
+        choices: [{ message: { content: "done" } }],
+      });
+
+      const provider = new OllamaProvider();
+      await provider.complete({ model: "llama3", prompt: "hi" });
+      expect(provider.wasLastCompletionTruncated?.()).toBeUndefined();
+    });
+  });
 });

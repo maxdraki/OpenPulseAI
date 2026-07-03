@@ -346,6 +346,156 @@ describe("synthesizeToPending", () => {
     });
   });
 
+  describe("truncation guard", () => {
+    it("refuses a pending update when the provider reports the completion was truncated, defers the theme via onThemeFailure, and leaves other themes unaffected", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme A", source: "github-activity" },
+          themes: ["theme-a"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme B", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-a"')) return "## Current Status\n\nTruncated content";
+          return "## Current Status\n\nDone.";
+        }),
+        wasLastCompletionTruncated: vi.fn(),
+      };
+      // Simulate: theme-a's completion is truncated, theme-b's is not.
+      let callCount = 0;
+      (provider.complete as ReturnType<typeof vi.fn>).mockImplementation(async (params: { prompt: string }) => {
+        callCount++;
+        if (params.prompt.includes('for "theme-a"')) {
+          (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(true);
+          return "## Current Status\n\nTruncated content";
+        }
+        (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(false);
+        return "## Current Status\n\nDone.";
+      });
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", undefined, {
+        onThemeFailure,
+      });
+
+      expect(pending.map((p) => p.theme)).toEqual(["theme-b"]);
+      expect(onThemeFailure).toHaveBeenCalledTimes(1);
+      expect(onThemeFailure).toHaveBeenCalledWith("theme-a", expect.any(Error));
+
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(1);
+      expect(callCount).toBe(2);
+    });
+  });
+
+  describe("shrinkage guard", () => {
+    it("refuses an update whose proposed content is less than 80% of the existing content's length", async () => {
+      const existingContent = "x".repeat(1000);
+      await writeTheme(vault, "shrink-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["shrink-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      // 50% of existing length — should be refused.
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(500 - 20));
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "shrink-theme": "project" }, {
+        onThemeFailure,
+      });
+
+      expect(pending).toHaveLength(0);
+      expect(onThemeFailure).toHaveBeenCalledWith("shrink-theme", expect.any(Error));
+
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(0);
+    });
+
+    it("allows an update whose proposed content is 95% of the existing content's length", async () => {
+      const existingContent = "x".repeat(1000);
+      await writeTheme(vault, "ok-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["ok-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      // 95% of existing length — should be allowed.
+      const provider = mockProvider("y".repeat(950));
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "ok-theme": "project" }, {
+        onThemeFailure,
+      });
+
+      expect(pending).toHaveLength(1);
+      expect(onThemeFailure).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("maxTokens computation", () => {
+    it("caps maxTokens above the old 4096 ceiling for a large existing page, bounded by 16384", async () => {
+      // ~40000 chars ≈ 10000 estimated tokens. Headroom = max(1024, 25% of 10000) = 2500.
+      // Expected maxTokens = min(16384, 10000 + 2500) = 12500.
+      const existingContent = "x".repeat(40000);
+      await writeTheme(vault, "big-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["big-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(39000));
+      await synthesizeToPending(vault, classified, provider, "test-model", { "big-theme": "project" });
+
+      expect(provider.complete).toHaveBeenCalledWith(
+        expect.objectContaining({ maxTokens: expect.any(Number) })
+      );
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.maxTokens).toBeGreaterThan(4096);
+      expect(call.maxTokens).toBeLessThanOrEqual(16384);
+      expect(call.maxTokens).toBe(12500);
+    });
+
+    it("bounds maxTokens at MAX_SYNTHESIS_OUTPUT_TOKENS (16384) even for an enormous existing page", async () => {
+      // ~400000 chars ≈ 100000 estimated tokens — headroom alone would blow past 16384.
+      const existingContent = "x".repeat(400000);
+      await writeTheme(vault, "huge-theme", existingContent);
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work continues", source: "github-activity" },
+          themes: ["huge-theme"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\n" + "y".repeat(390000));
+      await synthesizeToPending(vault, classified, provider, "test-model", { "huge-theme": "project" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.maxTokens).toBe(16384);
+    });
+  });
+
   describe("parseMetaBlock / stripMetaBlock", () => {
     it("extracts a well-formed status and reason", () => {
       const input = `<meta>\nstatus: active\nreason: merged feature branch\n</meta>\n\n## Body\n`;
