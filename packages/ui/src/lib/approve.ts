@@ -142,7 +142,10 @@ export async function approvePendingUpdate(
     const raw = await readFile(pendingPath, "utf-8");
     update = JSON.parse(raw) as PendingUpdate;
   } catch (e: unknown) {
-    return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
+    // Missing/unreadable pending file is a 404 (like `regeneratePendingUpdate`
+    // below), not a 500 — it's an expected "already approved/rejected/gone by
+    // someone else" race, not a server error (M6).
+    return { ok: false, status: 404, error: e instanceof Error ? e.message : String(e) };
   }
 
   const finalContent = editedContent ?? update.proposedContent;

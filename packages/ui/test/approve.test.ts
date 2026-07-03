@@ -98,6 +98,13 @@ describe("approvePendingUpdate", () => {
     expect(files).not.toContain("match-id.json");
   });
 
+  it("returns 404 (not 500) when the pending file doesn't exist (M6)", async () => {
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "does-not-exist", undefined);
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.status).toBe(404);
+  });
+
   it("returns 409 stale and leaves the theme file untouched when previousContent has diverged", async () => {
     await writeTheme(vault, "project-b", "## Current Status\n\nHand-edited content.");
     const update = basePending({

@@ -132,25 +132,35 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         approveAllBtn.addEventListener("click", async () => {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          // One server-side batch call so the whole action lands as a single
-          // vault-git commit listing every theme (see approve.ts's
-          // approvePendingUpdatesBatch) instead of one commit per item.
-          const results = await approveUpdatesBatch(batchUpdates.map((u) => u.id));
-          const staleCount = results.filter((r) => !r.ok && r.stale).length;
-          const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
+          try {
+            // One server-side batch call so the whole action lands as a single
+            // vault-git commit listing every theme (see approve.ts's
+            // approvePendingUpdatesBatch) instead of one commit per item.
+            const results = await approveUpdatesBatch(batchUpdates.map((u) => u.id));
+            const staleCount = results.filter((r) => !r.ok && r.stale).length;
+            const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
 
-          if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
-          if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
-          if (!otherFailed && !staleCount) log("info", `Approved batch: ${batchKey}`);
+            if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
+            if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
+            if (!otherFailed && !staleCount) log("info", `Approved batch: ${batchKey}`);
 
-          await loadPending(listEl);
-          updateReviewBadge();
+            await loadPending(listEl);
+            updateReviewBadge();
 
-          if (staleCount || otherFailed) {
-            const parts: string[] = [];
-            if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
-            if (otherFailed) parts.push(`${otherFailed} failed`);
-            showReviewSummary(`Approve All: ${parts.join(", ")}. Approved the rest.`);
+            if (staleCount || otherFailed) {
+              const parts: string[] = [];
+              if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
+              if (otherFailed) parts.push(`${otherFailed} failed`);
+              showReviewSummary(`Approve All: ${parts.join(", ")}. Approved the rest.`);
+            }
+          } catch (e: unknown) {
+            // Request itself failed (network error, 500, etc.) — nothing was
+            // necessarily approved server-side, so re-enable the buttons
+            // rather than leaving the batch permanently stuck (M7).
+            log("error", `Approve All failed: ${batchKey}`, String(e));
+            showReviewSummary("Approve All failed — please try again.");
+            approveAllBtn.disabled = false;
+            rejectAllBtn.disabled = false;
           }
         });
 

@@ -278,7 +278,11 @@ app.post("/api/trigger-dream", async (_req, res) => {
     const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
     const { stderr } = await execFileAsync("node", [dreamBin], {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
-      timeout: 60000,
+      // Match the orchestrator's dream-pipeline timeout (300s, see
+      // orchestrator.ts) — a 60s timeout here made manual "trigger now" runs
+      // far more likely to get killed mid-retry (LLM retries, slow local
+      // Ollama models) than the orchestrator's own scheduled runs (M5).
+      timeout: 300000,
     });
     res.json({ output: stderr || "Dream pipeline completed." });
   } catch (e: any) {
