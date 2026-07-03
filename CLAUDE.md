@@ -33,7 +33,7 @@ pnpm workspace monorepo with 4 packages:
 
 ```bash
 pnpm install && pnpm build    # Build all packages
-pnpm vitest run               # Run all tests (~315 tests)
+pnpm vitest run               # Run all tests (~2344 tests)
 pnpm build:sea:mcp            # SEA binary for MCP server
 pnpm build:sea:skills         # SEA binary for skills CLI
 pnpm build:desktop            # Full Tauri desktop build
@@ -51,7 +51,7 @@ Both processes read the same auto-generated bearer token from `~/OpenPulseAI/ui-
 
 ## Current state
 
-- 4 packages, 315 tests passing
+- 4 packages, 2344 tests passing
 - MCP server works with Claude Desktop (one-click setup from Settings page)
 - Wiki-style dream pipeline with multi-tag classification and cross-references
 - Orchestrator with visual Schedule page and barrier-based auto-triggering
