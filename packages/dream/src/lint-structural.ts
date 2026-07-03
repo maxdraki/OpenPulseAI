@@ -16,7 +16,10 @@ export interface StructuralIssue {
     | "duplicate-date"
     | "low-value"
     | "duplicate-theme"
-    | "low-provenance";
+    | "low-provenance"
+    | "no-inbound-links"
+    | "stale-claim"
+    | "coverage-gap";
   theme: string;   // the theme with the issue
   detail: string;  // human-readable description
   target?: string; // for broken-link: the missing link target
@@ -24,6 +27,19 @@ export interface StructuralIssue {
 
 /** Number of days before a theme is considered stale */
 const STALE_DAYS = 90;
+
+/** Days after which a theme's claims are treated as possibly outdated
+ *  *relative to newer pages that reference it* (task-14 §C.2). Deliberately
+ *  shorter and narrower than `STALE_DAYS` above: that check flags simple
+ *  inactivity on its own; this one only fires when there's a concrete signal
+ *  something newer might supersede it (a referencing page updated more
+ *  recently). */
+const STALE_CLAIM_DAYS = 60;
+
+/** Number of distinct themes that must mention the same dangling
+ *  `[[wiki-link]]` target before it's surfaced as a coverage gap worth
+ *  creating a page for (task-14 §C.3). */
+const COVERAGE_GAP_MIN_MENTIONS = 3;
 
 /** Required fields in theme frontmatter */
 const REQUIRED_FRONTMATTER = ["lastUpdated"];
@@ -44,12 +60,14 @@ export async function runStructuralChecks(vault: Vault): Promise<StructuralIssue
   const themeNames = await listThemes(vault);
   const themeSet = new Set(themeNames);
   const backlinks = await buildBacklinks(vault);
+  const lastUpdatedByTheme = new Map<string, string>();
 
   for (const theme of themeNames) {
     const doc = await readTheme(vault, theme);
     if (!doc) {
       continue;
     }
+    lastUpdatedByTheme.set(theme, doc.lastUpdated);
 
     // Check 1: Broken links
     const brokenLinks = checkBrokenLinks(doc.content, themeSet);
@@ -70,6 +88,17 @@ export async function runStructuralChecks(vault: Vault): Promise<StructuralIssue
           type: "orphan",
           theme,
           detail: "No inbound links and no outbound links",
+        });
+      }
+
+      // Check 9: No inbound links at all (broader than "orphan" above, which
+      // additionally requires zero outbound too — this flags any page
+      // nothing points to yet, even if it links out to others). Severity info.
+      if ((backlinks.get(theme) ?? []).length === 0) {
+        issues.push({
+          type: "no-inbound-links",
+          theme,
+          detail: "No other theme links to this page yet",
         });
       }
     }
@@ -103,6 +132,16 @@ export async function runStructuralChecks(vault: Vault): Promise<StructuralIssue
 
   // Check 7: Duplicate themes (pair-wise, done outside per-theme loop)
   issues.push(...checkDuplicateThemes(themeNames));
+
+  // Check 10: Stale claims — themes older than STALE_CLAIM_DAYS that are
+  // referenced by a page updated more recently than they were.
+  issues.push(...checkStaleClaims(themeNames, backlinks, lastUpdatedByTheme));
+
+  // Check 11: Coverage gaps — dangling [[links]] mentioned by enough distinct
+  // themes to be worth their own page. `backlinks` already has an entry for
+  // every link *target* seen anywhere (see buildBacklinks), including targets
+  // that aren't real themes, so this reuses that data rather than re-scanning.
+  issues.push(...checkCoverageGaps(themeSet, backlinks));
 
   return issues;
 }
@@ -257,4 +296,77 @@ function checkLowProvenance(theme: string, content: string): StructuralIssue | n
     };
   }
   return null;
+}
+
+/**
+ * Check 10: Stale claims (task-14 §C.2).
+ * A theme is flagged when it's older than `STALE_CLAIM_DAYS` AND at least
+ * one page that links to it (from `backlinks`) has a strictly newer
+ * `lastUpdated` — i.e. there's a concrete newer page that might supersede
+ * this one's claims, not just general inactivity (that's the `stale` check).
+ */
+function checkStaleClaims(
+  themeNames: string[],
+  backlinks: Map<string, string[]>,
+  lastUpdatedByTheme: Map<string, string>
+): StructuralIssue[] {
+  const issues: StructuralIssue[] = [];
+
+  for (const theme of themeNames) {
+    const lastUpdated = lastUpdatedByTheme.get(theme);
+    if (!lastUpdated) continue;
+
+    const ownTime = Date.parse(lastUpdated);
+    if (!Number.isFinite(ownTime)) continue;
+
+    const daysSince = (Date.now() - ownTime) / 86_400_000;
+    if (daysSince <= STALE_CLAIM_DAYS) continue;
+
+    const referrers = backlinks.get(theme) ?? [];
+    const newerReferrers = referrers.filter((r) => {
+      const rDate = lastUpdatedByTheme.get(r);
+      if (!rDate) return false;
+      const rTime = Date.parse(rDate);
+      return Number.isFinite(rTime) && rTime > ownTime;
+    });
+
+    if (newerReferrers.length > 0) {
+      issues.push({
+        type: "stale-claim",
+        theme,
+        detail: `May be stale — last updated ${Math.floor(daysSince)} days ago but referenced by newer page(s): ${newerReferrers.map((r) => `[[${r}]]`).join(", ")}`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Check 11: Coverage gaps (task-14 §C.3).
+ * `buildBacklinks` already records an entry (with its distinct linking
+ * themes) for every `[[link]]` target seen anywhere in the vault, whether or
+ * not that target is a real theme (see its doc comment) — so a "dangling"
+ * target is simply a `backlinks` key not present in `themeSet`. When enough
+ * distinct themes mention the same missing concept, it's worth creating a
+ * page for.
+ */
+function checkCoverageGaps(
+  themeSet: Set<string>,
+  backlinks: Map<string, string[]>
+): StructuralIssue[] {
+  const issues: StructuralIssue[] = [];
+
+  for (const [target, sources] of backlinks) {
+    if (themeSet.has(target)) continue;
+    if (sources.length < COVERAGE_GAP_MIN_MENTIONS) continue;
+
+    issues.push({
+      type: "coverage-gap",
+      theme: target,
+      detail: `Mentioned as [[${target}]] across ${sources.length} themes with no page yet: ${sources.map((s) => `[[${s}]]`).join(", ")}`,
+    });
+  }
+
+  return issues;
 }

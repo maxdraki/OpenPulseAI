@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault, appendActivity, getLocalDate } from "@openpulse/core";
+import { Vault, appendActivity, getLocalDate, writeTheme } from "@openpulse/core";
 import type { LlmProvider, OpenPulseConfig } from "@openpulse/core";
 import { runDreamPipeline } from "../src/index.js";
 import { loadProcessedLedger, saveProcessedLedger, markProcessed } from "../src/ledger.js";
@@ -190,5 +190,42 @@ describe("runDreamPipeline", () => {
     const retry = await runDreamPipeline(vault, makeConfig(tempDir, []), workingProvider, "test-model");
     expect(retry?.failedThemes).toEqual([]);
     expect(retry?.pending.map((p) => p.theme).sort()).toEqual(["theme-a", "theme-b"]);
+  });
+
+  it("reports aggregate fact-hygiene totals in the run result and log.md summary line for a mixed project+concept run", async () => {
+    // "topic-x" already exists as a concept page — see synthesize.ts's
+    // `pageType = existing?.type ?? proposedTypes?.[theme] ?? "project"` —
+    // so entries pre-tagged with this theme go through the two-pass fact
+    // extraction/ingest path (see synthesize.ts's onFactHygiene). "myproject"
+    // is a plain new project theme, synthesized with a single whole-page call.
+    await writeTheme(vault, "topic-x", "## Definition\n\nAn existing concept.", { type: "concept" });
+
+    const today = getLocalDate();
+    await appendActivity(vault, { timestamp: `${today}T09:00:00Z`, log: "Committed changes to myproject", theme: "myproject" });
+    await appendActivity(vault, { timestamp: `${today}T09:01:00Z`, log: "Updated notes: topic-x now does something notable.", theme: "topic-x" });
+
+    const provider: LlmProvider = {
+      complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+        if (params.prompt.includes("Extract atomic factual claims")) {
+          return JSON.stringify([
+            { claim: "Topic X does something notable.", sourceId: `${today}-unknown`, confidence: "high" },
+          ]);
+        }
+        if (params.prompt.includes('page for "topic-x"')) {
+          return "## Definition\n\nTopic X does something notable. ^[src:test]";
+        }
+        return "## Current Status\n\nDid stuff ^[src:test]";
+      }),
+    };
+
+    const result = await runDreamPipeline(vault, makeConfig(tempDir, ["myproject"]), provider, "test-model");
+
+    expect(result).not.toBeNull();
+    expect(result?.factHygiene).toEqual({ added: 1, skipped: 0, superseded: 0 });
+
+    const logContent = await readFile(join(vault.warmDir, "log.md"), "utf-8");
+    const dreamLine = logContent.split("\n").find((l) => l.includes("] dream |"));
+    expect(dreamLine).toBeDefined();
+    expect(dreamLine).toContain("facts: +1 ~0 dups skipped, 0 superseded");
   });
 });

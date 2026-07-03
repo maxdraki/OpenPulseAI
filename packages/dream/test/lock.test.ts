@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { Vault } from "@openpulse/core";
-import { acquireDreamLock } from "../src/lock.js";
+import { acquireDreamLock, isDreamLockHeld } from "../src/lock.js";
 
 function lockFilePath(vault: Vault): string {
   return join(vault.root, "vault", ".dream.lock");
@@ -152,5 +152,57 @@ describe("acquireDreamLock", () => {
     const raw = await readFile(lockFilePath(vault), "utf-8");
     expect(JSON.parse(raw).pid).toBe(process.pid);
     await release();
+  });
+});
+
+describe("isDreamLockHeld", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-lock-probe-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("returns false when no lock file exists", async () => {
+    expect(await isDreamLockHeld(vault)).toBe(false);
+  });
+
+  it("returns true when a fresh lock is held by a live pid", async () => {
+    const release = await acquireDreamLock(vault);
+    expect(await isDreamLockHeld(vault)).toBe(true);
+    await release();
+  });
+
+  it("returns false after the lock is released", async () => {
+    const release = await acquireDreamLock(vault);
+    await release();
+    expect(await isDreamLockHeld(vault)).toBe(false);
+  });
+
+  it("returns false for a stale lock (owner pid dead), without stealing or deleting it", async () => {
+    await writeFile(
+      lockFilePath(vault),
+      JSON.stringify({ pid: deadPid(), startedAt: new Date().toISOString() }),
+      "utf-8"
+    );
+    expect(await isDreamLockHeld(vault)).toBe(false);
+    // Non-destructive: the lockfile is still there afterward.
+    await expect(stat(lockFilePath(vault))).resolves.toBeDefined();
+  });
+
+  it("returns false for a lock older than 30 minutes even if the pid is alive", async () => {
+    const staleStartedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    await writeFile(
+      lockFilePath(vault),
+      JSON.stringify({ pid: process.pid, startedAt: staleStartedAt }),
+      "utf-8"
+    );
+    expect(await isDreamLockHeld(vault)).toBe(false);
   });
 });

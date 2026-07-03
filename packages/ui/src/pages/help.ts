@@ -98,7 +98,11 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     },
     {
       title: "Dream Pipeline",
-      body: `The Dream Pipeline classifies journal entries (deterministic first, LLM fallback) and synthesizes them into wiki-style theme pages with [[cross-references]]. Each entry can update 1-3 themes. An auto-generated index.md catalogs all themes. Updates go through batch review (Approve All / Reject All). The pipeline auto-triggers via the orchestrator when all scheduled collectors have run.`,
+      body: `The Dream Pipeline classifies journal entries (deterministic first, LLM fallback) and synthesizes them into wiki-style theme pages with [[cross-references]]. Each entry can update 1-3 themes. An auto-generated index.md catalogs all themes. Updates go through batch review — approve/reject everything at once, or select individual items with the per-card checkboxes. The pipeline auto-triggers via the orchestrator when all scheduled collectors have run.`,
+    },
+    {
+      title: "Wiki Lint & Query-Back",
+      body: `Lint checks (run from the CLI or Schedule page) keep the wiki healthy: broken cross-references, orphan pages, stale pages, duplicate dated sections, low-value/near-duplicate/low-provenance pages, pages with no inbound links, possibly-stale claims, and coverage gaps — a [[wiki-link]] mentioned by 3+ themes with no page yet. That's distinct from "concept candidates" (terms seen often during classification, tracked continuously, no page yet either) — both surface a missing page, but from different signals. Findings become pending updates for Review. Separately, "query-back" lets query_memory and chat_with_pulse propose a new concept page when an answer looks like durable, reusable knowledge — deduped so a repeated question doesn't file the same page twice while one is still pending.`,
     },
   ];
 

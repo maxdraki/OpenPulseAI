@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
@@ -242,6 +242,114 @@ describe("synthesizeToPending", () => {
 
     expect(provider.complete).toHaveBeenCalledTimes(2);
     expect(pending[0].proposedContent).toContain("No durable claims yet");
+  });
+
+  it("skips re-extracting a duplicate fact from a later run on the same theme", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    // Legacy line (no "id" field) — its id is computed on read from
+    // claim + sourceId, so it must dedupe against the case/punctuation
+    // variant pass 1 re-extracts below.
+    await writeFile(
+      join(vault.warmDir, "_facts", "dedupe-theme.jsonl"),
+      JSON.stringify({ claim: "X uses SQLite.", sourceId: "2026-04-17-github-activity", confidence: "high", extractedAt: "2026-04-17T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        // Pass 1 re-extracts the SAME claim (case/punctuation-variant) from the same sourceId.
+        .mockResolvedValueOnce('[{"claim":"x   uses sqlite!!","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce("## Definition\nX uses SQLite. ^[src:2026-04-17-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-17T00:00:00Z", log: "X uses SQLite.", source: "github-activity" },
+        themes: ["dedupe-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", { "dedupe-theme": "concept" });
+
+    const factsText = await readFile(join(vault.warmDir, "_facts", "dedupe-theme.jsonl"), "utf-8");
+    const lines = factsText.trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1); // the duplicate was skipped, not appended again
+  });
+
+  it("reports fact-hygiene counts via onFactHygiene for a concept theme (mirrors onPatchOutcome)", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    await writeFile(
+      join(vault.warmDir, "_facts", "hygiene-theme.jsonl"),
+      JSON.stringify({ claim: "X uses SQLite.", sourceId: "2026-04-17-github-activity", confidence: "high", extractedAt: "2026-04-17T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        // Pass 1 re-extracts the SAME claim (duplicate, skipped) — matches
+        // the "skips re-extracting a duplicate fact" test above.
+        .mockResolvedValueOnce('[{"claim":"x   uses sqlite!!","sourceId":"2026-04-17-github-activity","confidence":"high"}]')
+        .mockResolvedValueOnce("## Definition\nX uses SQLite. ^[src:2026-04-17-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-17T00:00:00Z", log: "X uses SQLite.", source: "github-activity" },
+        themes: ["hygiene-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    const onFactHygiene = vi.fn();
+    await synthesizeToPending(vault, classified, provider, "gpt", { "hygiene-theme": "concept" }, { onFactHygiene });
+
+    expect(onFactHygiene).toHaveBeenCalledWith("hygiene-theme", { added: 0, skipped: 1, superseded: 0 });
+  });
+
+  it("applies supersession signaled by pass-1 extraction and excludes the superseded fact from the pass-2 prompt", async () => {
+    await mkdir(join(vault.warmDir, "_facts"), { recursive: true });
+    await writeFile(
+      join(vault.warmDir, "_facts", "supersede-theme.jsonl"),
+      JSON.stringify({ id: "old-fact-id", claim: "X uses SQLite.", sourceId: "2026-04-01-github-activity", confidence: "high", extractedAt: "2026-04-01T00:00:00Z" }) + "\n",
+      "utf-8"
+    );
+
+    const provider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce(
+          '[{"claim":"X migrated to Postgres.","sourceId":"2026-04-20-github-activity","confidence":"high","supersedes":["old-fact-id"]}]'
+        )
+        .mockResolvedValueOnce("## Definition\nX migrated to Postgres. ^[src:2026-04-20-github-activity]"),
+    } as unknown as LlmProvider;
+
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-20T00:00:00Z", log: "X migrated to Postgres.", source: "github-activity" },
+        themes: ["supersede-theme"],
+        confidence: 0.9,
+      },
+    ];
+
+    await synthesizeToPending(vault, classified, provider, "gpt", { "supersede-theme": "concept" });
+
+    // Pass-1 extraction prompt included the active-facts context.
+    const extractionPrompt = (provider.complete as any).mock.calls[0][0].prompt as string;
+    expect(extractionPrompt).toContain("old-fact-id");
+    expect(extractionPrompt).toContain("X uses SQLite.");
+
+    // Pass-2 synthesis prompt must NOT include the now-superseded fact's claim.
+    const synthesisPrompt = (provider.complete as any).mock.calls[1][0].prompt as string;
+    expect(synthesisPrompt).toContain("X migrated to Postgres.");
+    expect(synthesisPrompt).not.toContain("X uses SQLite.");
+
+    // The fact store retains the superseded line as history (never deleted).
+    const factsText = await readFile(join(vault.warmDir, "_facts", "supersede-theme.jsonl"), "utf-8");
+    const facts = factsText.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(facts).toHaveLength(2);
+    const old = facts.find((f) => f.id === "old-fact-id");
+    expect(old.supersededBy).toBeTruthy();
+    expect(old.supersededAt).toBeTruthy();
   });
 
   it("parses LLM <meta> block into projectStatus and strips it from content", async () => {
@@ -658,6 +766,222 @@ describe("synthesizeToPending", () => {
       const files = await readdir(vault.pendingDir);
       expect(files).toContain("stale-id-2.json");
       expect(files).not.toContain(`${staleUpdate.id}-replacement.json`);
+    });
+  });
+
+  describe("patch synthesis (append/patch for project pages)", () => {
+    function bigExistingPage(): string {
+      return (
+        "## Current Status\n\n" + "x".repeat(600) + "\n" +
+        "## Activity Log\n\n### 2026-04-01\n" + "y".repeat(600) + "\n" +
+        "## Skills Demonstrated\n\n" + "z".repeat(600) + "\n"
+      );
+    }
+
+    const PATCH_MARKER = "SECTION-LEVEL PATCHES";
+
+    function classifiedFor(theme: string): ClassificationResult[] {
+      return [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "New work happened", source: "github-activity" },
+          themes: [theme],
+          confidence: 0.9,
+        },
+      ];
+    }
+
+    it("uses the patch path for a large multi-section page: one LLM call, untouched sections byte-identical, new content present", async () => {
+      await writeTheme(vault, "patch-project", bigExistingPage());
+
+      const opsResponse = '```json\n[{"op":"append_to_section","heading":"Activity Log","content":"### 2026-04-20\\n- New work happened. ^[src:2026-04-20-github-activity]\\n"}]\n```';
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue(opsResponse) };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(vault, classifiedFor("patch-project"), provider, "test-model", { "patch-project": "project" }, { onPatchOutcome });
+
+      expect(provider.complete).toHaveBeenCalledTimes(1);
+      expect(onPatchOutcome).toHaveBeenCalledWith("patch-project", "patch");
+      expect(pending).toHaveLength(1);
+      expect(pending[0].proposedContent).toContain("x".repeat(600)); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("z".repeat(600)); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("2026-04-20");
+      expect(pending[0].proposedContent).toContain("New work happened");
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.prompt).toContain(PATCH_MARKER);
+      expect(call.maxTokens).toBe(4096);
+    });
+
+    it("falls back to whole-page rewrite when the patch call's ops fail to parse", async () => {
+      await writeTheme(vault, "patch-fallback-parse", bigExistingPage());
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes(PATCH_MARKER)) return "not json at all, sorry";
+          return "## Current Status\n\nWhole page rewrite. " + "w".repeat(600) + "\n## Activity Log\n\n### 2026-04-20\n- New work happened. " + "v".repeat(600) + "\n## Skills Demonstrated\n\n" + "u".repeat(600) + "\n";
+        }),
+      };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(vault, classifiedFor("patch-fallback-parse"), provider, "test-model", { "patch-fallback-parse": "project" }, { onPatchOutcome });
+
+      expect(provider.complete).toHaveBeenCalledTimes(2);
+      expect(onPatchOutcome).toHaveBeenCalledWith("patch-fallback-parse", "fallback");
+      expect(pending[0].proposedContent).toContain("Whole page rewrite.");
+    });
+
+    it("falls back to whole-page rewrite when an emitted op is rejected (unknown heading)", async () => {
+      await writeTheme(vault, "patch-fallback-reject", bigExistingPage());
+
+      const badOps = '```json\n[{"op":"append_to_section","heading":"Nonexistent Section","content":"x"}]\n```';
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes(PATCH_MARKER)) return badOps;
+          return "## Current Status\n\nWhole page rewrite. " + "w".repeat(600) + "\n## Activity Log\n\n### 2026-04-20\n- New work happened. " + "v".repeat(600) + "\n## Skills Demonstrated\n\n" + "u".repeat(600) + "\n";
+        }),
+      };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(vault, classifiedFor("patch-fallback-reject"), provider, "test-model", { "patch-fallback-reject": "project" }, { onPatchOutcome });
+
+      expect(provider.complete).toHaveBeenCalledTimes(2);
+      expect(onPatchOutcome).toHaveBeenCalledWith("patch-fallback-reject", "fallback");
+      expect(pending[0].proposedContent).toContain("Whole page rewrite.");
+    });
+
+    it("falls back to whole-page rewrite when the patch completion was truncated", async () => {
+      await writeTheme(vault, "patch-fallback-truncated", bigExistingPage());
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes(PATCH_MARKER)) return '```json\n[{"op":"append_to_section","heading":"Activity Log","content":"x"}]\n```';
+          return "## Current Status\n\nWhole page rewrite. " + "w".repeat(600) + "\n## Activity Log\n\n### 2026-04-20\n- New work happened. " + "v".repeat(600) + "\n## Skills Demonstrated\n\n" + "u".repeat(600) + "\n";
+        }),
+        wasLastCompletionTruncated: vi.fn().mockImplementation(() => true), // patch call always reports truncated
+      };
+      // Only the patch call is ever truncated; once we fall back, pretend it stops being truncated
+      // for the second call by having the guard re-check after each call.
+      let callCount = 0;
+      (provider.complete as ReturnType<typeof vi.fn>).mockImplementation(async (params: { prompt: string }) => {
+        callCount++;
+        if (params.prompt.includes(PATCH_MARKER)) {
+          (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(true);
+          return '```json\n[{"op":"append_to_section","heading":"Activity Log","content":"x"}]\n```';
+        }
+        (provider.wasLastCompletionTruncated as ReturnType<typeof vi.fn>).mockReturnValue(false);
+        return "## Current Status\n\nWhole page rewrite. " + "w".repeat(600) + "\n## Activity Log\n\n### 2026-04-20\n- New work happened. " + "v".repeat(600) + "\n## Skills Demonstrated\n\n" + "u".repeat(600) + "\n";
+      });
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(vault, classifiedFor("patch-fallback-truncated"), provider, "test-model", { "patch-fallback-truncated": "project" }, { onPatchOutcome });
+
+      expect(callCount).toBe(2);
+      expect(onPatchOutcome).toHaveBeenCalledWith("patch-fallback-truncated", "fallback");
+      expect(pending[0].proposedContent).toContain("Whole page rewrite.");
+    });
+
+    it("bypasses the patch path entirely for a small/new page (single LLM call, no onPatchOutcome)", async () => {
+      const classified = classifiedFor("brand-new-project");
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue("## Current Status\n\nBrand new project.") };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "brand-new-project": "project" }, { onPatchOutcome });
+
+      expect(provider.complete).toHaveBeenCalledTimes(1);
+      expect(onPatchOutcome).not.toHaveBeenCalled();
+      expect(pending[0].proposedContent).toContain("Brand new project.");
+    });
+
+    // Bodies with many lines: buildOutline's preview only ever shows the first
+    // two non-empty lines, so a line far past that (e.g. "...line 19") only
+    // ends up in the prompt if the section's FULL text was selected as
+    // relevant context — not merely from the outline.
+    function manyLines(prefix: string, count: number): string {
+      return Array.from({ length: count }, (_, i) => `- ${prefix} line ${i}: ${"x".repeat(30)}`).join("\n");
+    }
+
+    function bigSourceSummaryPage(): string {
+      return (
+        "## Source\n\n" + "s".repeat(600) + "\n" +
+        "## Key Takeaways\n\n" + manyLines("takeaway", 20) + "\n" +
+        "## Referenced In\n\n" + manyLines("reference", 20) + "\n"
+      );
+    }
+
+    it("includes the full text of Key Takeaways and Referenced In in the prompt for a source-summary page", async () => {
+      await writeTheme(vault, "source-doc", bigSourceSummaryPage());
+
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue("[]") };
+      await synthesizeToPending(vault, classifiedFor("source-doc"), provider, "test-model", { "source-doc": "source-summary" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // Lines well past the outline's 2-line preview cap — only present if the
+      // full section text was included as relevant context.
+      expect(call.prompt).toContain("takeaway line 19");
+      expect(call.prompt).toContain("reference line 19");
+      expect(call.prompt).toContain(PATCH_MARKER);
+    });
+
+    function bigRenamedStatusPage(): string {
+      return (
+        "## Status Overview\n\n" + manyLines("status", 20) + "\n" +
+        "## Activity Log\n\n### 2026-04-01\n" + manyLines("activity", 20) + "\n" +
+        "## Skills Demonstrated\n\n" + "z".repeat(600) + "\n"
+      );
+    }
+
+    it("includes the full text of a renamed status section AND a stock Activity Log section, even though only one matches literally", async () => {
+      await writeTheme(vault, "renamed-status-project", bigRenamedStatusPage());
+
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue("[]") };
+      await synthesizeToPending(vault, classifiedFor("renamed-status-project"), provider, "test-model", { "renamed-status-project": "project" });
+
+      const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      // "Activity Log" matches the literal heading for the project page type,
+      // but "Status Overview" does not (it was renamed from "Current
+      // Status" via a custom _schema.md). Both sections' full text — not
+      // just the outline's 2-line preview — must still make it into the
+      // prompt so the LLM can patch either one correctly.
+      expect(call.prompt).toContain("status line 19");
+      expect(call.prompt).toContain("activity line 19");
+      expect(call.prompt).toContain(PATCH_MARKER);
+    });
+
+    it("runs the end-to-end patch flow for a source-summary page (mock LLM emitting ops)", async () => {
+      await writeTheme(vault, "source-doc-2", bigSourceSummaryPage());
+
+      const opsResponse = '```json\n[{"op":"append_to_section","heading":"Key Takeaways","content":"- New takeaway. ^[src:2026-04-20-github-activity]\\n"}]\n```';
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue(opsResponse) };
+
+      const onPatchOutcome = vi.fn();
+      const pending = await synthesizeToPending(
+        vault,
+        classifiedFor("source-doc-2"),
+        provider,
+        "test-model",
+        { "source-doc-2": "source-summary" },
+        { onPatchOutcome }
+      );
+
+      expect(provider.complete).toHaveBeenCalledTimes(1);
+      expect(onPatchOutcome).toHaveBeenCalledWith("source-doc-2", "patch");
+      expect(pending).toHaveLength(1);
+      expect(pending[0].proposedContent).toContain("s".repeat(600)); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("reference line 19"); // untouched section byte-identical
+      expect(pending[0].proposedContent).toContain("New takeaway.");
+    });
+
+    it("update_meta op flows through to projectStatus exactly like the whole-page <meta> block", async () => {
+      await writeTheme(vault, "patch-meta", bigExistingPage());
+
+      const opsResponse = '```json\n[{"op":"update_meta","status":"blocked","reason":"waiting on design review"}]\n```';
+      const provider: LlmProvider = { complete: vi.fn().mockResolvedValue(opsResponse) };
+
+      const pending = await synthesizeToPending(vault, classifiedFor("patch-meta"), provider, "test-model", { "patch-meta": "project" });
+
+      expect(pending[0].projectStatus).toBe("blocked");
+      expect(pending[0].projectStatusReason).toBe("waiting on design review");
+      expect(pending[0].proposedContent.startsWith("<meta>")).toBe(false);
     });
   });
 

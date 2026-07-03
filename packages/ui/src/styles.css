@@ -1769,6 +1769,24 @@ a.wiki-link:hover {
   gap: 0.35rem;
 }
 
+.batch-summary {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  margin-right: auto;
+  padding-left: 0.75rem;
+}
+
+/* Per-item include checkbox in a multi-item batch's cards (Review page) —
+   custom-styled to match the app's own CSS variables, no Shoelace. */
+.pending-select-checkbox {
+  width: 16px;
+  height: 16px;
+  margin-right: 0.6rem;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .result-dot { font-size: 0.7rem; vertical-align: middle; }
 
 /* ---- Data Source Catalog ---- */

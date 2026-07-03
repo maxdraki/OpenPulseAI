@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme, rebuildIndex } from "@openpulse/core";
@@ -85,5 +85,151 @@ describe("query_memory tool", () => {
 
     const result = await handleQueryMemory(vault, { query: "widgets" });
     expect(result.content[0].text).toContain("widgets-theme");
+  });
+});
+
+describe("query_memory — query-back (task-14 §B)", () => {
+  let vault: Vault;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-mcp-queryback-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  async function listPending(): Promise<any[]> {
+    try {
+      const files = await readdir(vault.pendingDir);
+      const results: any[] = [];
+      for (const f of files) {
+        if (!f.endsWith(".json")) continue;
+        results.push(JSON.parse(await readFile(join(vault.pendingDir, f), "utf-8")));
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  function judgeYes(name: string) {
+    return vi.fn().mockResolvedValue(
+      JSON.stringify({
+        verdict: "yes",
+        proposed_name: name,
+        one_line_definition: "A durable concept.",
+        refined_content: "## Definition\n\nA durable concept.\n\n## Key Claims\n\n- Claim one\n",
+      })
+    );
+  }
+
+  it("does nothing when no provider is configured (no query-back call, response unaffected)", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const result = await handleQueryMemory(vault, { query: "authentication" });
+    expect(result.content[0].text).toContain("project-auth");
+    expect(await listPending()).toEqual([]);
+  });
+
+  it("files a pending concept page when the judge says the answer is durable", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = { complete: judgeYes("auth-strategy") };
+
+    const result = await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+
+    expect(result.content[0].text).toContain("project-auth"); // response unaffected
+    const pending = await listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].theme).toBe("auth-strategy");
+    expect(pending[0].type).toBe("concept");
+    expect(pending[0].querybackSource.question).toBe("authentication");
+  });
+
+  it("never files when the query itself matches an existing theme name (feedback-loop guard)", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = { complete: judgeYes("project-auth") };
+
+    await handleQueryMemory(
+      vault,
+      { query: "project-auth" },
+      { provider: provider as any, model: "test-model" }
+    );
+
+    expect(await listPending()).toEqual([]);
+    expect(provider.complete).not.toHaveBeenCalled();
+  });
+
+  it("never files when the judge's proposed name collides with an existing theme", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    await writeTheme(vault, "auth-strategy", "Already exists.");
+    const provider = { complete: judgeYes("auth-strategy") };
+
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+
+    expect(await listPending()).toEqual([]);
+  });
+
+  it("does not file when the judge verdict is 'no'", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = {
+      complete: vi.fn().mockResolvedValue(
+        JSON.stringify({ verdict: "no", proposed_name: null, one_line_definition: null, refined_content: null })
+      ),
+    };
+
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+
+    expect(await listPending()).toEqual([]);
+  });
+
+  it("never files a second pending concept page when one already exists for the same proposed theme (query-back dedup)", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = { complete: judgeYes("auth-strategy") };
+
+    // First identical query files a pending concept page.
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+    expect(await listPending()).toHaveLength(1);
+
+    // Second identical query, judge proposes the same theme again — should
+    // file nothing while the first pending update still exists.
+    await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+    expect(await listPending()).toHaveLength(1);
+  });
+
+  it("judge failure never affects the query_memory response", async () => {
+    await writeTheme(vault, "project-auth", "## Auth\n\nHandles login and authentication flows.");
+    const provider = { complete: vi.fn().mockRejectedValue(new Error("LLM timeout")) };
+
+    const result = await handleQueryMemory(
+      vault,
+      { query: "authentication" },
+      { provider: provider as any, model: "test-model" }
+    );
+
+    expect(result.content[0].text).toContain("project-auth");
+    expect(await listPending()).toEqual([]);
   });
 });

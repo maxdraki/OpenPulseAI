@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { PendingUpdate, Vault, LlmProvider, SearchResult } from "@openpulse/core";
 import { readTheme, sanitizeThemeSlug, stripCodeFences, searchIndex, rebuildIndex, fuseRankings, RRF_K } from "@openpulse/core";
 import { createNewSession, loadSession, saveSession } from "./chat-session.js";
+import { skipIfQuerybackPending } from "./query-back.js";
 
 /**
  * Common English stopwords stripped from a chat message before it's turned
@@ -238,7 +239,7 @@ interface JudgeResult {
   refined_content: string | null;
 }
 
-async function judgeAndRefine(
+export async function judgeAndRefine(
   provider: LlmProvider,
   model: string,
   question: string,
@@ -357,7 +358,12 @@ ${assembled.context}`;
   if (thisCallThemes.length >= 2) {
     const judgment = await judgeAndRefine(provider, model, input.message, response, thisCallThemes);
 
-    if (judgment.verdict === "yes" && judgment.proposed_name && judgment.refined_content) {
+    if (
+      judgment.verdict === "yes" &&
+      judgment.proposed_name &&
+      judgment.refined_content &&
+      !(await skipIfQuerybackPending(vault, sanitizeThemeSlug(judgment.proposed_name), "chat_with_pulse"))
+    ) {
       const themeName = sanitizeThemeSlug(judgment.proposed_name);
       const update: PendingUpdate = {
         id: randomUUID(),
