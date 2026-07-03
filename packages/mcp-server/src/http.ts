@@ -11,6 +11,7 @@
  * Then add https://localhost:3002/mcp as the Remote MCP server URL.
  */
 import { createServer } from "./server.js";
+import { loadOrCreateToken, isAuthorized, requestPathname, tokenPath } from "./http-auth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
@@ -21,6 +22,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 const PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") ?? "3002");
 const CERTS_DIR = join(VAULT_ROOT, "certs");
+// Token file lives alongside config.yaml (the config dir), not inside the vault —
+// it's a machine credential, not vault data.
+const CONFIG_DIR = VAULT_ROOT;
 
 function ensureCerts(): { key: Buffer; cert: Buffer } {
   const keyPath = join(CERTS_DIR, "server.key");
@@ -53,6 +57,13 @@ async function main() {
   const { server } = await createServer(VAULT_ROOT);
   const { key, cert } = ensureCerts();
 
+  // Any local process can otherwise read/write the vault via this port — CORS only
+  // restrains browsers, not curl/other local processes. Require a bearer token on
+  // every /mcp request. Generated once and persisted (mode 0600) in the config dir
+  // so it survives restarts and doesn't need re-entering each time.
+  const token = await loadOrCreateToken(CONFIG_DIR);
+  console.error(`[mcp-http] Bearer token: ${tokenPath(CONFIG_DIR)} (generated on first run; delete to rotate)`);
+
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
   });
@@ -68,7 +79,7 @@ async function main() {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     if (req.method === "OPTIONS") {
@@ -77,9 +88,21 @@ async function main() {
       return;
     }
 
-    if (req.url === "/mcp") {
+    const pathname = requestPathname(req.url);
+
+    if (pathname === "/mcp") {
+      if (!isAuthorized(req, token)) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Unauthorized: missing or invalid bearer token" },
+          id: null,
+        }));
+        return;
+      }
       await transport.handleRequest(req, res);
-    } else if (req.url === "/health") {
+    } else if (pathname === "/health") {
+      // No vault access, no auth required — used for basic liveness checks.
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", server: "openpulse-mcp" }));
     } else {
@@ -89,8 +112,9 @@ async function main() {
   });
 
   httpsServer.listen(PORT, () => {
-    console.error(`OpenPulseAI MCP server running on https://localhost:${PORT}/mcp`);
-    console.error(`Add this URL as a Remote MCP server in Claude Desktop.`);
+    const url = `https://localhost:${PORT}/mcp?token=${token}`;
+    console.error(`OpenPulseAI MCP server running on ${url}`);
+    console.error(`Add this URL (including the token) as a Remote MCP server in Claude Desktop.`);
   });
 }
 
