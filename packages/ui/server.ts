@@ -15,7 +15,7 @@ import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js"
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
 import { Vault, readAllThemes, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
-import { approvePendingUpdate, regeneratePendingUpdate } from "./src/lib/approve.js";
+import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -197,6 +197,52 @@ app.post("/api/approve-update", async (req, res) => {
     });
 
     res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/approve-batch", async (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string" && /^[\w-]+$/.test(id))) {
+    return res.status(400).json({ error: "Invalid ids" });
+  }
+  try {
+    const results = await approvePendingUpdatesBatch(VAULT_ROOT, pendingDir, ids);
+
+    // Mirror the single-approve side effects (oversized-page compaction
+    // enqueue) for every item that actually wrote — see /api/approve-update.
+    for (const { outcome } of results) {
+      if (!outcome.ok) continue;
+      const update = outcome.update;
+      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+        const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
+        if (sectionCount > 14 && update.type === "project") {
+          await orchestrator.enqueueForCompaction([outcome.theme]);
+          orchestrator.triggerCompact([outcome.theme]).catch((err: unknown) => {
+            console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
+          });
+        }
+      }
+    }
+
+    // Rebuild index.md/_backlinks.md once for the whole batch, not per item.
+    if (results.some((r) => r.outcome.ok)) {
+      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
+      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+        if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
+      });
+    }
+
+    res.json(
+      results.map(({ id, outcome }) => ({
+        id,
+        ok: outcome.ok,
+        ...(outcome.ok
+          ? {}
+          : { error: outcome.error, ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}) }),
+      }))
+    );
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

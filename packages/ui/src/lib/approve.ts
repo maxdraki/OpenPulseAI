@@ -24,6 +24,7 @@ import {
   mergeThemes,
   isSafeThemeName,
   checkStaleness,
+  commitVault,
   type PendingUpdate,
   type LlmProvider,
 } from "../../../core/dist/index.js";
@@ -47,6 +48,24 @@ export interface ApproveFailure {
 }
 
 export type ApproveOutcome = ApproveSuccess | ApproveFailure;
+
+/**
+ * Builds the vault-git commit message for an approved update — structural
+ * lintFix kinds (merge/rename/delete) get a message that names the
+ * source/canonical themes involved, everything else gets a generic
+ * `approve(<theme>): <kind> batch=<batchId>` (see task-5 brief §B).
+ */
+function commitMessageForApprove(update: PendingUpdate, related0: string | undefined): string {
+  const batch = update.batchId ?? update.id;
+  if (update.lintFix === "merge" && related0) return `merge(${update.theme}->${related0}) batch=${batch}`;
+  if (update.lintFix === "rename" && related0) return `rename(${update.theme}->${related0}) batch=${batch}`;
+  if (update.lintFix === "delete") return `delete(${update.theme}) batch=${batch}`;
+  if (update.schemaEvolution || update.theme === "_schema") return `approve(_schema): schema batch=${batch}`;
+  if (update.compactionType) return `approve(${update.theme}): compaction-${update.compactionType} batch=${batch}`;
+  if (update.querybackSource) return `approve(${update.theme}): queryback batch=${batch}`;
+  if (update.lintFix) return `approve(${update.theme}): lint-${update.lintFix} batch=${batch}`;
+  return `approve(${update.theme}): update batch=${batch}`;
+}
 
 /**
  * Reads the current on-disk content that a pending update's theme would
@@ -102,11 +121,20 @@ export function gateOnStaleness(
  * compaction for oversized project pages — both need the live orchestrator
  * instance, not available here.
  */
+export interface ApprovePendingUpdateOpts {
+  /** When false, the write still happens but the audit commit is skipped —
+   *  used by `approvePendingUpdatesBatch` so a whole "Approve All" action
+   *  lands as a single commit listing every theme, instead of one commit
+   *  per item (see task-5 brief §B). Defaults to true. */
+  commit?: boolean;
+}
+
 export async function approvePendingUpdate(
   vaultRoot: string,
   pendingDir: string,
   id: string,
-  editedContent: string | undefined
+  editedContent: string | undefined,
+  opts: ApprovePendingUpdateOpts = {}
 ): Promise<ApproveOutcome> {
   const pendingPath = join(pendingDir, `${id}.json`);
   let update: PendingUpdate;
@@ -165,10 +193,61 @@ export async function approvePendingUpdate(
 
     await rm(pendingPath);
 
+    if (opts.commit !== false) {
+      // Fire-and-forget audit commit — commitVault never throws (see
+      // vault-git.ts), so a missing/broken git binary can never fail approval.
+      await commitVault(vault, commitMessageForApprove(update, related[0]));
+    }
+
     return { ok: true, theme: update.theme, finalContent, update };
   } catch (e: unknown) {
     return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+export interface BatchApproveResultEntry {
+  id: string;
+  outcome: ApproveOutcome;
+}
+
+/**
+ * Approves a whole "Approve All" batch (see task-5 brief §B: "a batch
+ * approve = one commit listing themes"). Runs each item through the same
+ * gate/write/staleness logic as `approvePendingUpdate` (sequentially, so the
+ * final commit deterministically reflects everything written), but defers
+ * the audit commit until every item has been processed, then makes exactly
+ * ONE commit naming every theme that was actually written — instead of one
+ * commit per item. Items that fail (stale conflict or otherwise) are simply
+ * omitted from that commit message and reported back per-id so the caller
+ * (server.ts / the Review UI) can surface stale/failed counts exactly as
+ * before.
+ */
+export async function approvePendingUpdatesBatch(
+  vaultRoot: string,
+  pendingDir: string,
+  ids: string[]
+): Promise<BatchApproveResultEntry[]> {
+  const results: BatchApproveResultEntry[] = [];
+  const committedThemes: string[] = [];
+  let batchId: string | undefined;
+
+  for (const id of ids) {
+    const outcome = await approvePendingUpdate(vaultRoot, pendingDir, id, undefined, { commit: false });
+    results.push({ id, outcome });
+    if (outcome.ok) {
+      committedThemes.push(outcome.theme);
+      batchId ??= outcome.update.batchId;
+    }
+  }
+
+  if (committedThemes.length > 0) {
+    const vault = new Vault(vaultRoot);
+    await vault.init();
+    const label = batchId ?? "manual";
+    await commitVault(vault, `approve(batch): ${committedThemes.join(", ")} batch=${label}`);
+  }
+
+  return results;
 }
 
 export interface RegenerateSuccess {

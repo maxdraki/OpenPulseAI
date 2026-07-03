@@ -1,5 +1,6 @@
-import { listPendingUpdates, approveUpdate, rejectUpdate, regeneratePendingUpdate, ApiError, type PendingUpdate } from "../lib/tauri-bridge.js";
+import { listPendingUpdates, approveUpdate, approveUpdatesBatch, rejectUpdate, regeneratePendingUpdate, ApiError, type PendingUpdate } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
+import { renderDiffHtml } from "../lib/diff.js";
 import { log } from "../lib/logger.js";
 
 /** True when `err` is a stale-conflict 409 from the approve endpoint (see
@@ -131,9 +132,12 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         approveAllBtn.addEventListener("click", async () => {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
-          const results = await Promise.allSettled(batchUpdates.map((u) => approveUpdate(u.id)));
-          const staleCount = results.filter((r) => r.status === "rejected" && isStaleConflict(r.reason)).length;
-          const otherFailed = results.filter((r) => r.status === "rejected" && !isStaleConflict(r.reason)).length;
+          // One server-side batch call so the whole action lands as a single
+          // vault-git commit listing every theme (see approve.ts's
+          // approvePendingUpdatesBatch) instead of one commit per item.
+          const results = await approveUpdatesBatch(batchUpdates.map((u) => u.id));
+          const staleCount = results.filter((r) => !r.ok && r.stale).length;
+          const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
 
           if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
           if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
@@ -260,6 +264,16 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   textarea.style.display = "none";
   textarea.value = update.proposedContent;
 
+  // Before/after diff view (hidden until the Diff toggle is used) — see
+  // renderDiffHtml in ../lib/diff.js. Updates with no previousContent (new
+  // pages, or legacy pre-staleness-tracking records) have nothing to diff
+  // against, so the toggle is disabled with a hint rather than silently
+  // rendering a whole-page "added" diff.
+  const hasPreviousContent = update.previousContent != null;
+  const diffContainer = document.createElement("div");
+  diffContainer.className = "pending-diff";
+  diffContainer.style.display = "none";
+
   // Actions row
   const actions = document.createElement("div");
   actions.className = "pending-actions";
@@ -282,6 +296,14 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   const editBtn = document.createElement("button");
   editBtn.className = "btn btn-secondary";
   editBtn.textContent = "Edit";
+
+  const diffBtn = document.createElement("button");
+  diffBtn.className = "btn btn-secondary";
+  diffBtn.textContent = "Diff";
+  if (!hasPreviousContent) {
+    diffBtn.disabled = true;
+    diffBtn.title = "No previous version recorded for this update — nothing to diff against";
+  }
 
   const rejectBtn = document.createElement("button");
   rejectBtn.className = "btn btn-danger";
@@ -308,6 +330,7 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
 
   actions.appendChild(approveBtn);
   actions.appendChild(editBtn);
+  actions.appendChild(diffBtn);
   actions.appendChild(rejectBtn);
   actions.appendChild(regenerateBtn);
 
@@ -322,6 +345,7 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   card.appendChild(staleBanner);
   card.appendChild(label);
   card.appendChild(contentPreview);
+  card.appendChild(diffContainer);
   card.appendChild(textarea);
   card.appendChild(actions);
 
@@ -331,9 +355,28 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
     regenerateBtn.style.display = "";
   }
 
-  // Edit toggle
+  // Edit / Diff / Proposed view toggles. Proposed (rendered markdown) is the
+  // default; Edit and Diff are mutually exclusive with each other and with
+  // Proposed, so switching to one closes the other.
   let editing = false;
+  let showingDiff = false;
+
+  function closeDiff(): void {
+    if (!showingDiff) return;
+    showingDiff = false;
+    diffContainer.style.display = "none";
+    diffBtn.textContent = "Diff";
+  }
+
+  function closeEdit(): void {
+    if (!editing) return;
+    editing = false;
+    textarea.style.display = "none";
+    editBtn.textContent = "Edit";
+  }
+
   editBtn.addEventListener("click", () => {
+    closeDiff();
     editing = !editing;
     if (editing) {
       contentPreview.style.display = "none";
@@ -344,6 +387,23 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
       contentPreview.innerHTML = renderMarkdown(textarea.value); // safe: same rationale as above
       contentPreview.style.display = "";
       editBtn.textContent = "Edit";
+    }
+  });
+
+  diffBtn.addEventListener("click", () => {
+    if (!hasPreviousContent) return;
+    closeEdit();
+    showingDiff = !showingDiff;
+    if (showingDiff) {
+      contentPreview.style.display = "none";
+      // safe: renderDiffHtml HTML-escapes every line before interpolating it
+      diffContainer.innerHTML = renderDiffHtml(update.previousContent ?? "", textarea.value);
+      diffContainer.style.display = "";
+      diffBtn.textContent = "Proposed";
+    } else {
+      diffContainer.style.display = "none";
+      contentPreview.style.display = "";
+      diffBtn.textContent = "Diff";
     }
   });
 

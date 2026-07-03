@@ -125,6 +125,37 @@ export async function approveUpdate(id: string, editedContent?: string): Promise
   await apiPost("/approve-update", { id, editedContent: editedContent ?? null });
 }
 
+export interface BatchApproveResult {
+  id: string;
+  ok: boolean;
+  stale?: boolean;
+}
+
+/**
+ * Approves a whole "Approve All" batch as one server-side action so it lands
+ * as a single vault-git commit listing every theme (see
+ * `.superpowers/sdd/task-5-brief.md` §B and `POST /api/approve-batch`) rather
+ * than one commit per item. The desktop app has no Tauri command for this
+ * yet, so it falls back to approving sequentially item-by-item there — each
+ * one still gets written, just without the single-commit guarantee (the
+ * Tauri backend has no vault-git integration at all yet).
+ */
+export async function approveUpdatesBatch(ids: string[]): Promise<BatchApproveResult[]> {
+  if (isTauri) {
+    const out: BatchApproveResult[] = [];
+    for (const id of ids) {
+      try {
+        await tauriInvoke("approve_update", { id, editedContent: null });
+        out.push({ id, ok: true });
+      } catch {
+        out.push({ id, ok: false });
+      }
+    }
+    return out;
+  }
+  return apiPost("/approve-batch", { ids });
+}
+
 export async function rejectUpdate(id: string): Promise<void> {
   if (isTauri) return tauriInvoke("reject_update", { id });
   await apiPost("/reject-update", { id });

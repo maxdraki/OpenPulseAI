@@ -33,6 +33,7 @@ import {
   readTheme,
   sanitizeThemeSlug,
   stripCodeFences,
+  commitVault,
   type LlmProvider,
 } from "@openpulse/core";
 import { runStructuralChecks, type StructuralIssue } from "./lint-structural.js";
@@ -912,6 +913,10 @@ export async function runLint(opts: LintOptions): Promise<LintResult> {
   const themeNames = await listThemes(vault);
   const themeCount = themeNames.length;
   await writeLintReport(vault, structural, stubs, contradictions, themeCount);
+  // writeLintReport writes _lint.md directly to warm/, bypassing the
+  // approve-path commit (see task-5 brief §B's "note any direct-write
+  // exceptions" — this is one) — commit it here.
+  await commitVault(vault, "lint: refresh report");
 
   const totalIssues = structural.length + stubs.length + contradictions.length;
   console.error(

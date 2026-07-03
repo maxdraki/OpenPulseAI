@@ -13,6 +13,7 @@ import {
   vaultLog,
   readTheme,
   parseActivityBlocks,
+  commitVault,
 } from "@openpulse/core";
 import type { ActivityEntry, ProjectStatus, OpenPulseConfig, LlmProvider, PendingUpdate, UsageTotals } from "@openpulse/core";
 import { emptyUsageTotals } from "@openpulse/core";
@@ -81,6 +82,7 @@ export async function runDreamPipeline(
       // otherwise sit in hot/ forever, since archiving only ever ran after
       // this point (which used to return early).
       await archiveProcessedHotFiles(vault);
+      await commitVault(vault, "dream: archive (no new entries)");
       return null;
     }
     console.error(`[dream] Found ${entries.length} hot entries.`);
@@ -207,6 +209,9 @@ export async function runDreamPipeline(
     );
 
     await archiveProcessedHotFiles(vault);
+    // One commit capturing this run's hot-file archival + index/log/backlinks
+    // churn (see task-5 brief §B) — never throws, see vault-git.ts.
+    await commitVault(vault, `dream: run ${batchId}`);
     await vaultLog(
       "info",
       "Dream pipeline complete",

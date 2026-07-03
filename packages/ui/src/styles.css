@@ -693,6 +693,65 @@ a.wiki-link:hover {
   overflow-y: auto;
 }
 
+/* ---- Before/after diff view (Review page Diff toggle) ---- */
+.pending-diff {
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.diff-line {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-marker {
+  flex: none;
+  width: 1ch;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-equal {
+  color: var(--text-secondary);
+}
+
+.diff-add {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.diff-add .diff-marker {
+  color: var(--success);
+}
+
+.diff-remove {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.diff-remove .diff-marker {
+  color: var(--danger);
+}
+
+.diff-empty {
+  padding: 0.6rem;
+  color: var(--text-tertiary);
+}
+
 .pending-textarea {
   width: 100%;
   min-height: 160px;

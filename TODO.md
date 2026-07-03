@@ -53,8 +53,8 @@ General refinement pass across all pages. Known items:
 - **Status:** Ongoing
 
 ### History page
-Archive of previously approved reviews. Currently approved reviews just merge into themes with no audit trail.
-- **Status:** Not started
+Archive of previously approved reviews. The vault now has a full audit trail — every approve/merge/dream-run/lint/rebuild-meta write auto-commits to a git repo rooted at `vault/` (`packages/core/src/vault-git.ts`), and the Review UI has a before/after Diff toggle per pending update (`packages/ui/src/lib/diff.ts`). What's still missing is a dedicated UI page to browse that git history (list commits, view a theme at a past commit, one-click revert).
+- **Status:** Audit trail done; browsing UI not started
 
 ---
 

@@ -2,13 +2,24 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { Vault, writeTheme } from "../../core/dist/index.js";
 import type { PendingUpdate, LlmProvider } from "../../core/dist/index.js";
 import {
   gateOnStaleness,
   approvePendingUpdate,
+  approvePendingUpdatesBatch,
   regeneratePendingUpdate,
 } from "../src/lib/approve.js";
+
+const execFileAsync = promisify(execFile);
+
+async function gitLog(vault: Vault): Promise<string[]> {
+  const gitDir = join(vault.root, "vault");
+  const { stdout } = await execFileAsync("git", ["-C", gitDir, "log", "--format=%s"]);
+  return stdout.trim().split("\n").filter(Boolean);
+}
 
 async function writePendingFile(pendingDir: string, update: PendingUpdate): Promise<void> {
   await writeFile(join(pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
@@ -23,6 +34,7 @@ function basePending(overrides: Partial<PendingUpdate> & { id: string; theme: st
     entries: overrides.entries ?? [],
     createdAt: overrides.createdAt ?? new Date().toISOString(),
     status: overrides.status ?? "pending",
+    batchId: overrides.batchId,
     type: overrides.type,
     lintFix: overrides.lintFix,
     related: overrides.related,
@@ -190,6 +202,138 @@ describe("approvePendingUpdate", () => {
 
     const outcome = await approvePendingUpdate(tempDir, pendingDir, "delete-id", undefined);
     expect(outcome.ok).toBe(true);
+  });
+
+  it("commits the write to the vault git repo on successful approve", async () => {
+    await writeTheme(vault, "project-git", "## Current Status\n\nOriginal.");
+    const update = basePending({
+      id: "git-commit-id",
+      theme: "project-git",
+      proposedContent: "## Current Status\n\nUpdated via approve.",
+      previousContent: "## Current Status\n\nOriginal.",
+      batchId: "batch-123",
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "git-commit-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    const log = await gitLog(vault);
+    expect(log.some((subject) => subject.startsWith("approve(project-git):") && subject.includes("batch=batch-123"))).toBe(true);
+  });
+
+  it("uses a merge(<src>-><dst>) commit message for structural lintFix merges", async () => {
+    await writeTheme(vault, "project-src", "## Current Status\n\nSrc content.");
+    await writeTheme(vault, "project-dst", "## Current Status\n\nDst content.");
+    const update = basePending({
+      id: "merge-id",
+      theme: "project-src",
+      lintFix: "merge",
+      related: ["project-dst"],
+      previousContent: null,
+    });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "merge-id", undefined);
+    expect(outcome.ok).toBe(true);
+
+    const log = await gitLog(vault);
+    expect(log.some((subject) => subject.startsWith("merge(project-src->project-dst)"))).toBe(true);
+  });
+
+  it("approvePendingUpdatesBatch lands a whole batch as ONE commit listing every theme", async () => {
+    await writeTheme(vault, "project-alpha", "## Current Status\n\nAlpha original.");
+    await writeTheme(vault, "project-beta", "## Current Status\n\nBeta original.");
+    const before = await gitLog(vault);
+
+    await writePendingFile(
+      pendingDir,
+      basePending({
+        id: "batch-alpha",
+        theme: "project-alpha",
+        proposedContent: "## Current Status\n\nAlpha updated.",
+        previousContent: "## Current Status\n\nAlpha original.",
+        batchId: "dream-batch-1",
+      })
+    );
+    await writePendingFile(
+      pendingDir,
+      basePending({
+        id: "batch-beta",
+        theme: "project-beta",
+        proposedContent: "## Current Status\n\nBeta updated.",
+        previousContent: "## Current Status\n\nBeta original.",
+        batchId: "dream-batch-1",
+      })
+    );
+
+    const results = await approvePendingUpdatesBatch(tempDir, pendingDir, ["batch-alpha", "batch-beta"]);
+    expect(results.every((r) => r.outcome.ok)).toBe(true);
+
+    const after = await gitLog(vault);
+    // Exactly one new commit for the whole batch, not one per item.
+    expect(after.length).toBe(before.length + 1);
+    const subject = after[0];
+    expect(subject).toContain("project-alpha");
+    expect(subject).toContain("project-beta");
+    expect(subject).toContain("batch=dream-batch-1");
+  });
+
+  it("approvePendingUpdatesBatch still writes and reports a stale item, excluding it from the commit message", async () => {
+    await writeTheme(vault, "project-gamma", "## Current Status\n\nGamma CHANGED on disk.");
+    await writeTheme(vault, "project-delta", "## Current Status\n\nDelta original.");
+
+    await writePendingFile(
+      pendingDir,
+      basePending({
+        id: "batch-stale-gamma",
+        theme: "project-gamma",
+        proposedContent: "## Current Status\n\nGamma updated.",
+        previousContent: "## Current Status\n\nGamma original (stale snapshot).",
+        batchId: "dream-batch-2",
+      })
+    );
+    await writePendingFile(
+      pendingDir,
+      basePending({
+        id: "batch-ok-delta",
+        theme: "project-delta",
+        proposedContent: "## Current Status\n\nDelta updated.",
+        previousContent: "## Current Status\n\nDelta original.",
+        batchId: "dream-batch-2",
+      })
+    );
+
+    const results = await approvePendingUpdatesBatch(tempDir, pendingDir, ["batch-stale-gamma", "batch-ok-delta"]);
+    const staleResult = results.find((r) => r.id === "batch-stale-gamma");
+    const okResult = results.find((r) => r.id === "batch-ok-delta");
+    expect(staleResult?.outcome.ok).toBe(false);
+    expect(okResult?.outcome.ok).toBe(true);
+
+    const log = await gitLog(vault);
+    const subject = log[0];
+    expect(subject).toContain("project-delta");
+    expect(subject).not.toContain("project-gamma");
+  });
+
+  it("approvePendingUpdatesBatch is a clean no-op commit-wise when every item fails", async () => {
+    await writeTheme(vault, "project-epsilon", "## Current Status\n\nChanged on disk.");
+    await writePendingFile(
+      pendingDir,
+      basePending({
+        id: "batch-all-stale",
+        theme: "project-epsilon",
+        proposedContent: "## Current Status\n\nUpdated.",
+        previousContent: "## Current Status\n\nStale snapshot.",
+      })
+    );
+    const before = await gitLog(vault);
+
+    const results = await approvePendingUpdatesBatch(tempDir, pendingDir, ["batch-all-stale"]);
+    expect(results[0]?.outcome.ok).toBe(false);
+
+    const after = await gitLog(vault);
+    expect(after.length).toBe(before.length);
   });
 });
 
