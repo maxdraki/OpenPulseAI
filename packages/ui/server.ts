@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, searchIndex, rebuildIndex } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry } from "../core/dist/index.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
@@ -814,12 +814,7 @@ export async function searchThemesForApi(vaultRoot: string, q: string) {
   if (!q.trim()) return [];
   const vault = new Vault(vaultRoot);
   await vault.init();
-  let results = await searchIndex(vault, q);
-  if (results.length === 0) {
-    await rebuildIndex(vault);
-    results = await searchIndex(vault, q);
-  }
-  return results;
+  return searchWithRebuildRetry(vault, q);
 }
 
 // Backs the Themes page's search box.
@@ -1537,7 +1532,12 @@ app.post("/api/orchestrator-toggle", async (req, res) => {
 // Warm the search index on startup if it hasn't been built yet (fresh vault,
 // or an upgrade from before the index existed) — kicked off in the
 // background so it never gates server startup on a full vault scan.
-(async () => {
+// Skipped under vitest: UI tests import this module for its exported
+// helpers (see test/*.test.ts), and without this guard every `vitest run`
+// would stat/rebuild the index at the REAL VAULT_ROOT (typically
+// ~/OpenPulseAI/vault) as an import side effect, writing
+// .search-index.sqlite there — never desired for a test run.
+if (!process.env.VITEST) void (async () => {
   try {
     const vault = new Vault(VAULT_ROOT);
     await vault.init();
