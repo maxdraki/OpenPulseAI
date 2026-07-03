@@ -67,12 +67,18 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
     {
       title: "MCP Tools Available",
       items: [
-        ["record_activity", "Log what you just did. Accepts a log message and optional theme."],
+        ["record_activity", "Log what you just did. Accepts a log message and optional theme and source."],
         ["ingest_document", "Ingest a markdown document for thematic processing."],
-        ["query_memory", "Query your vault for status summaries."],
-        ["submit_update", "Push a status update into your journals."],
+        ["search_index", "Narrow-then-read search: ranked snippets across all themes. Pair with read_theme."],
+        ["read_theme", "Fetch the full markdown of one theme page by name."],
+        ["query_memory", "Query your vault for status summaries (single-step alternative to search_index + read_theme)."],
+        ["submit_update", "Deprecated — thin alias for record_activity, kept for backward compatibility."],
         ["chat_with_pulse", "Have a conversation about your recorded activities. Requires an LLM provider configured in Settings."],
       ],
+    },
+    {
+      title: "MCP Resource & Prompts",
+      body: `The server also exposes the wiki index as a resource (openpulse://index) and two prompts — summarize_my_week and what_do_i_know_about (topic) — that guide a client through the narrow-then-read pattern. See packages/mcp-server/skill/SKILL.md for the full skill description.`,
     },
     {
       title: "Vault Structure",

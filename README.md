@@ -209,11 +209,15 @@ config:
 
 | Tool | Description |
 |------|-------------|
-| `record_activity` | Log what an AI agent just did |
+| `record_activity` | Log what an AI agent just did (accepts an optional `source`) |
 | `ingest_document` | Save a Markdown doc for processing |
-| `submit_update` | Push a status update from an external source |
-| `query_memory` | Search themes for status information |
+| `submit_update` | Deprecated — thin alias for `record_activity`, kept for backward compatibility |
+| `search_index` | Narrow-then-read search: ranked snippets across all themes — pair with `read_theme` |
+| `read_theme` | Fetch the full Markdown of one theme page by name |
+| `query_memory` | Search themes for status information (single-step alternative to search_index + read_theme) |
 | `chat_with_pulse` | Conversation with your knowledge base (uses index.md for targeted loading) |
+
+The server also exposes an `openpulse://index` MCP resource (the wiki map, `vault/warm/index.md`) and two prompts, `summarize_my_week` and `what_do_i_know_about` (takes a `topic` argument), that walk a client through the narrow-then-read pattern. See `packages/mcp-server/skill/SKILL.md` for a Claude-oriented skill describing how to use this server well.
 
 ## Inspiration
 

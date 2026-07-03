@@ -35,4 +35,16 @@ describe("record_activity tool", () => {
     const result = await handleRecordActivity(vault, { log: "Fixed a bug" });
     expect(result.content[0].text).toContain("Recorded");
   });
+
+  it("accepts an optional source and persists it to the hot log", async () => {
+    const result = await handleRecordActivity(vault, {
+      log: "Deploy completed successfully",
+      source: "slack-bot",
+      theme: "infrastructure",
+    });
+    expect(result.content[0].text).toContain("Recorded");
+    const today = new Date().toISOString().slice(0, 10);
+    const content = await readFile(vault.dailyLogPath(today), "utf-8");
+    expect(content).toContain("slack-bot");
+  });
 });
