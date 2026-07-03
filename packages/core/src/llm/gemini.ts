@@ -1,8 +1,11 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { LlmProvider, CompletionParams } from "./provider.js";
+import { withRetry } from "./retry.js";
+import { UsageAccumulator, type UsageTotals } from "./usage.js";
 
 export class GeminiProvider implements LlmProvider {
   private genAI: GoogleGenerativeAI;
+  private usage = new UsageAccumulator();
 
   constructor(apiKey: string) {
     this.genAI = new GoogleGenerativeAI(apiKey);
@@ -15,7 +18,23 @@ export class GeminiProvider implements LlmProvider {
       generationConfig: params.temperature !== undefined ? { temperature: params.temperature } : undefined,
     });
 
-    const result = await model.generateContent(params.prompt);
+    const result = await withRetry(() => model.generateContent(params.prompt), {
+      onRetry: () => this.usage.recordRetry(),
+    });
+
+    this.usage.recordCall({
+      inputTokens: result.response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: result.response.usageMetadata?.candidatesTokenCount ?? 0,
+    });
+
     return result.response.text();
+  }
+
+  getUsageTotals(): UsageTotals {
+    return this.usage.getTotals();
+  }
+
+  resetUsage(): void {
+    this.usage.reset();
   }
 }

@@ -1036,6 +1036,35 @@ app.get("/api/logs", async (_req, res) => {
   }
 });
 
+// Surfaces the most recent Dream Pipeline run's token/call/retry totals for
+// the Dashboard. The pipeline always runs as a subprocess (manual trigger or
+// orchestrator), so this is the only channel back to the UI — it logs a
+// dedicated "Dream pipeline usage" entry (see packages/dream/src/index.ts)
+// whose `detail` is a JSON-encoded UsageTotals; we just find the latest one.
+app.get("/api/dream-usage", async (_req, res) => {
+  try {
+    const files = await readdir(logsDir).catch(() => []);
+    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl")).sort().reverse();
+
+    for (const file of jsonlFiles.slice(0, 7)) {
+      const raw = await readFile(join(logsDir, file), "utf-8");
+      const lines = raw.split("\n").filter((l) => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.message === "Dream pipeline usage" && entry.detail) {
+            const usage = JSON.parse(entry.detail);
+            return res.json({ usage, at: entry.timestamp });
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    res.json({ usage: null, at: null });
+  } catch {
+    res.json({ usage: null, at: null });
+  }
+});
+
 app.get("/api/project-path", (_req, res) => {
   // Resolve from server.ts location (packages/ui/) → repo root
   res.json({ path: join(process.cwd(), "..", "..") });

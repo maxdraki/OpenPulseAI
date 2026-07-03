@@ -85,12 +85,19 @@ async function readFactsText(factsDir: string, theme: string): Promise<string> {
   }
 }
 
+export interface SynthesizeOptions {
+  /** Called when a theme's synthesis fails (after the provider's own retries
+   *  are exhausted) so the caller can decide which entries stay unprocessed. */
+  onThemeFailure?: (theme: string, error: unknown) => void;
+}
+
 export async function synthesizeToPending(
   vault: Vault,
   classified: ClassificationResult[],
   provider: LlmProvider,
   model: string,
-  proposedTypes?: Record<string, ThemeType>
+  proposedTypes?: Record<string, ThemeType>,
+  opts?: SynthesizeOptions
 ): Promise<PendingUpdate[]> {
   const batchId = new Date().toISOString();
 
@@ -121,6 +128,22 @@ export async function synthesizeToPending(
   const pending: PendingUpdate[] = [];
 
   for (const [theme, items] of byTheme) {
+    try {
+      await synthesizeOneTheme(theme, items);
+    } catch (err) {
+      // Per-theme isolation: one theme failing (after the provider's own
+      // retries are exhausted) must not abort the rest of the batch. The
+      // caller (runDreamPipeline) uses onThemeFailure to keep this theme's
+      // entries out of the processed-entry ledger so they're retried next run.
+      console.error(`[dream] Synthesis failed for theme "${theme}" — skipping, entries deferred:`, err);
+      await vaultLog("error", `Synthesis failed for theme "${theme}", entries deferred for retry`, String(err));
+      opts?.onThemeFailure?.(theme, err);
+    }
+  }
+
+  return pending;
+
+  async function synthesizeOneTheme(theme: string, items: ClassificationResult[]): Promise<void> {
     const existing = themesByName.get(theme) ?? null;
 
     const pageType: ThemeType = existing?.type ?? proposedTypes?.[theme] ?? "project";
@@ -318,6 +341,4 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
 
     pending.push(update);
   }
-
-  return pending;
 }

@@ -14,19 +14,37 @@ import {
   readTheme,
   parseActivityBlocks,
 } from "@openpulse/core";
-import type { ActivityEntry, ProjectStatus, OpenPulseConfig, LlmProvider, PendingUpdate } from "@openpulse/core";
+import type { ActivityEntry, ProjectStatus, OpenPulseConfig, LlmProvider, PendingUpdate, UsageTotals } from "@openpulse/core";
+import { emptyUsageTotals } from "@openpulse/core";
 import { classifyEntries } from "./classify.js";
 import { synthesizeToPending } from "./synthesize.js";
 import { archiveProcessedHotFiles } from "./archive.js";
 import { buildBacklinks, writeBacklinksFile } from "./backlinks.js";
 import { seedSchema } from "./schema.js";
 import { acquireDreamLock } from "./lock.js";
-import { loadProcessedLedger, saveProcessedLedger, filterUnprocessed, markProcessed } from "./ledger.js";
+import { loadProcessedLedger, saveProcessedLedger, filterUnprocessed, markProcessed, type EntryLike } from "./ledger.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 
 export interface DreamPipelineResult {
   pending: PendingUpdate[];
+  /** Themes whose synthesis failed (after the provider's own retries) this run. */
+  failedThemes: string[];
+  /** Entries deferred (left unprocessed in the ledger) because at least one of
+   *  their themes failed — see the conservative "all themes must succeed" rule
+   *  in ledger integration below. */
+  deferredEntryCount: number;
+  /** Cumulative LLM token/call/retry totals for this run, when the provider
+   *  reports usage (see `LlmProvider.getUsageTotals`). Zeros if unavailable. */
+  usage: UsageTotals;
+}
+
+/** Correlates a raw hot-file entry with its classification result. Only
+ *  `timestamp`+`source` is used (not `log`) because classification's
+ *  pre-filter step can strip noise lines from `log`, so the raw entry and its
+ *  classified counterpart may not have byte-identical `log` text. */
+function entryCorrelationKey(entry: EntryLike): string {
+  return `${entry.timestamp}|${entry.source ?? ""}`;
 }
 
 /**
@@ -49,6 +67,9 @@ export async function runDreamPipeline(
   model: string
 ): Promise<DreamPipelineResult | null> {
   const releaseLock = await acquireDreamLock(vault);
+  // Usage totals below cover exactly this run, not any prior run sharing the
+  // same provider instance (e.g. multiple runs in a long-lived process/test).
+  provider.resetUsage?.();
   try {
     const rawEntries = await readHotEntries(vault);
     const ledger = await loadProcessedLedger(vault);
@@ -117,9 +138,18 @@ export async function runDreamPipeline(
       await writeFile(join(vault.pendingDir, `${id}.json`), JSON.stringify(pendingUpdate, null, 2), "utf-8");
     }
 
+    // Per-theme isolation: synthesizeToPending catches and skips individual
+    // theme failures internally (see synthesize.ts), reporting them here via
+    // onThemeFailure. A throw out of synthesizeToPending at this point means
+    // something broke outside the per-theme try/catch (e.g. a filesystem
+    // error while loading schema/backlinks) — that's still a hard abort with
+    // hot files preserved for retry, same as before.
+    const failedThemes: string[] = [];
     let pending: Awaited<ReturnType<typeof synthesizeToPending>>;
     try {
-      pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes);
+      pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes, {
+        onThemeFailure: (theme) => failedThemes.push(theme),
+      });
     } catch (err) {
       console.error("[dream] Synthesis failed — hot files preserved for retry:", err);
       await vaultLog("error", "Synthesis failed, hot files NOT archived", String(err));
@@ -127,24 +157,64 @@ export async function runDreamPipeline(
     }
     console.error(`[dream] Created ${pending.length} pending update(s). Review in the Control Center.`);
 
+    // Conservative "all themes must succeed" rule: an entry can carry
+    // multiple theme tags (see classifyEntries), so an entry is only safe to
+    // mark processed in the ledger if EVERY theme it was classified into
+    // synthesized successfully. Entries touching any failed theme stay
+    // unprocessed so they're retried (for all their themes) next run —
+    // otherwise a partially-processed multi-tag entry could silently lose
+    // the failed theme's contribution forever.
+    const unsafeEntryKeys = new Set<string>();
+    for (const c of classified) {
+      if (c.themes.some((t) => failedThemes.includes(t))) {
+        unsafeEntryKeys.add(entryCorrelationKey(c.entry));
+      }
+    }
+    const safeEntries = entries.filter((e) => !unsafeEntryKeys.has(entryCorrelationKey(e)));
+    const deferredEntryCount = entries.length - safeEntries.length;
+    if (failedThemes.length > 0) {
+      console.error(
+        `[dream] ${failedThemes.length} theme(s) failed (${failedThemes.join(", ")}); ${deferredEntryCount} entr${deferredEntryCount === 1 ? "y" : "ies"} deferred for retry.`
+      );
+    }
+
     // Close the crash window: mark every consumed entry processed in the
     // ledger *before* touching index/backlinks/log/archive. If the process
     // crashes anywhere after this point, the next run's ledger filter skips
     // these entries — at most a partial re-run, never a duplicate or a loss.
     const batchId = pending[0]?.batchId ?? new Date().toISOString();
-    await saveProcessedLedger(vault, markProcessed(entries, ledger, batchId));
+    await saveProcessedLedger(vault, markProcessed(safeEntries, ledger, batchId));
+
+    const usage = provider.getUsageTotals?.() ?? emptyUsageTotals();
+    await vaultLog(
+      "info",
+      "Dream pipeline usage",
+      JSON.stringify(usage)
+    );
 
     await generateIndex(vault);
     const backlinks = await buildBacklinks(vault);
     await writeBacklinksFile(vault, backlinks);
     const themeNames = pending.map((p) => p.theme).join(", ");
-    await appendLog(vault, "dream", `${entries.length} entries → ${pending.length} updates (${themeNames})`);
+    const failureSummary = failedThemes.length > 0
+      ? ` | FAILED: ${failedThemes.join(", ")} (${deferredEntryCount} entr${deferredEntryCount === 1 ? "y" : "ies"} deferred)`
+      : "";
+    const usageSummary = ` | usage: ${usage.calls} call(s), ${usage.inputTokens} in / ${usage.outputTokens} out tok, ${usage.retries} retr${usage.retries === 1 ? "y" : "ies"}`;
+    await appendLog(
+      vault,
+      "dream",
+      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}`
+    );
 
     await archiveProcessedHotFiles(vault);
-    await vaultLog("info", "Dream pipeline complete", `${classified.length} entries → ${pending.length} pending update(s)`);
+    await vaultLog(
+      "info",
+      "Dream pipeline complete",
+      `${classified.length} entries → ${pending.length} pending update(s)${failureSummary}`
+    );
     console.error("[dream] Hot files archived. Dream complete.");
 
-    return { pending };
+    return { pending, failedThemes, deferredEntryCount, usage };
   } finally {
     await releaseLock();
   }

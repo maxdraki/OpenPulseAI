@@ -330,6 +330,12 @@ body {
   font-size: 0.85rem;
 }
 
+.dashboard-usage-note {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin: -0.75rem 0 1.25rem;
+}
+
 .dashboard-theme-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

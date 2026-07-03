@@ -8,6 +8,18 @@ export interface VaultHealth {
   vaultExists: boolean;
 }
 
+export interface DreamUsageTotals {
+  calls: number;
+  retries: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface DreamUsage {
+  usage: DreamUsageTotals | null;
+  at: string | null;
+}
+
 export interface PendingUpdate {
   id: string;
   theme: string;
@@ -64,6 +76,17 @@ export async function apiPost<T>(path: string, body: Record<string, unknown>): P
 export async function getVaultHealth(): Promise<VaultHealth> {
   if (isTauri) return tauriInvoke("get_vault_health");
   return apiGet("/vault-health");
+}
+
+/**
+ * Latest Dream Pipeline run's token/call/retry totals, for the Dashboard.
+ * Dev-server only for now (the pipeline always runs as a subprocess reading
+ * vault/logs — there's no Tauri command for this yet); Tauri callers get a
+ * graceful "no data" result rather than an error.
+ */
+export async function getDreamUsage(): Promise<DreamUsage> {
+  if (isTauri) return { usage: null, at: null };
+  return apiGet("/dream-usage");
 }
 
 export async function listPendingUpdates(): Promise<PendingUpdate[]> {

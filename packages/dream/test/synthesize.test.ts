@@ -284,6 +284,68 @@ describe("synthesizeToPending", () => {
     expect(pending[0].proposedContent).toContain("## Current Status");
   });
 
+  describe("per-theme failure isolation", () => {
+    it("skips a failing theme, keeps the succeeding one's pending, and reports the failure", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme A", source: "github-activity" },
+          themes: ["theme-a"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme B", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-b"')) throw new Error("LLM down for theme-b");
+          return "## Current Status\n\nDone.";
+        }),
+      };
+
+      const onThemeFailure = vi.fn();
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", undefined, {
+        onThemeFailure,
+      });
+
+      expect(pending.map((p) => p.theme)).toEqual(["theme-a"]);
+      expect(onThemeFailure).toHaveBeenCalledTimes(1);
+      expect(onThemeFailure).toHaveBeenCalledWith("theme-b", expect.any(Error));
+
+      // theme-a's pending file was actually written to disk despite theme-b failing.
+      const pendingFiles = await readdir(vault.pendingDir);
+      expect(pendingFiles).toHaveLength(1);
+    });
+
+    it("continues past a failing theme to synthesize a later one in the same batch", async () => {
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-18T10:00:00Z", log: "Work on theme B (fails)", source: "github-activity" },
+          themes: ["theme-b"],
+          confidence: 0.95,
+        },
+        {
+          entry: { timestamp: "2026-04-18T11:00:00Z", log: "Work on theme C (succeeds)", source: "github-activity" },
+          themes: ["theme-c"],
+          confidence: 0.95,
+        },
+      ];
+
+      const provider: LlmProvider = {
+        complete: vi.fn().mockImplementation(async (params: { prompt: string }) => {
+          if (params.prompt.includes('for "theme-b"')) throw new Error("LLM down for theme-b");
+          return "## Current Status\n\nDone.";
+        }),
+      };
+
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model");
+      expect(pending.map((p) => p.theme)).toEqual(["theme-c"]);
+    });
+  });
+
   describe("parseMetaBlock / stripMetaBlock", () => {
     it("extracts a well-formed status and reason", () => {
       const input = `<meta>\nstatus: active\nreason: merged feature branch\n</meta>\n\n## Body\n`;

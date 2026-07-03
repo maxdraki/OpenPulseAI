@@ -24,10 +24,14 @@ export {
 export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";
 export { archiveHotFile } from "./cold.js";
 export { loadConfig, DEFAULT_CONFIG } from "./config.js";
-export type { LlmProvider, CompletionParams } from "./llm/provider.js";
+export type { LlmProvider, CompletionParams, UsageTotals } from "./llm/provider.js";
 export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";
 export { stripCodeFences } from "./llm/strip-fences.js";
+export { withRetry, classifyError, LlmError } from "./llm/retry.js";
+export type { RetryOptions, LlmErrorOptions } from "./llm/retry.js";
+export { UsageAccumulator, emptyUsageTotals, mergeUsageTotals } from "./llm/usage.js";
+export type { TokenUsage } from "./llm/usage.js";
 export { initLogger, vaultLog } from "./logger.js";
 export type { LogLevel, LogEntry } from "./logger.js";
 export {
