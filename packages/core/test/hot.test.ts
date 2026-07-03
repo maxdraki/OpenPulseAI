@@ -72,8 +72,7 @@ describe("Hot Layer", () => {
         source: "github-activity",
       });
       const content = await readFile(vault.dailyLogPath("2026-04-03"), "utf-8");
-      const blocks = content.split("---").filter((b) => b.trim());
-      expect(blocks).toHaveLength(1);
+      expect(parseActivityBlocks(content)).toHaveLength(1);
     });
 
     it("keeps entries with the same log but different source", async () => {
@@ -88,8 +87,7 @@ describe("Hot Layer", () => {
         source: "folder-watcher",
       });
       const content = await readFile(vault.dailyLogPath("2026-04-03"), "utf-8");
-      const blocks = content.split("---").filter((b) => b.trim());
-      expect(blocks).toHaveLength(2);
+      expect(parseActivityBlocks(content)).toHaveLength(2);
     });
 
     it("keeps entries with same source/log outside the 60s dedup window", async () => {
@@ -105,8 +103,7 @@ describe("Hot Layer", () => {
         source: "github-activity",
       });
       const content = await readFile(vault.dailyLogPath("2026-04-03"), "utf-8");
-      const blocks = content.split("---").filter((b) => b.trim());
-      expect(blocks).toHaveLength(2);
+      expect(parseActivityBlocks(content)).toHaveLength(2);
     });
   });
 
@@ -136,6 +133,45 @@ describe("Hot Layer", () => {
       expect(blocks).toHaveLength(2);
       expect(blocks[0].source).toBe("a");
       expect(blocks[1].source).toBe("b");
+    });
+  });
+
+  describe("unambiguous entry delimiter", () => {
+    it("round-trips an entry whose body contains a literal \\n---\\n as ONE entry", async () => {
+      // No blank lines around the embedded "---": parseActivityBlock's log-line
+      // filter drops blank lines regardless of delimiter, so a body written with
+      // blank lines around it wouldn't round-trip byte-for-byte even with the fix
+      // (that's an unrelated, pre-existing normalization). What we're asserting
+      // here is that the embedded "---" line does NOT get treated as a record
+      // delimiter and split this into two entries.
+      const bodyWithHorizontalRule = "Summary:\n---\nMore detail after a horizontal rule.";
+      await appendActivity(vault, {
+        timestamp: "2026-04-03T10:00:00Z",
+        log: bodyWithHorizontalRule,
+        source: "llm-synth",
+      });
+      // A second, unrelated entry so a mis-split would produce 3+ blocks instead of 2.
+      await appendActivity(vault, {
+        timestamp: "2026-04-03T11:00:00Z",
+        log: "Unrelated second entry",
+        source: "llm-synth",
+      });
+
+      const content = await readFile(vault.dailyLogPath("2026-04-03"), "utf-8");
+      const blocks = parseActivityBlocks(content);
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0].log).toBe(bodyWithHorizontalRule);
+      expect(blocks[1].log).toBe("Unrelated second entry");
+    });
+
+    it("still parses a legacy-format file with the old bare '---' delimiter", () => {
+      const legacyContent =
+        `## 2026-04-18T10:00:00Z\n**Source:** a\n\nLegacy entry one.\n\n---\n\n` +
+        `## 2026-04-18T11:00:00Z\n**Source:** b\n\nLegacy entry two.\n\n---\n`;
+      const blocks = parseActivityBlocks(legacyContent);
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0].log).toBe("Legacy entry one.");
+      expect(blocks[1].log).toBe("Legacy entry two.");
     });
   });
 

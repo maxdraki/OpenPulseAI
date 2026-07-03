@@ -19,6 +19,9 @@ export {
   saveIngestedDocument,
   parseActivityBlock,
   parseActivityBlocks,
+  splitHotFileBlocks,
+  joinHotFileBlocks,
+  ENTRY_MARKER,
   type ParsedActivityBlock,
 } from "./hot.js";
 export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";

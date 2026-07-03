@@ -14,7 +14,7 @@ import { timingSafeEqual } from "node:crypto";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig } from "../core/dist/index.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 
 const execFileAsync = promisify(execFile);
@@ -123,7 +123,7 @@ app.get("/api/vault-health", async (_req, res) => {
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
-      hotCount += content.split(/\n---\n/).filter((b) => b.trim()).length;
+      hotCount += splitHotFileBlocks(content).filter((b) => b.trim()).length;
     }
     // Count ingested documents
     try {
@@ -762,12 +762,12 @@ app.delete("/api/hot-entries/:id", async (req, res) => {
       if (file.includes("/") || file.includes("..")) return res.status(400).json({ error: "Invalid id" });
       const filePath = join(hotDir, file);
       const content = await readFile(filePath, "utf-8");
-      const blocks = content.split(/\n---\n/).filter((b) => b.trim());
+      const blocks = splitHotFileBlocks(content).filter((b) => b.trim());
       blocks.splice(blockIndex, 1);
       if (blocks.length === 0) {
         await rm(filePath);
       } else {
-        await writeFile(filePath, blocks.join("\n\n---\n") + "\n\n---\n", "utf-8");
+        await writeFile(filePath, joinHotFileBlocks(blocks), "utf-8");
       }
       return res.json({ ok: true });
     }

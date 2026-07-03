@@ -20,6 +20,17 @@ const TIMESTAMP_RE = /^## (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/m;
 const THEME_RE = /^\*\*Theme:\*\*\s*(.+)/m;
 const SOURCE_RE = /^\*\*Source:\*\*\s*(.+)/m;
 
+/**
+ * Unambiguous entry-record delimiter. The legacy delimiter was a bare `\n---\n`
+ * line, which collides with entry bodies that legitimately contain a horizontal
+ * rule or YAML frontmatter (LLM-authored summaries do this routinely), silently
+ * fracturing one entry into multiple malformed blocks. An HTML comment marker
+ * can't collide with normal markdown content.
+ */
+export const ENTRY_MARKER = "<!-- openpulse:entry -->";
+const ENTRY_MARKER_RE = /\n<!-- openpulse:entry -->\n/;
+const LEGACY_DELIMITER_RE = /\n---\n/;
+
 export function parseActivityBlock(block: string): ParsedActivityBlock | null {
   const tsMatch = block.match(TIMESTAMP_RE);
   if (!tsMatch) return null;
@@ -43,9 +54,38 @@ export function parseActivityBlock(block: string): ParsedActivityBlock | null {
   };
 }
 
+/**
+ * Splits raw hot-file content into individual entry-record strings.
+ *
+ * Parses the new unambiguous marker first; a file (or a legacy tail segment
+ * within it) that contains no new marker at all falls back to the old bare
+ * `\n---\n` splitting so pre-existing vault files keep parsing correctly.
+ *
+ * Known limitation: a file that mixes legacy entries (written before this
+ * delimiter change) with newly-appended marker-delimited entries will only
+ * legacy-split the portion *before* the first marker — if that pre-marker
+ * portion itself concatenates multiple legacy entries, they're still split
+ * correctly (no marker present in that span to short-circuit on), but this
+ * cannot be done losslessly if a marker-delimited entry's own body happens to
+ * contain `\n---\n` while sharing a file with legacy entries. This is the same
+ * inherent ambiguity the new marker exists to eliminate; it can only be fully
+ * removed once no legacy-delimited files remain (e.g. after they're archived).
+ */
+export function splitHotFileBlocks(fileContent: string): string[] {
+  if (!fileContent.includes(ENTRY_MARKER)) {
+    return fileContent.split(LEGACY_DELIMITER_RE);
+  }
+  return fileContent.split(ENTRY_MARKER_RE);
+}
+
+/** Re-serializes entry blocks back into hot-file content using the new marker. */
+export function joinHotFileBlocks(blocks: string[]): string {
+  if (blocks.length === 0) return "";
+  return blocks.join(`\n\n${ENTRY_MARKER}\n\n`) + `\n\n${ENTRY_MARKER}\n\n`;
+}
+
 export function parseActivityBlocks(fileContent: string): ParsedActivityBlock[] {
-  return fileContent
-    .split(/\n---\n/)
+  return splitHotFileBlocks(fileContent)
     .filter((b) => b.trim())
     .map(parseActivityBlock)
     .filter((b): b is ParsedActivityBlock => b !== null);
@@ -68,7 +108,7 @@ function formatEntry(entry: ActivityEntry): string {
   const parts = [`## ${entry.timestamp}`];
   if (entry.theme) parts.push(`**Theme:** ${entry.theme}`);
   if (entry.source) parts.push(`**Source:** ${entry.source}`);
-  parts.push("", entry.log, "", "---", "");
+  parts.push("", entry.log, "", ENTRY_MARKER, "");
   return parts.join("\n");
 }
 
