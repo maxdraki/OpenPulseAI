@@ -61,13 +61,39 @@ export async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+/**
+ * Thrown by `apiPost`/`apiGet` on a non-2xx response. Carries the HTTP status
+ * and the parsed JSON body (when the server sent one) so callers can react
+ * to specific error shapes — e.g. the approve endpoint's `409 { error:
+ * "stale", theme, reason }` — instead of only seeing a generic message.
+ */
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, body: unknown) {
+    const bodyMessage = body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : undefined;
+    super(bodyMessage ?? `API error: ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function parseErrorBody(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await parseErrorBody(res));
   return res.json();
 }
 
@@ -102,6 +128,18 @@ export async function approveUpdate(id: string, editedContent?: string): Promise
 export async function rejectUpdate(id: string): Promise<void> {
   if (isTauri) return tauriInvoke("reject_update", { id });
   await apiPost("/reject-update", { id });
+}
+
+/**
+ * Regenerates a stale pending update against the current on-disk page (see
+ * `POST /api/pending/:id/regenerate`). Dev-server only for now, consistent
+ * with how Chat is gated — the desktop app has no direct path to the Dream
+ * pipeline's LLM merge step yet.
+ */
+export async function regeneratePendingUpdate(id: string): Promise<PendingUpdate> {
+  if (isTauri) throw new Error("Regenerate is not yet available in the desktop app");
+  const result = await apiPost<{ ok: boolean; update: PendingUpdate }>(`/pending/${encodeURIComponent(id)}/regenerate`, {});
+  return result.update;
 }
 
 export async function triggerDream(): Promise<string> {

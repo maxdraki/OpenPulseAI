@@ -611,6 +611,37 @@ a.wiki-link:hover {
   border-color: var(--border-default);
 }
 
+/* Stale pending — page changed on disk since this update was proposed
+   (see checkStaleness/ApiError 409 handling in review.ts). */
+.pending-card.stale {
+  border-color: var(--danger, #dc2626);
+  background: color-mix(in srgb, var(--danger, #dc2626) 6%, var(--bg-surface));
+}
+
+.pending-stale-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #dc2626) 30%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--danger, #dc2626);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.review-batch-summary {
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.75rem;
+  background: color-mix(in srgb, var(--warning, #d97706) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 30%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--warning, #d97706);
+  font-size: 0.82rem;
+}
+
 .pending-header {
   display: flex;
   justify-content: space-between;

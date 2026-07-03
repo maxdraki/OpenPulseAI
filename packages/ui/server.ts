@@ -14,7 +14,8 @@ import { timingSafeEqual } from "node:crypto";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, writeTheme, readAllThemes, mergeThemes, isSafeThemeName, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, loadConfig } from "../core/dist/index.js";
+import { approvePendingUpdate, regeneratePendingUpdate } from "./src/lib/approve.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -164,65 +165,30 @@ app.get("/api/pending-updates", async (_req, res) => {
 app.post("/api/approve-update", async (req, res) => {
   const { id, editedContent } = req.body;
   if (!id || !/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
-  const pendingPath = join(pendingDir, `${id}.json`);
   try {
-    const raw = await readFile(pendingPath, "utf-8");
-    const update = JSON.parse(raw);
-    const finalContent = editedContent ?? update.proposedContent;
+    const outcome = await approvePendingUpdate(VAULT_ROOT, pendingDir, id, editedContent ?? undefined);
 
-    // Guard against path-traversal or malformed theme names in pending updates.
-    // Exempt "_schema" meta-theme which uses a leading underscore by design.
-    if (update.theme !== "_schema" && !isSafeThemeName(update.theme)) {
-      return res.status(400).json({ ok: false, error: "Unsafe theme name in pending update" });
-    }
-    if (update.related?.[0] && !isSafeThemeName(update.related[0])) {
-      return res.status(400).json({ ok: false, error: "Unsafe related theme name" });
-    }
-
-    const vault = new Vault(VAULT_ROOT);
-    await vault.init();
-
-    // Route by sub-kind
-    const related: string[] = Array.isArray(update.related) ? update.related : [];
-    if (update.lintFix === "merge" && related[0]) {
-      await mergeThemes(vault, update.theme, related[0]);
-    } else if (update.lintFix === "delete") {
-      await mergeThemes(vault, update.theme, null);
-    } else if (update.lintFix === "rename" && related[0]) {
-      await mergeThemes(vault, update.theme, related[0], { rename: true });
-    } else if (update.schemaEvolution || update.theme === "_schema") {
-      // Write to vault/warm/_schema.md instead of a normal theme file
-      const schemaPath = join(warmDir, "_schema.md");
-      await writeFile(schemaPath, finalContent, "utf-8");
-    } else {
-      // Normal dream-update (or any other sub-kind): write to warm theme file,
-      // preserving type, sources, created, related
-      await writeTheme(vault, update.theme, finalContent, {
-        type: update.type,
-        sources: update.sources,
-        related: update.related,
-        created: update.created,
-        skills: update.skills,
-        status: update.projectStatus,
-        statusReason: update.projectStatusReason,
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
+        ok: false,
+        error: outcome.error,
+        ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}),
       });
+    }
 
-      // Size check for dream-pipeline project updates: enqueue compaction if
-      // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
-      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
-        const sectionCount = (finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
-        if (sectionCount > 14 && update.type === "project") {
-          await orchestrator.enqueueForCompaction([update.theme]);
-          // Fire-and-forget immediate run for responsiveness
-          orchestrator.triggerCompact([update.theme]).catch((err: unknown) => {
-            console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
-          });
-        }
+    // Size check for dream-pipeline project updates: enqueue compaction if
+    // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
+    const update = outcome.update;
+    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+      const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
+      if (sectionCount > 14 && update.type === "project") {
+        await orchestrator.enqueueForCompaction([outcome.theme]);
+        // Fire-and-forget immediate run for responsiveness
+        orchestrator.triggerCompact([outcome.theme]).catch((err: unknown) => {
+          console.error("[server] triggerCompact failed:", err instanceof Error ? err.message : String(err));
+        });
       }
     }
-
-    // Remove pending file
-    await rm(pendingPath);
 
     // Rebuild index.md and _backlinks.md in the background — fire and forget
     const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
@@ -233,6 +199,23 @@ app.post("/api/approve-update", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pending/:id/regenerate", async (req, res) => {
+  const id = req.params.id;
+  if (!/^[\w-]+$/.test(id)) return res.status(400).json({ error: "Invalid id" });
+  try {
+    const config = await loadConfig(VAULT_ROOT);
+    const { createProvider } = await import("../core/dist/index.js");
+    const provider = createProvider(config);
+    const outcome = await regeneratePendingUpdate(VAULT_ROOT, pendingDir, id, provider, config.llm.model);
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ ok: false, error: outcome.error });
+    }
+    res.json({ ok: true, update: outcome.update });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

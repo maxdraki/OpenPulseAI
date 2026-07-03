@@ -1,6 +1,12 @@
-import { listPendingUpdates, approveUpdate, rejectUpdate, type PendingUpdate } from "../lib/tauri-bridge.js";
+import { listPendingUpdates, approveUpdate, rejectUpdate, regeneratePendingUpdate, ApiError, type PendingUpdate } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { log } from "../lib/logger.js";
+
+/** True when `err` is a stale-conflict 409 from the approve endpoint (see
+ *  `packages/ui/server.ts`'s `POST /api/approve-update`). */
+function isStaleConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && (err.body as { error?: string } | undefined)?.error === "stale";
+}
 
 // Note: renderMarkdown uses the `marked` library which handles HTML escaping.
 // The vault content rendered here is from our own dream pipeline, not arbitrary user input.
@@ -17,14 +23,30 @@ export async function renderReview(container: HTMLElement): Promise<void> {
   pageHeader.appendChild(h2);
   pageHeader.appendChild(subtitle);
 
+  const summaryEl = document.createElement("div");
+  summaryEl.id = "review-batch-summary";
+  summaryEl.className = "review-batch-summary";
+  summaryEl.style.display = "none";
+
   const listEl = document.createElement("div");
   listEl.id = "pending-list";
 
   container.textContent = "";
   container.appendChild(pageHeader);
+  container.appendChild(summaryEl);
   container.appendChild(listEl);
 
   await loadPending(listEl);
+}
+
+/** Shows a transient summary above the pending list (survives `loadPending`'s
+ *  re-render of `listEl`, since it lives outside it) — e.g. how many items an
+ *  "Approve All" skipped as stale. */
+function showReviewSummary(message: string): void {
+  const el = document.getElementById("review-batch-summary");
+  if (!el) return;
+  el.textContent = message;
+  el.style.display = "";
 }
 
 async function loadPending(listEl: HTMLElement): Promise<void> {
@@ -110,11 +132,22 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
           approveAllBtn.disabled = true;
           rejectAllBtn.disabled = true;
           const results = await Promise.allSettled(batchUpdates.map((u) => approveUpdate(u.id)));
-          const failed = results.filter((r) => r.status === "rejected").length;
-          if (failed) log("error", `Approved batch with ${failed} failure(s): ${batchKey}`);
-          else log("info", `Approved batch: ${batchKey}`);
+          const staleCount = results.filter((r) => r.status === "rejected" && isStaleConflict(r.reason)).length;
+          const otherFailed = results.filter((r) => r.status === "rejected" && !isStaleConflict(r.reason)).length;
+
+          if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
+          if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
+          if (!otherFailed && !staleCount) log("info", `Approved batch: ${batchKey}`);
+
           await loadPending(listEl);
           updateReviewBadge();
+
+          if (staleCount || otherFailed) {
+            const parts: string[] = [];
+            if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
+            if (otherFailed) parts.push(`${otherFailed} failed`);
+            showReviewSummary(`Approve All: ${parts.join(", ")}. Approved the rest.`);
+          }
         });
 
         rejectAllBtn.addEventListener("click", async () => {
@@ -268,15 +301,35 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
   rejectSvg.appendChild(x2);
   rejectBtn.prepend(rejectSvg);
 
+  const regenerateBtn = document.createElement("button");
+  regenerateBtn.className = "btn btn-secondary";
+  regenerateBtn.textContent = "Regenerate";
+  regenerateBtn.style.display = "none";
+
   actions.appendChild(approveBtn);
   actions.appendChild(editBtn);
   actions.appendChild(rejectBtn);
+  actions.appendChild(regenerateBtn);
+
+  // Stale banner — shown when a 409 approve conflict tells us the page
+  // changed since this update was proposed (see isStaleConflict above).
+  const staleBanner = document.createElement("div");
+  staleBanner.className = "pending-stale-banner";
+  staleBanner.textContent = "Stale — page changed since this was proposed";
+  staleBanner.style.display = "none";
 
   card.appendChild(header);
+  card.appendChild(staleBanner);
   card.appendChild(label);
   card.appendChild(contentPreview);
   card.appendChild(textarea);
   card.appendChild(actions);
+
+  function markStale(): void {
+    card.classList.add("stale");
+    staleBanner.style.display = "";
+    regenerateBtn.style.display = "";
+  }
 
   // Edit toggle
   let editing = false;
@@ -304,8 +357,34 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement): HTMLElement {
       log("info", `Approved update: ${update.theme}`, edited ? "with edits" : "as-is");
       await loadPending(listEl);
       updateReviewBadge();
-    } catch (e: any) {
-      log("error", `Failed to approve: ${update.theme}`, String(e));
+    } catch (e: unknown) {
+      if (isStaleConflict(e)) {
+        log("warn", `Approve blocked — page changed since proposed: ${update.theme}`);
+        markStale();
+        approveBtn.classList.remove("loading");
+        approveBtn.disabled = false;
+      } else {
+        log("error", `Failed to approve: ${update.theme}`, String(e));
+        approveBtn.classList.remove("loading");
+        approveBtn.disabled = false;
+      }
+    }
+  });
+
+  // Regenerate — asks the server to merge this stale proposal onto the
+  // current on-disk page, then refreshes the card with the replacement.
+  regenerateBtn.addEventListener("click", async () => {
+    regenerateBtn.disabled = true;
+    regenerateBtn.classList.add("loading");
+    try {
+      await regeneratePendingUpdate(update.id);
+      log("info", `Regenerated update against current page: ${update.theme}`);
+      await loadPending(listEl);
+      updateReviewBadge();
+    } catch (e: unknown) {
+      log("error", `Failed to regenerate: ${update.theme}`, String(e));
+      regenerateBtn.disabled = false;
+      regenerateBtn.classList.remove("loading");
     }
   });
 

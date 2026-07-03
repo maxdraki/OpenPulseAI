@@ -3,8 +3,8 @@ import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Vault, writeTheme } from "@openpulse/core";
-import type { ClassificationResult, LlmProvider } from "@openpulse/core";
-import { synthesizeToPending, parseMetaBlock, stripMetaBlock } from "../src/synthesize.js";
+import type { ClassificationResult, LlmProvider, PendingUpdate } from "@openpulse/core";
+import { synthesizeToPending, parseMetaBlock, stripMetaBlock, regenerateStaleUpdate } from "../src/synthesize.js";
 
 function mockProvider(responseText: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(responseText) };
@@ -493,6 +493,171 @@ describe("synthesizeToPending", () => {
 
       const call = (provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(call.maxTokens).toBe(16384);
+    });
+  });
+
+  describe("fold at source", () => {
+    async function writePending(vault: Vault, update: Partial<PendingUpdate> & { theme: string }): Promise<PendingUpdate> {
+      const full: PendingUpdate = {
+        id: update.id ?? "existing-pending-id",
+        theme: update.theme,
+        proposedContent: update.proposedContent ?? "",
+        previousContent: update.previousContent ?? null,
+        entries: update.entries ?? [],
+        createdAt: update.createdAt ?? new Date().toISOString(),
+        status: update.status ?? "pending",
+        batchId: update.batchId,
+        lintFix: update.lintFix,
+        compactionType: update.compactionType,
+        schemaEvolution: update.schemaEvolution,
+        querybackSource: update.querybackSource,
+        type: update.type,
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, `${full.id}.json`), JSON.stringify(full, null, 2), "utf-8");
+      return full;
+    }
+
+    it("uses the existing dream-kind pending's proposedContent as the synthesis base, and leaves exactly one pending whose previousContent is the on-disk page", async () => {
+      await writeTheme(vault, "project-x", "## Current Status\n\nOriginal on-disk content.");
+      const existingPending = await writePending(vault, {
+        id: "prior-proposal",
+        theme: "project-x",
+        proposedContent: "## Current Status\n\nPrior proposal content not yet approved.",
+        previousContent: "## Current Status\n\nOriginal on-disk content.",
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "More work happened", source: "github-activity" },
+          themes: ["project-x"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nPrior proposal content not yet approved, now with more work happened folded in.");
+      const pending = await synthesizeToPending(vault, classified, provider, "test-model", { "project-x": "project" });
+
+      // Prompt was built against the prior proposal's content, not the stale on-disk page.
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("Prior proposal content not yet approved");
+
+      // The result's previousContent is the actual on-disk page, not the folded proposal.
+      expect(pending[0].previousContent).toBe("## Current Status\n\nOriginal on-disk content.");
+
+      // Exactly one pending remains for the theme — the old one was replaced.
+      const files = await readdir(vault.pendingDir);
+      const jsonFiles = files.filter((f) => f.endsWith(".json"));
+      expect(jsonFiles).toHaveLength(1);
+      expect(jsonFiles[0]).not.toBe(`${existingPending.id}.json`);
+    });
+
+    it("does NOT fold a lintFix-kind pending — synthesizes against the on-disk page instead", async () => {
+      await writeTheme(vault, "project-y", "## Current Status\n\nOn-disk content.");
+      await writePending(vault, {
+        id: "lint-pending",
+        theme: "project-y",
+        proposedContent: "## Merge proposal\n\nStructural fix, not a content base.",
+        previousContent: null,
+        lintFix: "dedup-dates",
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "New activity", source: "github-activity" },
+          themes: ["project-y"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nOn-disk content, updated.");
+      await synthesizeToPending(vault, classified, provider, "test-model", { "project-y": "project" });
+
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("On-disk content.");
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).not.toContain("Structural fix");
+
+      // The lint pending was left untouched.
+      const raw = await readFile(join(vault.pendingDir, "lint-pending.json"), "utf-8");
+      expect(JSON.parse(raw).proposedContent).toContain("Structural fix");
+    });
+
+    it("ignores a foldable pending that's already stale relative to the on-disk page", async () => {
+      await writeTheme(vault, "project-z", "## Current Status\n\nHand-edited on-disk content.");
+      await writePending(vault, {
+        id: "stale-pending",
+        theme: "project-z",
+        proposedContent: "## Current Status\n\nStale proposal.",
+        previousContent: "## Current Status\n\nDifferent original content.", // no longer matches on-disk
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-04-20T10:00:00Z", log: "New activity", source: "github-activity" },
+          themes: ["project-z"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nHand-edited on-disk content, updated.");
+      await synthesizeToPending(vault, classified, provider, "test-model", { "project-z": "project" });
+
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("Hand-edited on-disk content");
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).not.toContain("Stale proposal");
+    });
+  });
+
+  describe("regenerateStaleUpdate", () => {
+    it("produces a replacement pending whose previousContent is the current on-disk page, and removes the stale file", async () => {
+      const staleUpdate: PendingUpdate = {
+        id: "stale-id",
+        theme: "project-r",
+        proposedContent: "## Current Status\n\nStale proposal content.",
+        previousContent: "## Current Status\n\nOld page content.",
+        entries: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        status: "pending",
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, "stale-id.json"), JSON.stringify(staleUpdate, null, 2), "utf-8");
+
+      const provider = mockProvider("## Current Status\n\nMerged: current page content plus the stale proposal's new information.");
+      const currentContent = "## Current Status\n\nCurrent page content that changed after the proposal.";
+
+      const replacement = await regenerateStaleUpdate(vault, staleUpdate, currentContent, provider, "test-model");
+
+      expect(replacement.previousContent).toBe(currentContent);
+      expect(replacement.proposedContent).toContain("Merged:");
+      expect(replacement.id).not.toBe("stale-id");
+      expect(replacement.theme).toBe("project-r");
+
+      const files = await readdir(vault.pendingDir);
+      expect(files).toContain(`${replacement.id}.json`);
+      expect(files).not.toContain("stale-id.json");
+    });
+
+    it("refuses (throws) rather than emit a shrunken merge", async () => {
+      const staleUpdate: PendingUpdate = {
+        id: "stale-id-2",
+        theme: "project-shrink",
+        proposedContent: "## Current Status\n\nStale proposal.",
+        previousContent: "x".repeat(1000),
+        entries: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        status: "pending",
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(vault.pendingDir, "stale-id-2.json"), JSON.stringify(staleUpdate, null, 2), "utf-8");
+
+      const currentContent = "x".repeat(1000);
+      const provider = mockProvider("y".repeat(100)); // way under 80% of 1000 chars
+
+      await expect(
+        regenerateStaleUpdate(vault, staleUpdate, currentContent, provider, "test-model")
+      ).rejects.toThrow();
+
+      // Stale file untouched — no replacement written.
+      const files = await readdir(vault.pendingDir);
+      expect(files).toContain("stale-id-2.json");
+      expect(files).not.toContain(`${staleUpdate.id}-replacement.json`);
     });
   });
 

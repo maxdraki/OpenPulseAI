@@ -87,8 +87,11 @@ describe("runDreamPipeline", () => {
     expect(content).toContain("Committed first entry to myproject");
     expect(content).toContain("Committed second entry to myproject");
 
-    // Total pending updates across both runs: 2, not deduplicated into 1 and not tripled.
-    expect(await pendingFiles(vault)).toHaveLength(2);
+    // Fold at source (see synthesizeToPending): the second run's synthesis for
+    // "myproject" finds the first run's still-pending, non-stale dream-kind
+    // proposal and folds onto it, replacing it in place rather than stacking
+    // a second pending for the same theme.
+    expect(await pendingFiles(vault)).toHaveLength(1);
   });
 
   it("archives a fully-processed old hot file even when there are zero new entries to classify", async () => {

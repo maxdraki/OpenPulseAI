@@ -57,3 +57,4 @@ export { scanSkillForThreats, type ThreatFinding, type ThreatReport } from "./sk
 export { mergeThemes, isSafeThemeName } from "./merge-themes.js";
 export { sanitizeThemeSlug } from "./theme-slug.js";
 export { SEED_SKILLS, isKnownSkill, isValidSkillTag, normaliseSkill } from "./skills-taxonomy.js";
+export { checkStaleness, normalizeContentForCompare, type StalenessResult } from "./staleness.js";
