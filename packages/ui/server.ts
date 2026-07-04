@@ -14,7 +14,7 @@ import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, type AigisConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, isValidAigisEndpoint, type AigisConfig } from "../core/dist/index.js";
 import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { resubmitAigisRollup } from "./src/lib/aigis-submit.js";
@@ -726,11 +726,22 @@ interface AigisConfigApiShape {
   endpoint: string;
   submitTool: string;
   enabled: boolean;
+  /** Whether `endpoint` passes the same https-URL gate the runtime uses (parseAigisConfig in core/config.ts). */
+  endpointValid: boolean;
   hasToken: boolean;
   tokenHint?: string;
 }
 
-/** Reads config.yaml's aigis section for the Settings UI. Never returns the raw token — hasToken + a masked hint only, mirroring the llm-config idiom above. */
+/**
+ * Reads config.yaml's aigis section for the Settings UI. Never returns the raw
+ * token — hasToken + a masked hint only, mirroring the llm-config idiom above.
+ *
+ * `enabled` here is the *effective* enabled state — it runs the same
+ * isValidAigisEndpoint gate the runtime (parseAigisConfig) uses, so a
+ * hand-edited config.yaml with `enabled: true` but a bad/non-https endpoint
+ * reports as disabled here too, matching what actually happens at runtime.
+ * `endpointValid` is surfaced separately so the UI can explain *why*.
+ */
 export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisConfigApiShape> {
   const configPath = join(vaultRoot, "config.yaml");
   try {
@@ -738,15 +749,26 @@ export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisCon
     const parsed = (loadYaml(raw) as any) ?? {};
     const aigis = parsed.aigis ?? {};
     const token: string | undefined = aigis.authToken;
+    const endpoint: string = aigis.endpoint ?? "";
+    const endpointValid = isValidAigisEndpoint(endpoint);
     return {
-      endpoint: aigis.endpoint ?? "",
+      endpoint,
       submitTool: aigis.submitTool ?? DEFAULT_AIGIS_SUBMIT_TOOL,
-      enabled: Boolean(aigis.enabled),
+      enabled: Boolean(aigis.enabled) && endpointValid,
+      endpointValid,
       hasToken: Boolean(token),
       tokenHint: maskKey(token),
     };
   } catch {
-    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, hasToken: false };
+    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, endpointValid: false, hasToken: false };
+  }
+}
+
+/** Thrown by saveAigisConfigForApi when asked to enable with an endpoint that will never pass the runtime gate. */
+export class InvalidAigisEndpointError extends Error {
+  constructor() {
+    super("Aigis endpoint must be a valid https URL to enable the connection");
+    this.name = "InvalidAigisEndpointError";
   }
 }
 
@@ -756,11 +778,21 @@ export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisCon
  * only an explicitly-typed new token overwrites it. Reads and rewrites the
  * whole document via js-yaml so other top-level sections (themes, llm) are
  * preserved rather than clobbered.
+ *
+ * Refuses (throws InvalidAigisEndpointError) to persist enabled:true paired
+ * with an endpoint that fails isValidAigisEndpoint — the same https-URL gate
+ * the runtime (parseAigisConfig in core/config.ts) enforces. Without this,
+ * a bad endpoint could be saved as "enabled" and the Settings/Schedule UI
+ * would show it active while every outbound call silently no-op'd.
  */
 export async function saveAigisConfigForApi(
   vaultRoot: string,
   body: { endpoint?: string; authToken?: string; submitTool?: string; enabled?: boolean }
 ): Promise<void> {
+  if (body.enabled && !isValidAigisEndpoint(body.endpoint)) {
+    throw new InvalidAigisEndpointError();
+  }
+
   const configPath = join(vaultRoot, "config.yaml");
   await mkdir(vaultRoot, { recursive: true });
 
@@ -791,6 +823,9 @@ app.post("/api/aigis-config", async (req, res) => {
     await saveAigisConfigForApi(VAULT_ROOT, req.body ?? {});
     res.json({ ok: true });
   } catch (e: any) {
+    if (e instanceof InvalidAigisEndpointError) {
+      return res.status(400).json({ error: e.message });
+    }
     res.status(500).json({ error: e.message });
   }
 });

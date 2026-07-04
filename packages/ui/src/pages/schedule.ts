@@ -673,12 +673,20 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
     let status: OrchestratorStatus;
     let skills: SkillData[];
     let aigisEnabled = false;
+    // True when the saved config asked for enabled:true but the endpoint failed
+    // the https-URL gate — distinguishes "never connected" from "connected but
+    // broken" so the disabled-note can explain which one applies.
+    let aigisEndpointInvalid = false;
     try {
       [status, skills] = await Promise.all([getOrchestratorStatus(), getSkills()]);
       // Best-effort — if this fails, the Aigis rollup card just shows as disabled,
       // which is the safe default and matches the pipeline's own gating.
       try {
-        aigisEnabled = (await getAigisConfig()).enabled;
+        const aigisConfig = await getAigisConfig();
+        // `enabled` here is already the *effective* state (gated on endpointValid
+        // by readAigisConfigForApi) — matches what the pipeline itself checks.
+        aigisEnabled = aigisConfig.enabled;
+        aigisEndpointInvalid = Boolean(aigisConfig.endpoint) && !aigisConfig.endpointValid;
       } catch { /* leave aigisEnabled false */ }
     } catch (e) {
       log("error", "Schedule page: failed to load data", String(e));
@@ -965,7 +973,9 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
           extraMeta: `${aigisRollupState.cadence} cadence`,
           disabledNote: aigisEnabled
             ? undefined
-            : "Connect Aigis in Settings to enable this pipeline — the schedule is configured but every run is currently skipped.",
+            : aigisEndpointInvalid
+              ? "Aigis endpoint is invalid (must be a valid https URL) — fix it in Settings to enable this pipeline. Every run is currently skipped."
+              : "Connect Aigis in Settings to enable this pipeline — the schedule is configured but every run is currently skipped.",
           describeResult: (body) => {
             const outcome = (body as { outcome?: string } | null)?.outcome;
             switch (outcome) {

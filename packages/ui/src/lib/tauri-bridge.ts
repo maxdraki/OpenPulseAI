@@ -280,7 +280,10 @@ export async function testModel(provider: string, model: string, apiKey?: string
 export interface AigisConfigInfo {
   endpoint: string;
   submitTool: string;
+  /** Effective enabled state — already gated on endpointValid by the server (readAigisConfigForApi). */
   enabled: boolean;
+  /** Whether `endpoint` is a valid https URL. When false, `enabled` is forced false regardless of the saved flag. */
+  endpointValid: boolean;
   hasToken: boolean;
   tokenHint?: string;
 }
@@ -299,7 +302,7 @@ export interface AigisTestResult {
  * vault-git-style integration for this.
  */
 export async function getAigisConfig(): Promise<AigisConfigInfo> {
-  if (isTauri) return { endpoint: "", submitTool: "aigis_submit_journal", enabled: false, hasToken: false };
+  if (isTauri) return { endpoint: "", submitTool: "aigis_submit_journal", enabled: false, endpointValid: false, hasToken: false };
   return apiGet("/aigis-config");
 }
 

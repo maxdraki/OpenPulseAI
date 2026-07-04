@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from "node:fs/promises"
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { load as loadYaml } from "js-yaml";
-import { readAigisConfigForApi, saveAigisConfigForApi, readAigisLastSubmissionForApi } from "../server.js";
+import { readAigisConfigForApi, saveAigisConfigForApi, readAigisLastSubmissionForApi, InvalidAigisEndpointError } from "../server.js";
 
 describe("readAigisConfigForApi (backs GET /api/aigis-config)", () => {
   let tempDir: string;
@@ -34,6 +34,31 @@ describe("readAigisConfigForApi (backs GET /api/aigis-config)", () => {
     expect(result.hasToken).toBe(true);
     expect((result as any).authToken).toBeUndefined();
     expect(result.tokenHint).not.toContain("super-secret-token-value");
+  });
+
+  it("reports effective enabled:false and endpointValid:false for a hand-edited config with a bad endpoint, even though the raw yaml says enabled:true", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: "not-a-url"\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const result = await readAigisConfigForApi(tempDir);
+    expect(result.endpoint).toBe("not-a-url");
+    expect(result.enabled).toBe(false);
+    expect(result.endpointValid).toBe(false);
+  });
+
+  it("reports endpointValid:true and effective enabled matching the raw flag for a valid https endpoint", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: https://aigis.bio/mcp\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const result = await readAigisConfigForApi(tempDir);
+    expect(result.endpointValid).toBe(true);
+    expect(result.enabled).toBe(true);
   });
 });
 
@@ -115,6 +140,30 @@ describe("saveAigisConfigForApi (backs POST /api/aigis-config)", () => {
     const raw = await readFile(join(tempDir, "config.yaml"), "utf-8");
     const parsed = loadYaml(raw) as any;
     expect(parsed.aigis.submitTool).toBe("aigis_submit_journal");
+  });
+
+  it("rejects enabling with a non-https endpoint", async () => {
+    await expect(
+      saveAigisConfigForApi(tempDir, { endpoint: "not-a-url", enabled: true })
+    ).rejects.toThrow(InvalidAigisEndpointError);
+
+    // Nothing should have been written.
+    await expect(stat(join(tempDir, "config.yaml"))).rejects.toThrow();
+  });
+
+  it("rejects enabling with an http (non-https) endpoint", async () => {
+    await expect(
+      saveAigisConfigForApi(tempDir, { endpoint: "http://aigis.bio/mcp", enabled: true })
+    ).rejects.toThrow(InvalidAigisEndpointError);
+  });
+
+  it("allows saving a disabled config with an invalid endpoint (the not-enabled path is harmless)", async () => {
+    await saveAigisConfigForApi(tempDir, { endpoint: "not-a-url", enabled: false });
+
+    const raw = await readFile(join(tempDir, "config.yaml"), "utf-8");
+    const parsed = loadYaml(raw) as any;
+    expect(parsed.aigis.endpoint).toBe("not-a-url");
+    expect(parsed.aigis.enabled).toBe(false);
   });
 });
 

@@ -636,12 +636,21 @@ async function renderAigisCard(): Promise<void> {
   const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
   const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
   const enabledToggle = document.getElementById("aigis-enabled-toggle") as HTMLInputElement;
+  const statusEl = document.getElementById("aigis-status")!;
 
   try {
     const config = await getAigisConfig();
     endpointInput.value = config.endpoint;
     tokenInput.placeholder = config.hasToken ? `Saved (${config.tokenHint}) — leave blank to keep` : "Enter your Aigis auth token";
+    // `config.enabled` is already the *effective* state (gated on endpointValid
+    // server-side) — a saved endpoint that fails the https-URL check shows the
+    // toggle off here even if the underlying yaml still says enabled:true, so
+    // the UI never claims "enabled" while the pipeline silently no-ops.
     enabledToggle.checked = config.enabled;
+    if (config.endpoint && !config.endpointValid) {
+      statusEl.textContent = "This endpoint is invalid (must be a valid https URL) — Aigis is disabled until it's fixed.";
+      statusEl.className = "validate-status error";
+    }
   } catch { /* use defaults */ }
 
   await renderAigisLastSubmission();
