@@ -167,6 +167,24 @@ export async function embedTexts(texts: string[]): Promise<Float32Array[] | null
   }
 }
 
+/**
+ * Whether the local embedding model is actually usable in this process right
+ * now — never throws. Mirrors `embedTexts`'s own availability logic (test
+ * override, the vitest safety net, then the real memoized pipeline load) so
+ * the two never disagree about whether search is FTS-only. Backs the
+ * `embeddings` flag `packages/ui/server.ts`'s `/api/search` route adds to its
+ * response — SEA/packaged builds exclude `@huggingface/transformers` (see
+ * this module's docstring and `scripts/build-sea.sh`), so this is
+ * consistently `false` there and the UI surfaces a "search is keyword-only"
+ * notice instead of silently degrading with no explanation.
+ */
+export async function isEmbeddingsAvailable(): Promise<boolean> {
+  if (testEmbedder !== undefined) return testEmbedder !== null;
+  if (process.env.VITEST && process.env.OPENPULSE_EMBED_SMOKE !== "1") return false;
+  const pipe = await getPipeline();
+  return pipe !== null;
+}
+
 /** Cosine similarity between two equal-length (or safely truncated to the
  *  shorter of the two) vectors. Pure and side-effect-free. */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {

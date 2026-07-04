@@ -17,6 +17,7 @@
 import express from "express";
 import cors from "cors";
 import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile, rename, chmod } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -26,7 +27,7 @@ import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, isValidAigisEndpoint, type AigisConfig } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, isEmbeddingsAvailable, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, isValidAigisEndpoint, type AigisConfig } from "../core/dist/index.js";
 import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { resubmitAigisRollup } from "./src/lib/aigis-submit.js";
@@ -35,6 +36,55 @@ import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js
 const execFileAsync = promisify(execFile);
 
 const SAFE_NAME = /^[\w-]+$/;
+
+/**
+ * Resolves how to invoke one of the dream-pipeline CLI entry points (or the
+ * skills CLI) — `{ command, args }` suitable for `execFile`/`execFileAsync`.
+ *
+ * In dev (`npx tsx server.ts`), `process.cwd()` is `packages/ui`, so the
+ * historical `join(process.cwd(), "..", "dream", "dist", scriptFile)` run
+ * via `node` works. In the packaged Tauri app this module runs bundled as
+ * the `openpulse-ui-server` sidecar with its cwd set to the *sidecar*
+ * directory (see `src-tauri/src/server_sidecar.rs`), so that dev-relative
+ * path doesn't exist there — the Rust supervisor sets `OPENPULSE_BIN_DIR` to
+ * that sidecar directory instead, which is where any CLI entry point that
+ * got its own bundled sidecar binary (see `scripts/build-desktop.sh` — as of
+ * this writing: `openpulse-dream`, `openpulse-skills`, `openpulse-aigis-
+ * rollup`) actually lives. When present, invoke that binary directly (no
+ * `node` prefix — it's a standalone executable/SEA, possibly a `.cjs`
+ * fallback bundle run via a `node` shebang-less file, see build-sea.sh — but
+ * either way it's directly executable, not `node <path>`).
+ *
+ * `rebuild-meta.js`/`lint-cli.js`/`compact-cli.js`/`schema-evolve-cli.js`
+ * don't have bundled sidecar binaries yet (tracked in TODO.md) — for those,
+ * `binName` will simply never be found under `OPENPULSE_BIN_DIR`, so this
+ * always falls through to the dev-relative path for them, same as before
+ * this function existed (not a regression; a known, pre-existing gap in
+ * packaged builds for those four pipelines specifically).
+ */
+export function resolveBin(binName: string, scriptFile: string): { command: string; args: string[] } {
+  const binDir = process.env.OPENPULSE_BIN_DIR;
+  if (binDir) {
+    const candidate = join(binDir, binName);
+    if (existsSync(candidate)) return { command: candidate, args: [] };
+  }
+  return { command: "node", args: [join(process.cwd(), "..", "dream", "dist", scriptFile)] };
+}
+
+/**
+ * Resolves the bundled `builtin-skills/` directory for the `/api/skills`
+ * route and the orchestrator's `getSkillNames` callback below. Historically
+ * `join(process.cwd(), "..", "core", "builtin-skills")` — correct in dev
+ * (`process.cwd()` is `packages/ui`) but not in the packaged app, where this
+ * module's cwd is the sidecar directory and `builtin-skills/` instead ships
+ * as a Tauri bundle resource (see `tauri.conf.json`'s `bundle.resources`).
+ * The Rust supervisor resolves that resource dir the same way the
+ * now-removed `skills.rs`'s `get_skills` Tauri command used to, and passes
+ * it here as `OPENPULSE_BUILTIN_SKILLS_DIR` (see `server_sidecar.rs`).
+ */
+export function resolveBuiltinSkillsDir(): string {
+  return process.env.OPENPULSE_BUILTIN_SKILLS_DIR ?? join(process.cwd(), "..", "core", "builtin-skills");
+}
 
 /** Mask a secret for display — never expose the full value to a client. */
 function maskKey(key: string | undefined): string | undefined {
@@ -432,12 +482,27 @@ async function readStoredApiKey(): Promise<string | undefined> {
 }
 
 const app = express();
-// Restrict CORS to localhost origins — this is a local dev server with vault access.
+// Restrict CORS to localhost origins — this is a local dev server with vault
+// access. Also allow the Tauri webview's own origin: the packaged desktop
+// app's tauri-bridge.ts now fetches this server directly (see
+// resolveApiBase()/get_server_info in tauri-bridge.ts and
+// src-tauri/src/server_sidecar.rs) instead of going through Tauri commands,
+// and its page origin is `tauri://localhost` on macOS/Linux or
+// `http://tauri.localhost` on Windows — neither matches the plain-localhost
+// pattern above.
 app.use(cors({
   origin: (origin, cb) => {
     // Allow same-origin requests (no Origin header) and any localhost port.
-    if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) cb(null, true);
-    else cb(new Error("Not allowed by CORS"));
+    if (
+      !origin ||
+      /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) ||
+      origin === "tauri://localhost" ||
+      /^https?:\/\/tauri\.localhost$/.test(origin)
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error("Not allowed by CORS"));
+    }
   },
 }));
 app.use(express.json());
@@ -560,8 +625,8 @@ app.post("/api/approve-update", async (req, res) => {
     // Skipped for aigisRollup: it never touches warm/index/backlinks (see
     // approve.ts), so there's nothing for rebuild-meta to do.
     if (!update.aigisRollup) {
-      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
-      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+      const { command: rebuildCmd, args: rebuildArgs } = resolveBin("openpulse-rebuild-meta", "rebuild-meta.js");
+      execFile(rebuildCmd, rebuildArgs, { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
         if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
       });
     }
@@ -600,8 +665,8 @@ app.post("/api/approve-batch", async (req, res) => {
     // (an all-aigisRollup batch still triggers it — cheap no-op; see the
     // single-approve path for the per-item skip).
     if (results.some((r) => r.outcome.ok)) {
-      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
-      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+      const { command: rebuildCmd, args: rebuildArgs } = resolveBin("openpulse-rebuild-meta", "rebuild-meta.js");
+      execFile(rebuildCmd, rebuildArgs, { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
         if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
       });
     }
@@ -650,8 +715,8 @@ app.post("/api/reject-update", async (req, res) => {
 
 app.post("/api/trigger-dream", async (_req, res) => {
   try {
-    const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
-    const { stderr } = await execFileAsync("node", [dreamBin], {
+    const { command: dreamCmd, args: dreamArgs } = resolveBin("openpulse-dream", "index.js");
+    const { stderr } = await execFileAsync(dreamCmd, dreamArgs, {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       // Match the orchestrator's dream-pipeline timeout (300s, see
       // orchestrator.ts) — a 60s timeout here made manual "trigger now" runs
@@ -1152,19 +1217,28 @@ app.get("/api/warm-themes", async (_req, res) => {
 });
 
 
-// Backs the Themes page's search box.
+// Backs the Themes page's search box. `embeddings` reports whether the
+// hybrid index's semantic signal is actually available in this process
+// (see core's `isEmbeddingsAvailable` — always false in packaged/SEA builds,
+// which exclude `@huggingface/transformers`) so the UI can surface a
+// "keyword-only search" notice instead of silently degrading (see
+// task-20-brief.md §D).
 app.get("/api/search", async (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q : "";
   try {
-    res.json(await searchThemesForApi(VAULT_ROOT, q));
+    const [results, embeddings] = await Promise.all([
+      searchThemesForApi(VAULT_ROOT, q),
+      isEmbeddingsAvailable(),
+    ]);
+    res.json({ results, embeddings });
   } catch {
-    res.json([]);
+    res.json({ results: [], embeddings: false });
   }
 });
 
 app.get("/api/skills", async (_req, res) => {
   try {
-    const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
+    const builtinDir = resolveBuiltinSkillsDir();
     const userDir = join(VAULT_ROOT, "skills");
     const discovered = await discoverSkills([builtinDir, userDir]);
     const vault = new Vault(VAULT_ROOT);
@@ -1754,37 +1828,36 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
     await runSkillByName(skillName, VAULT_ROOT);
   },
   async runDreamPipeline(): Promise<void> {
-    const dreamBin = join(process.cwd(), "..", "dream", "dist", "index.js");
-    await execFileAsync("node", [dreamBin], {
+    const { command, args } = resolveBin("openpulse-dream", "index.js");
+    await execFileAsync(command, args, {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
   },
   async runLintPipeline(): Promise<void> {
-    const lintBin = join(process.cwd(), "..", "dream", "dist", "lint-cli.js");
-    await execFileAsync("node", [lintBin], {
+    const { command, args } = resolveBin("openpulse-lint", "lint-cli.js");
+    await execFileAsync(command, args, {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 120000,
     });
   },
   async runCompactionPipeline(themes?: string[]): Promise<void> {
-    const compactBin = join(process.cwd(), "..", "dream", "dist", "compact-cli.js");
-    const args = [compactBin, ...(themes ?? [])];
-    await execFileAsync("node", args, {
+    const { command, args } = resolveBin("openpulse-compact", "compact-cli.js");
+    await execFileAsync(command, [...args, ...(themes ?? [])], {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
   },
   async runSchemaEvolutionPipeline(): Promise<void> {
-    const schemaBin = join(process.cwd(), "..", "dream", "dist", "schema-evolve-cli.js");
-    await execFileAsync("node", [schemaBin], {
+    const { command, args } = resolveBin("openpulse-schema-evolve", "schema-evolve-cli.js");
+    await execFileAsync(command, args, {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
   },
   async runAigisRollupPipeline(): Promise<"drafted" | "no-activity"> {
-    const rollupBin = join(process.cwd(), "..", "dream", "dist", "aigis-rollup-cli.js");
-    const { stdout } = await execFileAsync("node", [rollupBin], {
+    const { command, args } = resolveBin("openpulse-aigis-rollup", "aigis-rollup-cli.js");
+    const { stdout } = await execFileAsync(command, args, {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
@@ -1800,7 +1873,7 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
     return Boolean(config.aigis?.enabled);
   },
   async getSkillNames(): Promise<string[]> {
-    const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
+    const builtinDir = resolveBuiltinSkillsDir();
     const userDir = join(VAULT_ROOT, "skills");
     const skills = await discoverSkills([builtinDir, userDir]);
     return skills.map(s => s.name);

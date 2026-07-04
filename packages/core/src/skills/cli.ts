@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Vault } from "../vault.js";
 import { loadConfig } from "../config.js";
 import { discoverSkills } from "./loader.js";
 import { checkEligibility } from "./eligibility.js";
 import { loadCollectorState } from "./scheduler.js";
 import { initLogger } from "../logger.js";
-import { runSkillByName, runDueSkills } from "./run.js";
+import { runSkillByName, runDueSkills, resolveBuiltinSkillsDir } from "./run.js";
 
 const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
 
@@ -20,7 +19,7 @@ async function main() {
   initLogger(VAULT_ROOT);
 
   if (listOnly) {
-    const builtinDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "builtin-skills");
+    const builtinDir = resolveBuiltinSkillsDir();
     const userDir = join(VAULT_ROOT, "skills");
     const skills = await discoverSkills([builtinDir, userDir]);
     const vault = new Vault(VAULT_ROOT);

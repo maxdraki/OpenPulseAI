@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # scripts/build-sea.sh — Build Node.js Single Executable Applications
 #
-# Usage: ./scripts/build-sea.sh <package-name>
+# Usage: ./scripts/build-sea.sh <package-name> [entry-path] [out-name]
 # Example: ./scripts/build-sea.sh mcp-server
+# Example: ./scripts/build-sea.sh dream packages/dream/dist/aigis-rollup-cli.js aigis-rollup
+#   (bundles a different entry point of the same package under a different
+#   output/sidecar name — used for the dream package's aigis-rollup-cli.js,
+#   see build-desktop.sh)
 #
 # Tries Node.js SEA first (requires Node 20+ from nodejs.org, not distro packages).
 # Falls back to esbuild-only bundle if SEA injection fails.
 set -euo pipefail
 
 PACKAGE=$1
-ENTRY="packages/$PACKAGE/dist/index.js"
-OUT="dist/$PACKAGE"
+ENTRY="${2:-packages/$PACKAGE/dist/index.js}"
+OUT="dist/${3:-$PACKAGE}"
 
 mkdir -p dist
 
