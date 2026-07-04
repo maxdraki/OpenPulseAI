@@ -26,6 +26,7 @@ Rust spawns the UI/API server (`packages/ui/server.ts`, bundled as the `openpuls
 - **Status:** Done. Remaining known gaps:
   - `rebuild-meta.js`/`lint-cli.js`/`compact-cli.js`/`schema-evolve-cli.js` don't have their own bundled sidecar binaries yet (only `openpulse-dream`, `openpulse-skills`, `openpulse-aigis-rollup` do) — `server.ts`'s `resolveBin()` falls back to a `process.cwd()`-relative dev path for those four, which doesn't exist in a packaged build. Low priority: the lint/compaction/schema-evolution pipelines are scheduled background maintenance, not core to a first packaged release.
   - No monochrome tray icon asset yet (carried over from the tray task).
+  - Still needs a real end-to-end manual pass on a real display server — see [`docs/desktop-testing-checklist.md`](docs/desktop-testing-checklist.md).
 - **Why:** Dev server works but Tauri desktop needs parity for release.
 
 ### AI-guided skill setup

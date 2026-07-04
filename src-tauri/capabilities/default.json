@@ -3,9 +3,6 @@
   "description": "Default permissions for the OpenPulse desktop app",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "shell:allow-execute",
-    "shell:allow-spawn",
-    "shell:allow-stdin-write"
+    "core:default"
   ]
 }
