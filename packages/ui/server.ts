@@ -2,14 +2,26 @@
  * Dev API server — bridges the UI to the real vault filesystem.
  * Replaces mock data in development (no Tauri needed).
  *
+ * Also the always-on Tauri sidecar entry point (bundled by
+ * scripts/build-sidecar-ui.sh into src-tauri/sidecars/). Both flows share
+ * `startServer()`; the difference is only how its options are sourced:
+ *
+ *   - Dev:     `npx tsx server.ts` — no args, defaults exactly as before
+ *              (port 3001, OPENPULSE_VAULT/~/OpenPulseAI, orchestrator
+ *              started, VITEST guard on the search-index warm-up).
+ *   - Sidecar: bundled binary launched by the Rust supervisor (a later
+ *              task), reading OPENPULSE_PORT / OPENPULSE_VAULT / --port.
+ *
  * Run: npx tsx server.ts
  */
 import express from "express";
 import cors from "cors";
-import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:fs/promises";
+import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile, rename, chmod } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
@@ -22,22 +34,6 @@ import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js
 
 const execFileAsync = promisify(execFile);
 
-const VAULT_ROOT = process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
-const PORT = 3001;
-// Bind to loopback by default so the dev server is never exposed on an external
-// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy.
-const HOST = process.env.OPENPULSE_HOST ?? "127.0.0.1";
-// The bearer guard is ALWAYS on — this API can run skills, install deps, and
-// write Claude Desktop config, so there's no safe "open" posture even on
-// loopback (any local process/browser tab could otherwise hit it). An explicit
-// OPENPULSE_API_TOKEN env var wins (e.g. a shared/production deployment);
-// otherwise a persistent token is auto-generated and stored in the config dir
-// (~/OpenPulseAI/ui-token, mode 0600) the first time the server starts, and
-// reused on every subsequent start. vite.config.ts reads the same file so the
-// browser bundle can authenticate — see VITE_OPENPULSE_TOKEN there.
-const API_TOKEN = process.env.OPENPULSE_API_TOKEN || (await loadOrCreateToken(VAULT_ROOT));
-
-/** Guard against path traversal in :name params */
 const SAFE_NAME = /^[\w-]+$/;
 
 /** Mask a secret for display — never expose the full value to a client. */
@@ -46,6 +42,384 @@ function maskKey(key: string | undefined): string | undefined {
   const k = key.trim();
   return k.length <= 8 ? "••••" : `${k.slice(0, 4)}…${k.slice(-4)}`;
 }
+
+const PROVIDER_ENV_KEYS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  ollama: "",
+};
+
+const CHAT_MODEL_ALLOWLIST: Record<string, string[]> = {
+  anthropic: [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+  ],
+  openai: [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+  ],
+  gemini: [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite-preview",
+  ],
+  mistral: [
+    "mistral-large-latest",
+    "mistral-small-latest",
+  ],
+  // ollama: passthrough (local models with arbitrary user-defined names)
+};
+
+/**
+ * Approximate context-window sizes per model. Used only for the chat page's
+ * "context % used" indicator — a rough hint for the user, not for routing.
+ *
+ * Keep in sync with CHAT_MODEL_ALLOWLIST as new models are added. For unknown
+ * models (e.g. Ollama local builds) we fall back to a conservative default.
+ */
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  // Anthropic
+  "claude-opus-4-7": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5-20251001": 200_000,
+  // OpenAI
+  "gpt-4o": 128_000,
+  "gpt-4o-mini": 128_000,
+  "gpt-4-turbo": 128_000,
+  // Gemini
+  "gemini-2.5-pro": 2_000_000,
+  "gemini-2.5-flash": 1_000_000,
+  "gemini-3.1-flash-lite-preview": 1_000_000,
+  // Mistral
+  "mistral-large-latest": 128_000,
+  "mistral-small-latest": 32_000,
+};
+
+const DEFAULT_CONTEXT_WINDOW = 32_000;
+
+export function lookupContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
+ * Estimate token usage for a session. ~4 chars per token is a rough rule for
+ * English; we add a constant overhead for the system prompt + injected theme
+ * context. Intentionally approximate — the indicator is a "you're getting full"
+ * cue, not a meter the user should trust to the last 10%.
+ */
+export function estimateTokensUsed(messages: Array<{ content: string }>, systemOverheadTokens = 1000): number {
+  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+  return Math.ceil(totalChars / 4) + systemOverheadTokens;
+}
+
+/** Validate a user-supplied model string against the allowlist for the configured provider. */
+export function isAllowedChatModel(provider: string, model: string): boolean {
+  if (provider === "ollama") {
+    // Local models — accept anything that looks like a sensible identifier.
+    return /^[\w./:-]{1,80}$/.test(model);
+  }
+  return CHAT_MODEL_ALLOWLIST[provider]?.includes(model) ?? false;
+}
+
+export interface ChatSessionFile {
+  id: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  themesConsulted: string[];
+  createdAt: string;
+  lastActivity: string;
+  pendingFile?: unknown;
+}
+
+export interface ChatSessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastActivity: string;
+  messageCount: number;
+}
+
+/**
+ * Build a sidebar-friendly summary of a session: a title (first user message,
+ * truncated to 60 chars; "New chat" if no user messages yet) + counts/timestamps.
+ * Pure function — exported so tests can exercise the title heuristic without
+ * spinning up an express app.
+ */
+export function summariseSession(s: ChatSessionFile): ChatSessionMeta {
+  const firstUser = s.messages.find((m) => m.role === "user")?.content?.trim() ?? "";
+  let title = firstUser ? firstUser.replace(/\s+/g, " ") : "New chat";
+  if (title.length > 60) title = title.slice(0, 57).trimEnd() + "…";
+  return {
+    id: s.id,
+    title,
+    createdAt: s.createdAt,
+    lastActivity: s.lastActivity,
+    messageCount: s.messages.length,
+  };
+}
+
+interface AigisConfigApiShape {
+  endpoint: string;
+  submitTool: string;
+  enabled: boolean;
+  /** Whether `endpoint` passes the same https-URL gate the runtime uses (parseAigisConfig in core/config.ts). */
+  endpointValid: boolean;
+  hasToken: boolean;
+  tokenHint?: string;
+}
+
+/**
+ * Reads config.yaml's aigis section for the Settings UI. Never returns the raw
+ * token — hasToken + a masked hint only, mirroring the llm-config idiom above.
+ *
+ * `enabled` here is the *effective* enabled state — it runs the same
+ * isValidAigisEndpoint gate the runtime (parseAigisConfig) uses, so a
+ * hand-edited config.yaml with `enabled: true` but a bad/non-https endpoint
+ * reports as disabled here too, matching what actually happens at runtime.
+ * `endpointValid` is surfaced separately so the UI can explain *why*.
+ */
+export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisConfigApiShape> {
+  const configPath = join(vaultRoot, "config.yaml");
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = (loadYaml(raw) as any) ?? {};
+    const aigis = parsed.aigis ?? {};
+    const token: string | undefined = aigis.authToken;
+    const endpoint: string = aigis.endpoint ?? "";
+    const endpointValid = isValidAigisEndpoint(endpoint);
+    return {
+      endpoint,
+      submitTool: aigis.submitTool ?? DEFAULT_AIGIS_SUBMIT_TOOL,
+      enabled: Boolean(aigis.enabled) && endpointValid,
+      endpointValid,
+      hasToken: Boolean(token),
+      tokenHint: maskKey(token),
+    };
+  } catch {
+    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, endpointValid: false, hasToken: false };
+  }
+}
+
+/** Thrown by saveAigisConfigForApi when asked to enable with an endpoint that will never pass the runtime gate. */
+export class InvalidAigisEndpointError extends Error {
+  constructor() {
+    super("Aigis endpoint must be a valid https URL to enable the connection");
+    this.name = "InvalidAigisEndpointError";
+  }
+}
+
+/**
+ * Saves config.yaml's aigis section. A blank authToken means "keep the
+ * existing one" (same convention as save-llm-settings' apiKey handling) —
+ * only an explicitly-typed new token overwrites it. Reads and rewrites the
+ * whole document via js-yaml so other top-level sections (themes, llm) are
+ * preserved rather than clobbered.
+ *
+ * Refuses (throws InvalidAigisEndpointError) to persist enabled:true paired
+ * with an endpoint that fails isValidAigisEndpoint — the same https-URL gate
+ * the runtime (parseAigisConfig in core/config.ts) enforces. Without this,
+ * a bad endpoint could be saved as "enabled" and the Settings/Schedule UI
+ * would show it active while every outbound call silently no-op'd.
+ */
+export async function saveAigisConfigForApi(
+  vaultRoot: string,
+  body: { endpoint?: string; authToken?: string; submitTool?: string; enabled?: boolean }
+): Promise<void> {
+  if (body.enabled && !isValidAigisEndpoint(body.endpoint)) {
+    throw new InvalidAigisEndpointError();
+  }
+
+  const configPath = join(vaultRoot, "config.yaml");
+  await mkdir(vaultRoot, { recursive: true });
+
+  let parsed: any = {};
+  try {
+    parsed = (loadYaml(await readFile(configPath, "utf-8")) as any) ?? {};
+  } catch { /* no existing config */ }
+
+  const existingToken: string | undefined = parsed?.aigis?.authToken;
+  const effectiveToken = body.authToken || existingToken;
+
+  parsed.aigis = {
+    endpoint: body.endpoint ?? "",
+    submitTool: body.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL,
+    enabled: Boolean(body.enabled),
+    ...(effectiveToken ? { authToken: effectiveToken } : {}),
+  };
+
+  await writeFile(configPath, dumpYaml(parsed), "utf-8");
+}
+
+/**
+ * Reads the last recorded Aigis submission outcome (any update) straight off
+ * disk — a plain read, no `Vault.init()` (fix round 1 #5): `init()` mkdir's
+ * every vault subdirectory and adopts/creates a git repo, all of which is
+ * unnecessary side effect for what's meant to be a read-only status check,
+ * and would even create vault directories on a machine that has none yet
+ * just from loading the Settings page. Missing file/dir is treated the same
+ * as "no submissions yet" rather than an error.
+ */
+export async function readAigisLastSubmissionForApi(vaultRoot: string): Promise<Record<string, unknown>> {
+  const path = join(vaultRoot, "vault", "aigis", "submissions.jsonl");
+  const raw = await readFile(path, "utf-8").catch(() => "");
+  const lines = raw.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return { found: false };
+  try {
+    const last = JSON.parse(lines[lines.length - 1]);
+    return { found: true, ...last };
+  } catch {
+    return { found: false };
+  }
+}
+
+/**
+ * Ranked snippet search over the local hybrid index (see @openpulse/core's
+ * search module) — extracted from the route handler so it's directly
+ * unit-testable against a temp vault (same pattern as approve.ts). An
+ * empty/blank query short-circuits to no results. Empty index → one
+ * rebuild + retry (same pattern as the MCP search_index tool).
+ */
+export async function searchThemesForApi(vaultRoot: string, q: string) {
+  if (!q.trim()) return [];
+  const vault = new Vault(vaultRoot);
+  await vault.init();
+  return searchWithRebuildRetry(vault, q);
+}
+
+/**
+ * Detect whether a config change adds new collection scope (e.g., new repo URLs,
+ * new space keys, new vault paths). When it does, the next collector run should
+ * backfill the new entries — but the runner's lookback only kicks in when
+ * lastRunAt is null. So we reset lastRunAt on scope-adding changes.
+ *
+ * Heuristic: a field is multi-value if either old or new contains a comma or
+ * newline. For multi-value fields, check whether next has any entries that prev
+ * didn't. Single-value fields (token, domain, single ID) never trigger a reset
+ * — auth changes shouldn't replay a week of history.
+ */
+export function configAddsNewScope(
+  prev: Record<string, string>,
+  next: Record<string, string>
+): boolean {
+  const SEPS = /[\n,]/;
+  const allKeys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of allKeys) {
+    const prevVal = prev[key] ?? "";
+    const nextVal = next[key] ?? "";
+    if (prevVal === nextVal) continue;
+    if (!SEPS.test(prevVal) && !SEPS.test(nextVal)) continue; // single-value field
+    const prevSet = new Set(prevVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
+    const nextSet = new Set(nextVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
+    for (const item of nextSet) if (!prevSet.has(item)) return true;
+  }
+  return false;
+}
+
+/** Options accepted by startServer() — the bootstrap contract shared by the
+ *  dev flow (`npx tsx server.ts`, no opts) and the bundled Tauri sidecar
+ *  (opts sourced from env/args by the CLI entry at the bottom of this file). */
+export interface StartServerOptions {
+  /** Listen port. Falls back to OPENPULSE_PORT env, then 3001. On EADDRINUSE
+   *  the next 10 ports are tried in turn (see listenWithFallback below) —
+   *  the actual bound port is always reported via ServerHandle.port and the
+   *  `OPENPULSE_SERVER_READY` stdout line. */
+  port?: number;
+  /** Bind host. Falls back to OPENPULSE_HOST env, then 127.0.0.1. */
+  host?: string;
+  /** Vault/config root. Falls back to OPENPULSE_VAULT env, then ~/OpenPulseAI. */
+  vaultRoot?: string;
+  /** Explicit ui-token file path override (tests only — normal runs derive
+   *  it from vaultRoot via dev-token.ts's tokenPath()). */
+  tokenPath?: string;
+}
+
+/** Handle returned by startServer() — lets tests (and the CLI shutdown
+ *  handlers) drive the server without relying on process-level signals. */
+export interface ServerHandle {
+  app: express.Express;
+  server: Server;
+  port: number;
+  vaultRoot: string;
+  /** Stops the orchestrator, closes the HTTP server, and removes the
+   *  discovery file. Idempotent — safe to call more than once. */
+  close: () => Promise<void>;
+}
+
+/** Bind `app` to `port` on `host`, resolving once truly listening (rejects
+ *  with the raw error — including EADDRINUSE — otherwise). */
+function listenOnPort(app: express.Express, host: string, port: number): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host);
+    server.once("listening", () => {
+      server.removeListener("error", reject);
+      resolve(server);
+    });
+    server.once("error", reject);
+  });
+}
+
+/** Try `startPort`, then the next `maxAttempts - 1` ports on EADDRINUSE —
+ *  the sidecar context can't guarantee 3001 is free, and crashing would
+ *  leave the webview with nothing to fetch. Any other listen error (e.g.
+ *  EACCES) propagates immediately. */
+async function listenWithFallback(app: express.Express, host: string, startPort: number, maxAttempts = 11): Promise<Server> {
+  let lastErr: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    try {
+      return await listenOnPort(app, host, port);
+    } catch (err: any) {
+      if (err?.code !== "EADDRINUSE") throw err;
+      lastErr = err;
+      console.warn(`[openpulse-ui] Port ${port} in use, trying ${port + 1}...`);
+    }
+  }
+  throw lastErr;
+}
+
+/** Fallback discovery file for the webview when it can't otherwise learn the
+ *  bound port (see StartServerOptions.port doc). Written atomically
+ *  (temp file + rename) and mode 0600 — same posture as ui-token. Removed on
+ *  clean shutdown. */
+async function writeDiscoveryFile(vaultRoot: string, port: number): Promise<string> {
+  const path = join(vaultRoot, "ui-server.json");
+  const tmp = `${path}.${process.pid}.tmp`;
+  const payload = JSON.stringify({ port, pid: process.pid, startedAt: new Date().toISOString() }, null, 2) + "\n";
+  await mkdir(vaultRoot, { recursive: true });
+  await writeFile(tmp, payload, { mode: 0o600 });
+  await rename(tmp, path);
+  try {
+    await chmod(path, 0o600);
+  } catch {
+    /* best-effort on platforms without POSIX permission bits */
+  }
+  return path;
+}
+
+/**
+ * Starts the API server + orchestrator. Both the dev flow (`npx tsx
+ * server.ts`, no opts — same defaults as before this refactor) and the
+ * bundled Tauri sidecar (opts sourced from env/args, see the CLI entry at
+ * the bottom of this file) go through this single function.
+ */
+export async function startServer(opts: StartServerOptions = {}): Promise<ServerHandle> {
+const VAULT_ROOT = opts.vaultRoot ?? process.env.OPENPULSE_VAULT ?? `${process.env.HOME}/OpenPulseAI`;
+// Bind to loopback by default so the server is never exposed on an external
+// interface by accident. Set OPENPULSE_HOST=0.0.0.0 only behind a reverse proxy.
+const HOST = opts.host ?? process.env.OPENPULSE_HOST ?? "127.0.0.1";
+const REQUESTED_PORT = opts.port ?? (process.env.OPENPULSE_PORT ? Number(process.env.OPENPULSE_PORT) : 3001);
+// The bearer guard is ALWAYS on — this API can run skills, install deps, and
+// write Claude Desktop config, so there's no safe "open" posture even on
+// loopback (any local process/browser tab could otherwise hit it). An explicit
+// OPENPULSE_API_TOKEN env var wins (e.g. a shared/production deployment);
+// otherwise a persistent token is auto-generated and stored in the config dir
+// (~/OpenPulseAI/ui-token, mode 0600) the first time the server starts, and
+// reused on every subsequent start. vite.config.ts reads the same file so the
+// browser bundle can authenticate — see VITE_OPENPULSE_TOKEN there.
+const API_TOKEN = process.env.OPENPULSE_API_TOKEN || (await loadOrCreateToken(VAULT_ROOT, opts.tokenPath));
 
 /** Read the stored LLM apiKey from config.yaml. Server-side only — never returned to clients. */
 async function readStoredApiKey(): Promise<string | undefined> {
@@ -56,14 +430,6 @@ async function readStoredApiKey(): Promise<string | undefined> {
     return undefined;
   }
 }
-
-const PROVIDER_ENV_KEYS: Record<string, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  gemini: "GEMINI_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-  ollama: "",
-};
 
 const app = express();
 // Restrict CORS to localhost origins — this is a local dev server with vault access.
@@ -323,115 +689,6 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * Order matters — first entry is shown as the default in the dropdown when
  * no per-session override is set.
  */
-const CHAT_MODEL_ALLOWLIST: Record<string, string[]> = {
-  anthropic: [
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-  ],
-  openai: [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-  ],
-  gemini: [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-3.1-flash-lite-preview",
-  ],
-  mistral: [
-    "mistral-large-latest",
-    "mistral-small-latest",
-  ],
-  // ollama: passthrough (local models with arbitrary user-defined names)
-};
-
-/**
- * Approximate context-window sizes per model. Used only for the chat page's
- * "context % used" indicator — a rough hint for the user, not for routing.
- *
- * Keep in sync with CHAT_MODEL_ALLOWLIST as new models are added. For unknown
- * models (e.g. Ollama local builds) we fall back to a conservative default.
- */
-const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  // Anthropic
-  "claude-opus-4-7": 200_000,
-  "claude-sonnet-4-6": 200_000,
-  "claude-haiku-4-5-20251001": 200_000,
-  // OpenAI
-  "gpt-4o": 128_000,
-  "gpt-4o-mini": 128_000,
-  "gpt-4-turbo": 128_000,
-  // Gemini
-  "gemini-2.5-pro": 2_000_000,
-  "gemini-2.5-flash": 1_000_000,
-  "gemini-3.1-flash-lite-preview": 1_000_000,
-  // Mistral
-  "mistral-large-latest": 128_000,
-  "mistral-small-latest": 32_000,
-};
-
-const DEFAULT_CONTEXT_WINDOW = 32_000;
-
-export function lookupContextWindow(model: string): number {
-  return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
-}
-
-/**
- * Estimate token usage for a session. ~4 chars per token is a rough rule for
- * English; we add a constant overhead for the system prompt + injected theme
- * context. Intentionally approximate — the indicator is a "you're getting full"
- * cue, not a meter the user should trust to the last 10%.
- */
-export function estimateTokensUsed(messages: Array<{ content: string }>, systemOverheadTokens = 1000): number {
-  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-  return Math.ceil(totalChars / 4) + systemOverheadTokens;
-}
-
-/** Validate a user-supplied model string against the allowlist for the configured provider. */
-export function isAllowedChatModel(provider: string, model: string): boolean {
-  if (provider === "ollama") {
-    // Local models — accept anything that looks like a sensible identifier.
-    return /^[\w./:-]{1,80}$/.test(model);
-  }
-  return CHAT_MODEL_ALLOWLIST[provider]?.includes(model) ?? false;
-}
-
-export interface ChatSessionFile {
-  id: string;
-  messages: Array<{ role: "user" | "assistant"; content: string }>;
-  themesConsulted: string[];
-  createdAt: string;
-  lastActivity: string;
-  pendingFile?: unknown;
-}
-
-export interface ChatSessionMeta {
-  id: string;
-  title: string;
-  createdAt: string;
-  lastActivity: string;
-  messageCount: number;
-}
-
-/**
- * Build a sidebar-friendly summary of a session: a title (first user message,
- * truncated to 60 chars; "New chat" if no user messages yet) + counts/timestamps.
- * Pure function — exported so tests can exercise the title heuristic without
- * spinning up an express app.
- */
-export function summariseSession(s: ChatSessionFile): ChatSessionMeta {
-  const firstUser = s.messages.find((m) => m.role === "user")?.content?.trim() ?? "";
-  let title = firstUser ? firstUser.replace(/\s+/g, " ") : "New chat";
-  if (title.length > 60) title = title.slice(0, 57).trimEnd() + "…";
-  return {
-    id: s.id,
-    title,
-    createdAt: s.createdAt,
-    lastActivity: s.lastActivity,
-    messageCount: s.messages.length,
-  };
-}
 
 app.get("/api/chat/sessions", async (_req, res) => {
   try {
@@ -722,97 +979,6 @@ app.post("/api/save-llm-settings", async (req, res) => {
 
 // --- Aigis (aigis.bio outbound MCP connection) ---
 
-interface AigisConfigApiShape {
-  endpoint: string;
-  submitTool: string;
-  enabled: boolean;
-  /** Whether `endpoint` passes the same https-URL gate the runtime uses (parseAigisConfig in core/config.ts). */
-  endpointValid: boolean;
-  hasToken: boolean;
-  tokenHint?: string;
-}
-
-/**
- * Reads config.yaml's aigis section for the Settings UI. Never returns the raw
- * token — hasToken + a masked hint only, mirroring the llm-config idiom above.
- *
- * `enabled` here is the *effective* enabled state — it runs the same
- * isValidAigisEndpoint gate the runtime (parseAigisConfig) uses, so a
- * hand-edited config.yaml with `enabled: true` but a bad/non-https endpoint
- * reports as disabled here too, matching what actually happens at runtime.
- * `endpointValid` is surfaced separately so the UI can explain *why*.
- */
-export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisConfigApiShape> {
-  const configPath = join(vaultRoot, "config.yaml");
-  try {
-    const raw = await readFile(configPath, "utf-8");
-    const parsed = (loadYaml(raw) as any) ?? {};
-    const aigis = parsed.aigis ?? {};
-    const token: string | undefined = aigis.authToken;
-    const endpoint: string = aigis.endpoint ?? "";
-    const endpointValid = isValidAigisEndpoint(endpoint);
-    return {
-      endpoint,
-      submitTool: aigis.submitTool ?? DEFAULT_AIGIS_SUBMIT_TOOL,
-      enabled: Boolean(aigis.enabled) && endpointValid,
-      endpointValid,
-      hasToken: Boolean(token),
-      tokenHint: maskKey(token),
-    };
-  } catch {
-    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, endpointValid: false, hasToken: false };
-  }
-}
-
-/** Thrown by saveAigisConfigForApi when asked to enable with an endpoint that will never pass the runtime gate. */
-export class InvalidAigisEndpointError extends Error {
-  constructor() {
-    super("Aigis endpoint must be a valid https URL to enable the connection");
-    this.name = "InvalidAigisEndpointError";
-  }
-}
-
-/**
- * Saves config.yaml's aigis section. A blank authToken means "keep the
- * existing one" (same convention as save-llm-settings' apiKey handling) —
- * only an explicitly-typed new token overwrites it. Reads and rewrites the
- * whole document via js-yaml so other top-level sections (themes, llm) are
- * preserved rather than clobbered.
- *
- * Refuses (throws InvalidAigisEndpointError) to persist enabled:true paired
- * with an endpoint that fails isValidAigisEndpoint — the same https-URL gate
- * the runtime (parseAigisConfig in core/config.ts) enforces. Without this,
- * a bad endpoint could be saved as "enabled" and the Settings/Schedule UI
- * would show it active while every outbound call silently no-op'd.
- */
-export async function saveAigisConfigForApi(
-  vaultRoot: string,
-  body: { endpoint?: string; authToken?: string; submitTool?: string; enabled?: boolean }
-): Promise<void> {
-  if (body.enabled && !isValidAigisEndpoint(body.endpoint)) {
-    throw new InvalidAigisEndpointError();
-  }
-
-  const configPath = join(vaultRoot, "config.yaml");
-  await mkdir(vaultRoot, { recursive: true });
-
-  let parsed: any = {};
-  try {
-    parsed = (loadYaml(await readFile(configPath, "utf-8")) as any) ?? {};
-  } catch { /* no existing config */ }
-
-  const existingToken: string | undefined = parsed?.aigis?.authToken;
-  const effectiveToken = body.authToken || existingToken;
-
-  parsed.aigis = {
-    endpoint: body.endpoint ?? "",
-    submitTool: body.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL,
-    enabled: Boolean(body.enabled),
-    ...(effectiveToken ? { authToken: effectiveToken } : {}),
-  };
-
-  await writeFile(configPath, dumpYaml(parsed), "utf-8");
-}
 
 app.get("/api/aigis-config", async (_req, res) => {
   res.json(await readAigisConfigForApi(VAULT_ROOT));
@@ -870,27 +1036,6 @@ app.post("/api/aigis-resubmit/:updateId", async (req, res) => {
   }
 });
 
-/**
- * Reads the last recorded Aigis submission outcome (any update) straight off
- * disk — a plain read, no `Vault.init()` (fix round 1 #5): `init()` mkdir's
- * every vault subdirectory and adopts/creates a git repo, all of which is
- * unnecessary side effect for what's meant to be a read-only status check,
- * and would even create vault directories on a machine that has none yet
- * just from loading the Settings page. Missing file/dir is treated the same
- * as "no submissions yet" rather than an error.
- */
-export async function readAigisLastSubmissionForApi(vaultRoot: string): Promise<Record<string, unknown>> {
-  const path = join(vaultRoot, "vault", "aigis", "submissions.jsonl");
-  const raw = await readFile(path, "utf-8").catch(() => "");
-  const lines = raw.split("\n").filter((l) => l.trim());
-  if (lines.length === 0) return { found: false };
-  try {
-    const last = JSON.parse(lines[lines.length - 1]);
-    return { found: true, ...last };
-  } catch {
-    return { found: false };
-  }
-}
 
 /**
  * Last recorded Aigis submission outcome (any update), for the Settings
@@ -1006,19 +1151,6 @@ app.get("/api/warm-themes", async (_req, res) => {
   }
 });
 
-/**
- * Ranked snippet search over the local hybrid index (see @openpulse/core's
- * search module) — extracted from the route handler so it's directly
- * unit-testable against a temp vault (same pattern as approve.ts). An
- * empty/blank query short-circuits to no results. Empty index → one
- * rebuild + retry (same pattern as the MCP search_index tool).
- */
-export async function searchThemesForApi(vaultRoot: string, q: string) {
-  if (!q.trim()) return [];
-  const vault = new Vault(vaultRoot);
-  await vault.init();
-  return searchWithRebuildRetry(vault, q);
-}
 
 // Backs the Themes page's search box.
 app.get("/api/search", async (req, res) => {
@@ -1430,34 +1562,6 @@ app.get("/api/skill-config/:name", async (req, res) => {
   }
 });
 
-/**
- * Detect whether a config change adds new collection scope (e.g., new repo URLs,
- * new space keys, new vault paths). When it does, the next collector run should
- * backfill the new entries — but the runner's lookback only kicks in when
- * lastRunAt is null. So we reset lastRunAt on scope-adding changes.
- *
- * Heuristic: a field is multi-value if either old or new contains a comma or
- * newline. For multi-value fields, check whether next has any entries that prev
- * didn't. Single-value fields (token, domain, single ID) never trigger a reset
- * — auth changes shouldn't replay a week of history.
- */
-export function configAddsNewScope(
-  prev: Record<string, string>,
-  next: Record<string, string>
-): boolean {
-  const SEPS = /[\n,]/;
-  const allKeys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-  for (const key of allKeys) {
-    const prevVal = prev[key] ?? "";
-    const nextVal = next[key] ?? "";
-    if (prevVal === nextVal) continue;
-    if (!SEPS.test(prevVal) && !SEPS.test(nextVal)) continue; // single-value field
-    const prevSet = new Set(prevVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
-    const nextSet = new Set(nextVal.split(SEPS).map((s) => s.trim()).filter(Boolean));
-    for (const item of nextSet) if (!prevSet.has(item)) return true;
-  }
-  return false;
-}
 
 app.post("/api/skill-config/:name", async (req, res) => {
   if (!SAFE_NAME.test(req.params.name)) return res.status(400).json({ error: "Invalid skill name" });
@@ -1777,19 +1881,99 @@ if (!process.env.VITEST) void (async () => {
   }
 })();
 
-app.listen(PORT, HOST, () => {
-  console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
-  console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
-  if (process.env.OPENPULSE_API_TOKEN) {
-    console.log(`[openpulse-ui] /api auth: using OPENPULSE_API_TOKEN from the environment.`);
-  } else {
-    console.log(`[openpulse-ui] /api auth: token auto-generated at ${tokenPath(VAULT_ROOT)} (delete to rotate).`);
+const server = await listenWithFallback(app, HOST, REQUESTED_PORT);
+const PORT = (server.address() as AddressInfo).port;
+const discoveryPath = await writeDiscoveryFile(VAULT_ROOT, PORT);
+
+console.log(`[openpulse-ui] Dev API server running on http://${HOST}:${PORT}`);
+console.log(`[openpulse-ui] Vault root: ${VAULT_ROOT}`);
+if (process.env.OPENPULSE_API_TOKEN) {
+  console.log(`[openpulse-ui] /api auth: using OPENPULSE_API_TOKEN from the environment.`);
+} else {
+  console.log(`[openpulse-ui] /api auth: token auto-generated at ${tokenPath(VAULT_ROOT)} (delete to rotate).`);
+}
+const exposed = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
+if (exposed) {
+  console.warn(
+    `[openpulse-ui] WARNING: bound to ${HOST} — /api is reachable off this machine. ` +
+    `It IS authenticated, but keep the token file (or OPENPULSE_API_TOKEN) secret.`,
+  );
+}
+// Readiness signal for the Rust sidecar supervisor — printed exactly once,
+// after the server is actually listening. Parsed verbatim; don't reformat.
+console.log(`OPENPULSE_SERVER_READY port=${PORT}`);
+
+let closed = false;
+
+/** Stops the orchestrator, closes the HTTP server, and removes the discovery
+ *  file. Idempotent (guarded by `closed`) — safe to call from both a signal
+ *  handler and an explicit ServerHandle.close(), and safe to call twice. */
+async function cleanup(): Promise<void> {
+  if (closed) return;
+  closed = true;
+  process.removeListener("SIGTERM", onSigterm);
+  process.removeListener("SIGINT", onSigint);
+  try {
+    await orchestrator.stop();
+  } catch (err) {
+    console.error("[openpulse-ui] Orchestrator stop failed:", err);
   }
-  const exposed = HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1";
-  if (exposed) {
-    console.warn(
-      `[openpulse-ui] WARNING: bound to ${HOST} — /api is reachable off this machine. ` +
-      `It IS authenticated, but keep the token file (or OPENPULSE_API_TOKEN) secret.`,
-    );
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await rm(discoveryPath, { force: true }).catch(() => {});
+}
+
+function onSigterm(): void {
+  void (async () => {
+    console.log("[openpulse-ui] Received SIGTERM, shutting down...");
+    await cleanup();
+    process.exit(0);
+  })();
+}
+
+function onSigint(): void {
+  void (async () => {
+    console.log("[openpulse-ui] Received SIGINT, shutting down...");
+    await cleanup();
+    process.exit(0);
+  })();
+}
+
+process.on("SIGTERM", onSigterm);
+process.on("SIGINT", onSigint);
+
+return { app, server, port: PORT, vaultRoot: VAULT_ROOT, close: cleanup };
+}
+
+// --- CLI entry ---
+
+/** Parses `--port <n>` or `--port=<n>` from argv (sidecar launch args). */
+function parseCliPort(): number | undefined {
+  const args = process.argv.slice(2);
+  const eq = args.find((a) => a.startsWith("--port="));
+  if (eq) {
+    const n = Number(eq.slice("--port=".length));
+    if (Number.isFinite(n) && n > 0) return n;
   }
-});
+  const idx = args.indexOf("--port");
+  if (idx !== -1 && args[idx + 1]) {
+    const n = Number(args[idx + 1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+// Boots the server when this file is run directly — dev (`npx tsx
+// server.ts`) or the bundled sidecar binary (`node openpulse-ui-server.cjs`,
+// no separate CLI wrapper needed) — but never as an import side effect.
+// Deliberately NOT an import.meta-based "is this the main module" check:
+// esbuild empties `import.meta.url` when bundling to CJS (the sidecar build,
+// see scripts/build-sidecar-ui.sh), which would make that check always
+// false in the bundled binary. The existing VITEST guard (already used for
+// the search-index warm-up above) is sufficient on its own — vitest always
+// sets VITEST=true, and neither the dev flow nor the sidecar ever do.
+if (!process.env.VITEST) {
+  startServer({ port: parseCliPort() }).catch((err) => {
+    console.error("[openpulse-ui] Failed to start server:", err);
+    process.exit(1);
+  });
+}

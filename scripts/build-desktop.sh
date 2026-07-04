@@ -7,6 +7,10 @@ pnpm build
 
 echo "==> Building SEA sidecars..."
 bash scripts/build-sea.sh dream
+# UI API server sidecar (server.ts) — its own script bundles it (esbuild
+# transpiles the TS entry directly) AND copies it into src-tauri/sidecars/
+# with the target-triple suffix, so nothing further to do for it below.
+bash scripts/build-sidecar-ui.sh
 # Skills CLI is now in core — bundle it directly with esbuild into dist/skills
 npx esbuild packages/core/dist/skills/cli.js \
   --bundle \

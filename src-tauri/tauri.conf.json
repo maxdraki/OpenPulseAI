@@ -32,7 +32,8 @@
     ],
     "externalBin": [
       "sidecars/openpulse-dream",
-      "sidecars/openpulse-skills"
+      "sidecars/openpulse-skills",
+      "sidecars/openpulse-ui-server"
     ],
     "resources": {
       "../packages/core/builtin-skills/**/*": "builtin-skills/"

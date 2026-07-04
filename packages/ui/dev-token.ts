@@ -12,12 +12,15 @@
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 export const TOKEN_FILE_NAME = "ui-token";
 
-export function tokenPath(configDir: string): string {
-  return join(configDir, TOKEN_FILE_NAME);
+/** `explicitPath`, when given, is used verbatim instead of deriving the path
+ *  from `configDir` — lets tests (and startServer's `tokenPath` option)
+ *  point at an isolated token file without touching the real config dir. */
+export function tokenPath(configDir: string, explicitPath?: string): string {
+  return explicitPath ?? join(configDir, TOKEN_FILE_NAME);
 }
 
 export function generateToken(): string {
@@ -31,8 +34,8 @@ export function generateToken(): string {
  * starts first creates it and the other just reads it; there's no required
  * startup ordering between `npx tsx server.ts` and `npx vite`.
  */
-export async function loadOrCreateToken(configDir: string): Promise<string> {
-  const path = tokenPath(configDir);
+export async function loadOrCreateToken(configDir: string, explicitPath?: string): Promise<string> {
+  const path = tokenPath(configDir, explicitPath);
   try {
     const existing = (await readFile(path, "utf-8")).trim();
     if (existing) return existing;
@@ -41,7 +44,7 @@ export async function loadOrCreateToken(configDir: string): Promise<string> {
   }
 
   const token = generateToken();
-  await mkdir(configDir, { recursive: true });
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, token + "\n", { mode: 0o600 });
   try {
     await chmod(path, 0o600);

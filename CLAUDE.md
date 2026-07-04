@@ -39,6 +39,7 @@ pnpm install && pnpm build    # Build all packages
 pnpm vitest run               # Run all tests (~3188 tests)
 pnpm build:sea:mcp            # SEA binary for MCP server
 pnpm build:sea:skills         # SEA binary for skills CLI
+pnpm build:sea:ui             # UI API server bundled as a Tauri sidecar (src-tauri/sidecars/)
 pnpm build:desktop            # Full Tauri desktop build
 ```
 
@@ -49,6 +50,8 @@ cd packages/ui
 npx tsx server.ts &            # API server on :3001 (starts orchestrator)
 npx vite --port 1420 &        # UI on :1420
 ```
+
+`server.ts` exports `startServer(opts)` (port/vaultRoot/host/tokenPath overrides) and is also the always-on Tauri sidecar entry point — `npx tsx server.ts` and the bundled binary (`scripts/build-sidecar-ui.sh` → `src-tauri/sidecars/openpulse-ui-server-<triple>`) both boot through the same function, just sourcing options from different places (no args/env for dev; `OPENPULSE_PORT`/`OPENPULSE_VAULT`/`--port` for the sidecar). On EADDRINUSE it tries the next 10 ports; once listening it prints `OPENPULSE_SERVER_READY port=<port>` to stdout (parsed by the Rust supervisor) and writes `<vaultRoot>/ui-server.json` (`{port, pid, startedAt}`, mode 0600) as a fallback discovery file for the webview. SIGTERM/SIGINT stop the orchestrator, close the server, and remove the discovery file before exiting 0.
 
 Both processes read the same auto-generated bearer token from `~/OpenPulseAI/ui-token` (`packages/ui/dev-token.ts`) — whichever starts first creates it, so there's no required startup order. `server.ts`'s `/api` guard is always on (no more "unset token → open").
 
