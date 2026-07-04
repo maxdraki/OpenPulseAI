@@ -226,3 +226,65 @@ export async function commitVault(vault: Vault, message: string): Promise<void> 
     await warnOnce("unexpected error committing vault", e instanceof Error ? e.message : String(e));
   }
 }
+
+/** One vault-repo commit, summarized for the Aigis rollup pipeline. */
+export interface VaultCommitInfo {
+  subject: string;
+  date: string; // ISO 8601 author date
+  /** Warm theme names this commit touched (deduped), derived from changed
+   *  file paths under `warm/*.md` — excludes generated/underscore-prefixed
+   *  files (`index.md`, `log.md`, `_pending/`, `_facts/`, etc.), which are
+   *  never themes. */
+  themes: string[];
+}
+
+const RECORD_SEP = "\x1e";
+const FIELD_SEP = "\x1f";
+
+/** File names directly under `warm/` that are generated pages, not themes. */
+const NON_THEME_WARM_FILES = new Set(["index", "log"]);
+
+/**
+ * Summarizes vault git history since `sinceIso`: each commit's subject and
+ * which warm themes it touched. Read-only and best-effort — the Aigis rollup
+ * pipeline (packages/dream) must be able to draft a rollup even when git is
+ * unavailable or the vault isn't a repo yet, so this returns `[]` (never
+ * throws) on any error, mirroring every other function in this module.
+ */
+export async function vaultLogSince(vault: Vault, sinceIso: string): Promise<VaultCommitInfo[]> {
+  if (gitUnavailable) return [];
+  const root = gitRoot(vault);
+
+  try {
+    const result = await runGit(root, [
+      "log",
+      `--since=${sinceIso}`,
+      `--pretty=format:${RECORD_SEP}%aI${FIELD_SEP}%s${FIELD_SEP}`,
+      "--name-only",
+    ]);
+    if (!result || result.code !== 0) return [];
+
+    const commits: VaultCommitInfo[] = [];
+    const records = result.stdout.split(RECORD_SEP).filter((r) => r.trim().length > 0);
+
+    for (const record of records) {
+      const [date, subject, filesBlock] = record.split(FIELD_SEP);
+      if (!date || subject === undefined) continue;
+
+      const files = (filesBlock ?? "").split("\n").map((f) => f.trim()).filter(Boolean);
+      const themes = new Set<string>();
+      for (const file of files) {
+        const m = file.match(/^warm\/([A-Za-z0-9][\w-]*)\.md$/);
+        if (!m) continue;
+        if (NON_THEME_WARM_FILES.has(m[1])) continue;
+        themes.add(m[1]);
+      }
+
+      commits.push({ subject, date, themes: [...themes] });
+    }
+
+    return commits;
+  } catch {
+    return [];
+  }
+}

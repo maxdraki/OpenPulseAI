@@ -15,7 +15,7 @@
  * browser page, so it's safe to live under `src/lib/` alongside browser-only
  * modules without affecting the Vite bundle (tree-shaken when unreferenced).
  */
-import { readFile, writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   Vault,
@@ -28,16 +28,22 @@ import {
   updateThemeInIndex,
   removeThemeFromIndex,
   rebuildIndex,
+  loadConfig,
   type PendingUpdate,
   type LlmProvider,
 } from "../../../core/dist/index.js";
 import { regenerateStaleUpdate } from "../../../dream/dist/synthesize.js";
+import { aigisThemeFilePath, submitAigisRollup, type AigisSubmissionOutcome, type CallAigisToolFn } from "./aigis-submit.js";
 
 export interface ApproveSuccess {
   ok: true;
   theme: string;
   finalContent: string;
   update: PendingUpdate;
+  /** Present only for `aigisRollup`-kind updates — the outcome of submitting
+   *  the approved content to Aigis (success/failure/skipped-not-connected).
+   *  See `aigis-submit.ts`. Approval itself never fails because of this. */
+  aigisSubmission?: AigisSubmissionOutcome;
 }
 
 export interface ApproveFailure {
@@ -79,7 +85,9 @@ export type ApproveOutcome = ApproveSuccess | ApproveFailure;
  */
 async function syncSearchIndex(vault: Vault, update: PendingUpdate, related0: string | undefined): Promise<void> {
   try {
-    if (update.lintFix === "merge" || update.lintFix === "rename") {
+    if (update.aigisRollup) {
+      // vault/aigis/<theme>.md is not a warm theme page — never indexed.
+    } else if (update.lintFix === "merge" || update.lintFix === "rename") {
       await rebuildIndex(vault);
     } else if (update.lintFix === "delete") {
       await removeThemeFromIndex(vault, update.theme);
@@ -98,6 +106,7 @@ function commitMessageForApprove(update: PendingUpdate, related0: string | undef
   if (update.lintFix === "merge" && related0) return `merge(${update.theme}->${related0}) batch=${batch}`;
   if (update.lintFix === "rename" && related0) return `rename(${update.theme}->${related0}) batch=${batch}`;
   if (update.lintFix === "delete") return `delete(${update.theme}) batch=${batch}`;
+  if (update.aigisRollup) return `approve(${update.theme}): aigis-rollup batch=${batch}`;
   if (update.schemaEvolution || update.theme === "_schema") return `approve(_schema): schema batch=${batch}`;
   if (update.compactionType) return `approve(${update.theme}): compaction-${update.compactionType} batch=${batch}`;
   if (update.querybackSource) return `approve(${update.theme}): queryback batch=${batch}`;
@@ -165,6 +174,10 @@ export interface ApprovePendingUpdateOpts {
    *  lands as a single commit listing every theme, instead of one commit
    *  per item (see task-5 brief §B). Defaults to true. */
   commit?: boolean;
+  /** Test seam: overrides the Aigis MCP call used for `aigisRollup`
+   *  approvals. Production callers never set this (defaults to the real
+   *  `callAigisTool` — see `aigis-submit.ts`'s `submitAigisRollup`). */
+  aigisCallTool?: CallAigisToolFn;
 }
 
 export async function approvePendingUpdate(
@@ -199,7 +212,10 @@ export async function approvePendingUpdate(
   const vault = new Vault(vaultRoot);
   await vault.init();
 
-  if (!isStructuralLintFix(update)) {
+  // aigisRollup pendings are exempt from the staleness gate — their
+  // previousContent is always null by construction (see types.ts), so
+  // there's nothing on-disk to conflict with (see task-17 brief §A).
+  if (!isStructuralLintFix(update) && !update.aigisRollup) {
     const currentContent = await readCurrentContentForUpdate(vault, update);
     const gate = gateOnStaleness(update.previousContent, currentContent);
     if (gate.legacy) {
@@ -218,6 +234,11 @@ export async function approvePendingUpdate(
       await mergeThemes(vault, update.theme, null);
     } else if (update.lintFix === "rename" && related[0]) {
       await mergeThemes(vault, update.theme, related[0], { rename: true });
+    } else if (update.aigisRollup) {
+      // Approved Aigis rollup content is deliberately NOT a warm theme page —
+      // it must never pollute the wiki/index/search (see task-17 brief §A).
+      await mkdir(vault.aigisDir, { recursive: true });
+      await writeFile(aigisThemeFilePath(vault, update.theme), finalContent, "utf-8");
     } else if (update.schemaEvolution || update.theme === "_schema") {
       await writeFile(join(vault.warmDir, "_schema.md"), finalContent, "utf-8");
     } else {
@@ -239,13 +260,36 @@ export async function approvePendingUpdate(
     // approve if the index update itself hiccups (see syncSearchIndex below).
     await syncSearchIndex(vault, update, related[0]);
 
+    // Submit-on-approval: an aigisRollup approval also submits the just-
+    // written content to Aigis via the configured MCP connection. This
+    // NEVER fails the approval itself — submitAigisRollup never throws, and
+    // its outcome (success/failure/skipped-not-connected) is both recorded
+    // in vault/aigis/submissions.jsonl and surfaced back to the caller here
+    // so the UI can show it (see task-17 brief §A).
+    let aigisSubmission: AigisSubmissionOutcome | undefined;
+    if (update.aigisRollup) {
+      const config = await loadConfig(vaultRoot);
+      aigisSubmission = await submitAigisRollup(
+        vault,
+        config.aigis,
+        update.id,
+        update.theme,
+        finalContent,
+        update.aigisRollup.periodStart,
+        update.aigisRollup.periodEnd,
+        opts.aigisCallTool
+      );
+    }
+
     if (opts.commit !== false) {
       // Fire-and-forget audit commit — commitVault never throws (see
       // vault-git.ts), so a missing/broken git binary can never fail approval.
+      // Covers both the aigis content file and its submissions.jsonl record
+      // (both live under vault.aigisDir, inside the vault git root).
       await commitVault(vault, commitMessageForApprove(update, related[0]));
     }
 
-    return { ok: true, theme: update.theme, finalContent, update };
+    return { ok: true, theme: update.theme, finalContent, update, ...(aigisSubmission ? { aigisSubmission } : {}) };
   } catch (e: unknown) {
     return { ok: false, status: 500, error: e instanceof Error ? e.message : String(e) };
   }

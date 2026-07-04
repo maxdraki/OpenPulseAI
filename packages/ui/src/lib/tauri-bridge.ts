@@ -40,6 +40,20 @@ export interface PendingUpdate {
     question: string;
     themesConsulted: string[];
   };
+  aigisRollup?: {
+    periodStart: string;
+    periodEnd: string;
+    cadence: "weekly" | "monthly";
+  };
+}
+
+/** Outcome of submitting an approved `aigisRollup` pending to Aigis — see
+ *  `POST /api/approve-update`'s `aigisSubmission` field and
+ *  `packages/ui/src/lib/aigis-submit.ts`. */
+export interface AigisSubmissionOutcome {
+  ok: boolean;
+  error?: string;
+  skipped?: boolean;
 }
 
 // Detect Tauri runtime — exported for use by logger.ts
@@ -132,15 +146,49 @@ export async function listPendingUpdates(): Promise<PendingUpdate[]> {
   return apiGet("/pending-updates");
 }
 
-export async function approveUpdate(id: string, editedContent?: string): Promise<void> {
-  if (isTauri) return tauriInvoke("approve_update", { id, editedContent: editedContent ?? null });
-  await apiPost("/approve-update", { id, editedContent: editedContent ?? null });
+/** Approves a pending update. Returns the Aigis submission outcome when the
+ *  approved update was an `aigisRollup` pending (see `POST /api/approve-update`'s
+ *  `aigisSubmission` field) — undefined for every other update kind. */
+export async function approveUpdate(id: string, editedContent?: string): Promise<{ aigisSubmission?: AigisSubmissionOutcome }> {
+  if (isTauri) {
+    await tauriInvoke("approve_update", { id, editedContent: editedContent ?? null });
+    return {};
+  }
+  const result = await apiPost<{ ok: boolean; aigisSubmission?: AigisSubmissionOutcome }>("/approve-update", { id, editedContent: editedContent ?? null });
+  return { aigisSubmission: result.aigisSubmission };
 }
 
 export interface BatchApproveResult {
   id: string;
   ok: boolean;
   stale?: boolean;
+  aigisSubmission?: AigisSubmissionOutcome;
+}
+
+/** Retries a previously failed/skipped Aigis submission for an already-
+ *  approved `aigisRollup` update (see `POST /api/aigis-resubmit/:updateId`). */
+export async function resubmitAigisRollup(updateId: string): Promise<void> {
+  if (isTauri) throw new Error("Aigis resubmit is not yet available in the desktop app");
+  await apiPost(`/aigis-resubmit/${encodeURIComponent(updateId)}`, {});
+}
+
+export interface AigisLastSubmission {
+  found: boolean;
+  updateId?: string;
+  theme?: string;
+  submittedAt?: string;
+  ok?: boolean;
+  error?: string;
+  /** True when the last attempt was skipped (Aigis not connected) rather
+   *  than a real submission failure — see aigis-submit.ts's AigisSubmissionRecord. */
+  skipped?: boolean;
+}
+
+/** Last recorded Aigis submission outcome (any update) — backs the Settings
+ *  "Connect Aigis" card's status line. */
+export async function getAigisLastSubmission(): Promise<AigisLastSubmission> {
+  if (isTauri) return { found: false };
+  return apiGet("/aigis-last-submission");
 }
 
 /**
@@ -227,6 +275,45 @@ export interface TestModelResult {
 export async function testModel(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<TestModelResult> {
   if (isTauri) return tauriInvoke("test_model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
   return apiPost("/test-model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
+}
+
+export interface AigisConfigInfo {
+  endpoint: string;
+  submitTool: string;
+  /** Effective enabled state — already gated on endpointValid by the server (readAigisConfigForApi). */
+  enabled: boolean;
+  /** Whether `endpoint` is a valid https URL. When false, `enabled` is forced false regardless of the saved flag. */
+  endpointValid: boolean;
+  hasToken: boolean;
+  tokenHint?: string;
+}
+
+export interface AigisTestResult {
+  ok: boolean;
+  tools: string[];
+  hasSubmitTool: boolean;
+  error?: string;
+}
+
+/**
+ * The "Connect Aigis" foundation (outbound MCP client to aigis.bio) is
+ * dev-server-only for now — no Tauri command exists yet, same posture as
+ * regeneratePendingUpdate/triggerDream above until the desktop app grows a
+ * vault-git-style integration for this.
+ */
+export async function getAigisConfig(): Promise<AigisConfigInfo> {
+  if (isTauri) return { endpoint: "", submitTool: "aigis_submit_journal", enabled: false, endpointValid: false, hasToken: false };
+  return apiGet("/aigis-config");
+}
+
+export async function saveAigisConfig(endpoint: string, authToken: string | undefined, submitTool: string, enabled: boolean): Promise<void> {
+  if (isTauri) throw new Error("Connecting Aigis is not yet available in the desktop app");
+  await apiPost("/aigis-config", { endpoint, authToken: authToken ?? null, submitTool, enabled });
+}
+
+export async function testAigisConnection(endpoint?: string, authToken?: string, submitTool?: string): Promise<AigisTestResult> {
+  if (isTauri) return { ok: false, tools: [], hasSubmitTool: false, error: "Not available in the desktop app yet" };
+  return apiPost("/aigis-test", { endpoint: endpoint ?? null, authToken: authToken ?? null, submitTool: submitTool ?? null });
 }
 
 export async function getVaultPath(): Promise<string> {
@@ -524,6 +611,15 @@ export interface OrchestratorSchemaEvolutionPipeline {
   schedule: { time: string; days: string[] };
 }
 
+export interface OrchestratorAigisRollupPipeline {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: { time: string; days: string[] };
+  cadence: "weekly" | "monthly";
+}
+
 export interface OrchestratorStatus {
   running: boolean;
   lastHeartbeat: string;
@@ -532,6 +628,7 @@ export interface OrchestratorStatus {
   lintPipeline?: OrchestratorLintPipeline;
   compactionPipeline?: OrchestratorCompactionPipeline;
   schemaEvolutionPipeline?: OrchestratorSchemaEvolutionPipeline;
+  aigisRollupPipeline?: OrchestratorAigisRollupPipeline;
 }
 
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {

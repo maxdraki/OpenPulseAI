@@ -14,11 +14,13 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/generative-ai": "^0.24.0",
     "@huggingface/transformers": "^3.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "croner": "^10.0.1",
     "openai": "^4.80.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@types/node": "^25.5.2"
+    "@types/node": "^25.5.2",
+    "zod": "^3.25.0"
   }
 }

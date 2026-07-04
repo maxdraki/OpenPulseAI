@@ -23,6 +23,16 @@ export interface OpenPulseConfig {
     apiKey?: string; // resolved from env or keychain if not set
     baseUrl?: string; // Ollama base URL (default http://localhost:11434)
   };
+  /** Outbound connection to aigis.bio's remote MCP server (proof-of-work journal sync). Absent until the user connects it. */
+  aigis?: AigisConfig;
+}
+
+/** Configuration for the outbound connection to aigis.bio's MCP server. */
+export interface AigisConfig {
+  endpoint: string; // https URL of the Aigis MCP server
+  authToken?: string; // bearer token; plaintext in config.yaml (local-first posture, same as llm.apiKey)
+  submitTool: string; // name of the tool used to submit journal rollups (default "aigis_submit_journal")
+  enabled: boolean; // whether the connection is active
 }
 
 /** Result of classifying a hot entry into a theme */
@@ -90,6 +100,24 @@ export interface PendingUpdate {
     question: string;
     themesConsulted: string[];
   };
+  aigisRollup?: {
+    periodStart: string;       // ISO 8601 — start of the rollup window
+    periodEnd: string;         // ISO 8601 — end of the rollup window
+    cadence: "weekly" | "monthly";
+  };
+}
+
+/** Result of submitting an approved Aigis rollup to the remote Aigis MCP (recorded in vault/aigis/submissions.jsonl) */
+export interface AigisSubmissionRecord {
+  updateId: string;
+  submittedAt: string;         // ISO 8601
+  ok: boolean;
+  error?: string;
+  toolName: string;
+  /** True when this record represents a skipped (Aigis not connected/enabled)
+   *  attempt rather than a real network/tool failure — lets displays like the
+   *  Settings "last submission" line distinguish "skipped" from "failed". */
+  skipped?: boolean;
 }
 
 /** Collector runtime state per source */

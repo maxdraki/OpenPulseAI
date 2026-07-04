@@ -10,12 +10,14 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, isValidAigisEndpoint, type AigisConfig } from "../core/dist/index.js";
 import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
+import { resubmitAigisRollup } from "./src/lib/aigis-submit.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
 const execFileAsync = promisify(execFile);
@@ -177,7 +179,7 @@ app.post("/api/approve-update", async (req, res) => {
     // Size check for dream-pipeline project updates: enqueue compaction if
     // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
     const update = outcome.update;
-    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource && !update.aigisRollup) {
       const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
       if (sectionCount > 14 && update.type === "project") {
         await orchestrator.enqueueForCompaction([outcome.theme]);
@@ -188,13 +190,17 @@ app.post("/api/approve-update", async (req, res) => {
       }
     }
 
-    // Rebuild index.md and _backlinks.md in the background — fire and forget
-    const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
-    execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
-      if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
-    });
+    // Rebuild index.md and _backlinks.md in the background — fire and forget.
+    // Skipped for aigisRollup: it never touches warm/index/backlinks (see
+    // approve.ts), so there's nothing for rebuild-meta to do.
+    if (!update.aigisRollup) {
+      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
+      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+        if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
+      });
+    }
 
-    res.json({ ok: true });
+    res.json({ ok: true, ...(outcome.aigisSubmission ? { aigisSubmission: outcome.aigisSubmission } : {}) });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -213,7 +219,7 @@ app.post("/api/approve-batch", async (req, res) => {
     for (const { outcome } of results) {
       if (!outcome.ok) continue;
       const update = outcome.update;
-      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource && !update.aigisRollup) {
         const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
         if (sectionCount > 14 && update.type === "project") {
           await orchestrator.enqueueForCompaction([outcome.theme]);
@@ -224,7 +230,9 @@ app.post("/api/approve-batch", async (req, res) => {
       }
     }
 
-    // Rebuild index.md/_backlinks.md once for the whole batch, not per item.
+    // Rebuild index.md/_backlinks.md once for the whole batch, not per item
+    // (an all-aigisRollup batch still triggers it — cheap no-op; see the
+    // single-approve path for the per-item skip).
     if (results.some((r) => r.outcome.ok)) {
       const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
       execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
@@ -237,7 +245,7 @@ app.post("/api/approve-batch", async (req, res) => {
         id,
         ok: outcome.ok,
         ...(outcome.ok
-          ? {}
+          ? { ...(outcome.aigisSubmission ? { aigisSubmission: outcome.aigisSubmission } : {}) }
           : { error: outcome.error, ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}) }),
       }))
     );
@@ -604,6 +612,15 @@ app.post("/api/trigger-schema-evolve", async (_req, res) => {
   }
 });
 
+app.post("/api/trigger-aigis-rollup", async (_req, res) => {
+  try {
+    const outcome = await orchestrator.triggerAigisRollup();
+    res.json({ ok: true, outcome });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/api/backlinks", async (_req, res) => {
   const backlinksPath = join(warmDir, "_backlinks.md");
   try {
@@ -700,6 +717,191 @@ app.post("/api/save-llm-settings", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Aigis (aigis.bio outbound MCP connection) ---
+
+interface AigisConfigApiShape {
+  endpoint: string;
+  submitTool: string;
+  enabled: boolean;
+  /** Whether `endpoint` passes the same https-URL gate the runtime uses (parseAigisConfig in core/config.ts). */
+  endpointValid: boolean;
+  hasToken: boolean;
+  tokenHint?: string;
+}
+
+/**
+ * Reads config.yaml's aigis section for the Settings UI. Never returns the raw
+ * token — hasToken + a masked hint only, mirroring the llm-config idiom above.
+ *
+ * `enabled` here is the *effective* enabled state — it runs the same
+ * isValidAigisEndpoint gate the runtime (parseAigisConfig) uses, so a
+ * hand-edited config.yaml with `enabled: true` but a bad/non-https endpoint
+ * reports as disabled here too, matching what actually happens at runtime.
+ * `endpointValid` is surfaced separately so the UI can explain *why*.
+ */
+export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisConfigApiShape> {
+  const configPath = join(vaultRoot, "config.yaml");
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = (loadYaml(raw) as any) ?? {};
+    const aigis = parsed.aigis ?? {};
+    const token: string | undefined = aigis.authToken;
+    const endpoint: string = aigis.endpoint ?? "";
+    const endpointValid = isValidAigisEndpoint(endpoint);
+    return {
+      endpoint,
+      submitTool: aigis.submitTool ?? DEFAULT_AIGIS_SUBMIT_TOOL,
+      enabled: Boolean(aigis.enabled) && endpointValid,
+      endpointValid,
+      hasToken: Boolean(token),
+      tokenHint: maskKey(token),
+    };
+  } catch {
+    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, endpointValid: false, hasToken: false };
+  }
+}
+
+/** Thrown by saveAigisConfigForApi when asked to enable with an endpoint that will never pass the runtime gate. */
+export class InvalidAigisEndpointError extends Error {
+  constructor() {
+    super("Aigis endpoint must be a valid https URL to enable the connection");
+    this.name = "InvalidAigisEndpointError";
+  }
+}
+
+/**
+ * Saves config.yaml's aigis section. A blank authToken means "keep the
+ * existing one" (same convention as save-llm-settings' apiKey handling) —
+ * only an explicitly-typed new token overwrites it. Reads and rewrites the
+ * whole document via js-yaml so other top-level sections (themes, llm) are
+ * preserved rather than clobbered.
+ *
+ * Refuses (throws InvalidAigisEndpointError) to persist enabled:true paired
+ * with an endpoint that fails isValidAigisEndpoint — the same https-URL gate
+ * the runtime (parseAigisConfig in core/config.ts) enforces. Without this,
+ * a bad endpoint could be saved as "enabled" and the Settings/Schedule UI
+ * would show it active while every outbound call silently no-op'd.
+ */
+export async function saveAigisConfigForApi(
+  vaultRoot: string,
+  body: { endpoint?: string; authToken?: string; submitTool?: string; enabled?: boolean }
+): Promise<void> {
+  if (body.enabled && !isValidAigisEndpoint(body.endpoint)) {
+    throw new InvalidAigisEndpointError();
+  }
+
+  const configPath = join(vaultRoot, "config.yaml");
+  await mkdir(vaultRoot, { recursive: true });
+
+  let parsed: any = {};
+  try {
+    parsed = (loadYaml(await readFile(configPath, "utf-8")) as any) ?? {};
+  } catch { /* no existing config */ }
+
+  const existingToken: string | undefined = parsed?.aigis?.authToken;
+  const effectiveToken = body.authToken || existingToken;
+
+  parsed.aigis = {
+    endpoint: body.endpoint ?? "",
+    submitTool: body.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL,
+    enabled: Boolean(body.enabled),
+    ...(effectiveToken ? { authToken: effectiveToken } : {}),
+  };
+
+  await writeFile(configPath, dumpYaml(parsed), "utf-8");
+}
+
+app.get("/api/aigis-config", async (_req, res) => {
+  res.json(await readAigisConfigForApi(VAULT_ROOT));
+});
+
+app.post("/api/aigis-config", async (req, res) => {
+  try {
+    await saveAigisConfigForApi(VAULT_ROOT, req.body ?? {});
+    res.json({ ok: true });
+  } catch (e: any) {
+    if (e instanceof InvalidAigisEndpointError) {
+      return res.status(400).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/aigis-test", async (req, res) => {
+  try {
+    const stored = await readAigisConfigForApi(VAULT_ROOT);
+    const existingToken = stored.hasToken ? (await loadConfig(VAULT_ROOT)).aigis?.authToken : undefined;
+
+    const endpoint: string | undefined = req.body?.endpoint || stored.endpoint;
+    const authToken: string | undefined = req.body?.authToken || existingToken;
+    const submitTool: string = req.body?.submitTool || stored.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL;
+
+    if (!endpoint) {
+      return res.json({ ok: false, tools: [], hasSubmitTool: false, error: "No endpoint configured" });
+    }
+
+    const config: AigisConfig = { endpoint, authToken, submitTool, enabled: true };
+    const result = await testAigisConnection(config);
+    res.json(result);
+  } catch (e: any) {
+    res.json({ ok: false, tools: [], hasSubmitTool: false, error: e.message });
+  }
+});
+
+/**
+ * Retries a previously failed/skipped Aigis submission for a given (already
+ * approved) update — re-reads `vault/aigis/<theme>.md` and calls the
+ * configured submit tool again, appending a new outcome record to
+ * `submissions.jsonl` (see `resubmitAigisRollup` in `src/lib/aigis-submit.ts`
+ * and task-17 brief §B).
+ */
+app.post("/api/aigis-resubmit/:updateId", async (req, res) => {
+  const updateId = req.params.updateId;
+  if (!/^[\w-]+$/.test(updateId)) return res.status(400).json({ ok: false, error: "Invalid update id" });
+  try {
+    const outcome = await resubmitAigisRollup(VAULT_ROOT, updateId);
+    if (!outcome.ok) return res.status(outcome.status).json({ ok: false, error: outcome.error });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * Reads the last recorded Aigis submission outcome (any update) straight off
+ * disk — a plain read, no `Vault.init()` (fix round 1 #5): `init()` mkdir's
+ * every vault subdirectory and adopts/creates a git repo, all of which is
+ * unnecessary side effect for what's meant to be a read-only status check,
+ * and would even create vault directories on a machine that has none yet
+ * just from loading the Settings page. Missing file/dir is treated the same
+ * as "no submissions yet" rather than an error.
+ */
+export async function readAigisLastSubmissionForApi(vaultRoot: string): Promise<Record<string, unknown>> {
+  const path = join(vaultRoot, "vault", "aigis", "submissions.jsonl");
+  const raw = await readFile(path, "utf-8").catch(() => "");
+  const lines = raw.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return { found: false };
+  try {
+    const last = JSON.parse(lines[lines.length - 1]);
+    return { found: true, ...last };
+  } catch {
+    return { found: false };
+  }
+}
+
+/**
+ * Last recorded Aigis submission outcome (any update), for the Settings
+ * "Connect Aigis" card — shown alongside the connection status so the user
+ * doesn't have to go dig through the Review tab to see what happened.
+ */
+app.get("/api/aigis-last-submission", async (_req, res) => {
+  try {
+    res.json(await readAigisLastSubmissionForApi(VAULT_ROOT));
+  } catch (e: any) {
+    res.json({ found: false, error: e.message });
   }
 });
 
@@ -1475,6 +1677,23 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
+  },
+  async runAigisRollupPipeline(): Promise<"drafted" | "no-activity"> {
+    const rollupBin = join(process.cwd(), "..", "dream", "dist", "aigis-rollup-cli.js");
+    const { stdout } = await execFileAsync("node", [rollupBin], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 300000,
+    });
+    // The CLI prints its outcome on its own stdout line (see aigis-rollup-cli.ts's
+    // main()) since this callback's return value is what surfaces through
+    // Orchestrator.triggerAigisRollup() to the Schedule page's "Run Now" feedback.
+    // Default to "drafted" if the marker is ever missing — matches this pipeline's
+    // pre-existing behavior of treating a clean subprocess exit as success.
+    return stdout.includes("OPENPULSE_ROLLUP_OUTCOME=no-activity") ? "no-activity" : "drafted";
+  },
+  async isAigisEnabled(): Promise<boolean> {
+    const config = await loadConfig(VAULT_ROOT);
+    return Boolean(config.aigis?.enabled);
   },
   async getSkillNames(): Promise<string[]> {
     const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");

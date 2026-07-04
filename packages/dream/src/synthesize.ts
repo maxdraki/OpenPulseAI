@@ -458,7 +458,7 @@ export async function synthesizeToPending(
   // pending update sitting in the review queue, synthesize against ITS
   // proposedContent instead of the (older) on-disk page, and replace it —
   // rather than stacking a second pending for the same theme. Only dream-kind
-  // pendings are eligible (no lintFix/compaction/schema/queryback sub-kind);
+  // pendings are eligible (no lintFix/compaction/schema/queryback/aigisRollup sub-kind);
   // those are left alone and synthesized against the on-disk page as before,
   // relying on approval-time staleness (checkStaleness in the UI server) to
   // protect ordering between them and a fresh dream proposal.
@@ -887,9 +887,9 @@ Return ONLY the merged Markdown content, no fences or explanations.`,
 
 /**
  * Scan `vault/warm/_pending/` for pending, dream-synthesis-kind updates (no
- * lintFix/compactionType/schemaEvolution/querybackSource sub-kind) that are
- * still fresh relative to the on-disk page — i.e. not already stale per
- * `checkStaleness`. Keyed by theme; used by `synthesizeToPending` to fold a
+ * lintFix/compactionType/schemaEvolution/querybackSource/aigisRollup sub-kind)
+ * that are still fresh relative to the on-disk page — i.e. not already stale
+ * per `checkStaleness`. Keyed by theme; used by `synthesizeToPending` to fold a
  * fresh synthesis onto the latest un-approved proposal instead of stacking a
  * second pending for the same theme (see module docs above).
  */
@@ -914,7 +914,7 @@ async function loadFoldableDreamPendings(
       continue; // malformed/unreadable — ignore
     }
     if (update.status !== "pending") continue;
-    if (update.lintFix || update.compactionType || update.schemaEvolution || update.querybackSource) continue;
+    if (update.lintFix || update.compactionType || update.schemaEvolution || update.querybackSource || update.aigisRollup) continue;
     if (result.has(update.theme)) continue; // one per theme is expected; first wins
     const currentContent = themesByName.get(update.theme)?.content ?? null;
     const { stale } = checkStaleness(update.previousContent, currentContent);

@@ -619,6 +619,7 @@ describe("synthesizeToPending", () => {
         compactionType: update.compactionType,
         schemaEvolution: update.schemaEvolution,
         querybackSource: update.querybackSource,
+        aigisRollup: update.aigisRollup,
         type: update.type,
       };
       const { writeFile } = await import("node:fs/promises");
@@ -686,6 +687,42 @@ describe("synthesizeToPending", () => {
       // The lint pending was left untouched.
       const raw = await readFile(join(vault.pendingDir, "lint-pending.json"), "utf-8");
       expect(JSON.parse(raw).proposedContent).toContain("Structural fix");
+    });
+
+    it("does NOT fold an aigisRollup-kind pending — a theme-name collision with a rollup pending must not lose its sub-kind by getting folded into normal wiki synthesis", async () => {
+      await writeTheme(vault, "project-rollup", "## Current Status\n\nOn-disk content.");
+      await writePending(vault, {
+        id: "aigis-rollup-pending",
+        theme: "project-rollup",
+        proposedContent: "## Aigis Rollup\n\nRollup content, not a content base.",
+        previousContent: null,
+        aigisRollup: { periodStart: "2026-06-01T00:00:00.000Z", periodEnd: "2026-06-08T00:00:00.000Z", cadence: "weekly" },
+      });
+
+      const classified: ClassificationResult[] = [
+        {
+          entry: { timestamp: "2026-06-20T10:00:00Z", log: "New activity", source: "github-activity" },
+          themes: ["project-rollup"],
+          confidence: 0.9,
+        },
+      ];
+
+      const provider = mockProvider("## Current Status\n\nOn-disk content, updated.");
+      await synthesizeToPending(vault, classified, provider, "test-model", { "project-rollup": "project" });
+
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).toContain("On-disk content.");
+      expect((provider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt).not.toContain("Rollup content");
+
+      // The aigisRollup pending was left untouched — still there, still tagged.
+      const raw = await readFile(join(vault.pendingDir, "aigis-rollup-pending.json"), "utf-8");
+      const parsed = JSON.parse(raw);
+      expect(parsed.proposedContent).toContain("Rollup content");
+      expect(parsed.aigisRollup).toBeDefined();
+
+      // A second, separate pending was created for the normal dream synthesis.
+      const files = await readdir(vault.pendingDir);
+      const jsonFiles = files.filter((f) => f.endsWith(".json"));
+      expect(jsonFiles).toHaveLength(2);
     });
 
     it("ignores a foldable pending that's already stale relative to the on-disk page", async () => {

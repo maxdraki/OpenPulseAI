@@ -4,6 +4,7 @@ import {
   updateSchedule,
   triggerOrchestratorRun,
   toggleOrchestratorSchedule,
+  getAigisConfig,
   apiBase,
   authHeaders,
   type OrchestratorSchedule,
@@ -490,6 +491,17 @@ interface PipelineCardOpts {
   runLabel: string;
   extraMeta?: string;
   onDone: () => void | Promise<void>;
+  /** When set, the card renders this note and disables the "Run Now" button —
+   *  used for pipelines whose schedule exists but is currently a no-op (e.g.
+   *  the Aigis rollup pipeline before aigis.bio is connected). */
+  disabledNote?: string;
+  /** Optional: turns the trigger endpoint's parsed JSON response body into a short
+   *  human-readable outcome string shown next to the "Run Now" button. Without this,
+   *  a successful trigger looks identical whether it drafted something, found no
+   *  activity, or was silently gated off — see the Aigis rollup card's use of this
+   *  (task-16 review round 1, issue 4). Return `undefined` to fall back to the
+   *  generic "Triggered <title> run" message. */
+  describeResult?: (body: any) => string | undefined;
 }
 
 function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
@@ -552,6 +564,15 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
     section.appendChild(errEl);
   }
 
+  if (opts.disabledNote) {
+    const noteEl = document.createElement("div");
+    noteEl.style.marginTop = "0.35rem";
+    noteEl.style.fontSize = "0.78rem";
+    noteEl.style.color = "var(--text-tertiary)";
+    noteEl.textContent = opts.disabledNote;
+    section.appendChild(noteEl);
+  }
+
   const runBtn = document.createElement("button");
   runBtn.type = "button";
   runBtn.className = "btn btn-ghost btn-sm";
@@ -559,10 +580,23 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
   runBtn.style.padding = "0.2rem 0.6rem";
   runBtn.style.marginTop = "0.35rem";
   runBtn.textContent = opts.runLabel;
+  runBtn.disabled = Boolean(opts.disabledNote);
+  section.appendChild(runBtn);
+
+  // Transient "Run Now" feedback — cleared at the start of the next run. Without
+  // this, a manual trigger looks identical whether it drafted a pending update,
+  // found no activity in the period, or was silently gated off (see describeResult).
+  const resultEl = document.createElement("span");
+  resultEl.style.marginLeft = "0.5rem";
+  resultEl.style.fontSize = "0.78rem";
+  resultEl.style.color = "var(--text-tertiary)";
+  section.appendChild(resultEl);
+
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
     const origLabel = runBtn.textContent;
     runBtn.textContent = "Running…";
+    resultEl.textContent = "";
     try {
       const res = await fetch(`${apiBase}${opts.triggerPath}`, {
         method: "POST",
@@ -576,18 +610,25 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
           msg = data.error ?? msg;
         } catch { /* ignore JSON parse */ }
         log("error", `${opts.title} trigger failed`, msg);
+        resultEl.textContent = `Failed: ${msg}`;
       } else {
-        log("info", `Triggered ${opts.title} run`);
+        let body: unknown = null;
+        try {
+          body = await res.json();
+        } catch { /* no body / not JSON — fine, describeResult just won't fire */ }
+        const detail = opts.describeResult?.(body);
+        log("info", detail ? `Triggered ${opts.title} run — ${detail}` : `Triggered ${opts.title} run`);
+        resultEl.textContent = detail ?? "";
         await opts.onDone();
       }
     } catch (e) {
       log("error", `Error triggering ${opts.title}`, String(e));
+      resultEl.textContent = "Failed to trigger run";
     } finally {
       runBtn.disabled = false;
       runBtn.textContent = origLabel;
     }
   });
-  section.appendChild(runBtn);
 
   return section;
 }
@@ -631,8 +672,22 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
   async function refresh() {
     let status: OrchestratorStatus;
     let skills: SkillData[];
+    let aigisEnabled = false;
+    // True when the saved config asked for enabled:true but the endpoint failed
+    // the https-URL gate — distinguishes "never connected" from "connected but
+    // broken" so the disabled-note can explain which one applies.
+    let aigisEndpointInvalid = false;
     try {
       [status, skills] = await Promise.all([getOrchestratorStatus(), getSkills()]);
+      // Best-effort — if this fails, the Aigis rollup card just shows as disabled,
+      // which is the safe default and matches the pipeline's own gating.
+      try {
+        const aigisConfig = await getAigisConfig();
+        // `enabled` here is already the *effective* state (gated on endpointValid
+        // by readAigisConfigForApi) — matches what the pipeline itself checks.
+        aigisEnabled = aigisConfig.enabled;
+        aigisEndpointInvalid = Boolean(aigisConfig.endpoint) && !aigisConfig.endpointValid;
+      } catch { /* leave aigisEnabled false */ }
     } catch (e) {
       log("error", "Schedule page: failed to load data", String(e));
       bannerEl.className = "orchestrator-banner stopped";
@@ -900,6 +955,42 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
           triggerPath: "/trigger-schema-evolve",
           triggerBody: null,
           runLabel: "Run Schema Evolve Now",
+          onDone: refresh,
+        }),
+      );
+    }
+
+    // ── Aigis Rollup Pipeline section ──
+    const aigisRollupState = status.aigisRollupPipeline;
+    if (aigisRollupState) {
+      contentEl.appendChild(
+        buildPipelineCard({
+          title: "Aigis Rollup",
+          state: aigisRollupState,
+          triggerPath: "/trigger-aigis-rollup",
+          triggerBody: null,
+          runLabel: "Run Aigis Rollup Now",
+          extraMeta: `${aigisRollupState.cadence} cadence`,
+          disabledNote: aigisEnabled
+            ? undefined
+            : aigisEndpointInvalid
+              ? "Aigis endpoint is invalid (must be a valid https URL) — fix it in Settings to enable this pipeline. Every run is currently skipped."
+              : "Connect Aigis in Settings to enable this pipeline — the schedule is configured but every run is currently skipped.",
+          describeResult: (body) => {
+            const outcome = (body as { outcome?: string } | null)?.outcome;
+            switch (outcome) {
+              case "drafted":
+                return "drafted a new pending update for review";
+              case "no-activity":
+                return "no activity in this period — nothing drafted";
+              case "disabled":
+                return "skipped — Aigis is not connected";
+              case "error":
+                return "run failed — see error below";
+              default:
+                return undefined;
+            }
+          },
           onDone: refresh,
         }),
       );

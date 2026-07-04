@@ -1,4 +1,4 @@
-import { listPendingUpdates, approveUpdate, approveUpdatesBatch, rejectUpdate, regeneratePendingUpdate, ApiError, type PendingUpdate } from "../lib/tauri-bridge.js";
+import { listPendingUpdates, approveUpdate, approveUpdatesBatch, rejectUpdate, regeneratePendingUpdate, resubmitAigisRollup, ApiError, type PendingUpdate, type AigisSubmissionOutcome } from "../lib/tauri-bridge.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { renderDiffHtml } from "../lib/diff.js";
 import { log } from "../lib/logger.js";
@@ -181,6 +181,9 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
         } else if (firstItem?.querybackSource) {
           batchLabel.textContent = `From chat: ${batchUpdates.length} theme(s)`;
           batchLabel.style.color = "var(--accent, #2563eb)";
+        } else if (firstItem?.aigisRollup) {
+          batchLabel.textContent = `Aigis rollup: ${batchUpdates.length} period(s)`;
+          batchLabel.style.color = "#0f766e";
         } else {
           batchLabel.textContent = `Dream run: ${batchDate} — ${batchUpdates.length} themes updated`;
         }
@@ -257,6 +260,14 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
             const results = await approveUpdatesBatch(ids);
             const staleCount = results.filter((r) => !r.ok && r.stale).length;
             const otherFailed = results.filter((r) => !r.ok && !r.stale).length;
+            // Aigis outcomes are per-item and the cards are about to be torn
+            // down by loadPending() below — summarize here instead (see the
+            // single-card path above, which keeps the card around so its own
+            // outcome/retry can be shown inline; a whole batch doesn't have
+            // that luxury without a lot more UI, so a summary line + "check
+            // Settings" pointer is the pragmatic version for now).
+            const aigisFailed = results.filter((r) => r.ok && r.aigisSubmission && !r.aigisSubmission.ok && !r.aigisSubmission.skipped).length;
+            const aigisSkipped = results.filter((r) => r.ok && r.aigisSubmission?.skipped).length;
 
             if (otherFailed) log("error", `Approved batch with ${otherFailed} failure(s): ${batchKey}`);
             if (staleCount) log("warn", `Approved batch: ${staleCount} item(s) skipped as stale: ${batchKey}`);
@@ -265,11 +276,20 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
             await loadPending(listEl);
             updateReviewBadge();
 
-            if (staleCount || otherFailed) {
-              const parts: string[] = [];
-              if (staleCount) parts.push(`${staleCount} skipped — page changed since proposed`);
-              if (otherFailed) parts.push(`${otherFailed} failed`);
-              showReviewSummary(`Approve: ${parts.join(", ")}. Approved the rest.`);
+            const summaryParts: string[] = [];
+            if (staleCount) summaryParts.push(`${staleCount} skipped — page changed since proposed`);
+            if (otherFailed) summaryParts.push(`${otherFailed} failed`);
+            // The Settings "Connect Aigis" card can only retry the single
+            // MOST RECENT submission record (see renderAigisLastSubmission
+            // in Settings.ts) — so when more than one failed in this batch,
+            // "retry from Settings" is only true for the last of them (fix
+            // round 1 #1: this copy previously claimed a retry affordance
+            // that didn't exist anywhere at all).
+            if (aigisFailed === 1) summaryParts.push(`1 Aigis submission failed — retry from Settings`);
+            else if (aigisFailed > 1) summaryParts.push(`${aigisFailed} Aigis submissions failed — the most recent can be retried from Settings`);
+            if (aigisSkipped) summaryParts.push(`${aigisSkipped} Aigis submission(s) skipped — not connected`);
+            if (summaryParts.length > 0) {
+              showReviewSummary(`Approve: ${summaryParts.join(", ")}. Approved the rest.`);
             }
           } catch (e: unknown) {
             // Request itself failed (network error, 500, etc.) — nothing was
@@ -364,6 +384,10 @@ function subKindBadge(update: PendingUpdate): SubKindBadgeSpec | null {
   }
   if (update.querybackSource) {
     return { cls: "type-chat", text: "From chat" };
+  }
+  if (update.aigisRollup) {
+    const period = new Date(update.aigisRollup.periodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    return { cls: "type-aigis", text: `Aigis rollup · ${period}` };
   }
   if (update.lintFix) {
     const label =
@@ -516,11 +540,20 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement, selection?: CardS
   regenerateBtn.textContent = "Regenerate";
   regenerateBtn.style.display = "none";
 
+  // Aigis retry — only ever shown for aigisRollup cards, and only once an
+  // approve's submission outcome comes back failed/skipped (see
+  // showAigisOutcome below).
+  const aigisRetryBtn = document.createElement("button");
+  aigisRetryBtn.className = "btn btn-secondary";
+  aigisRetryBtn.textContent = "Retry submission";
+  aigisRetryBtn.style.display = "none";
+
   actions.appendChild(approveBtn);
   actions.appendChild(editBtn);
   actions.appendChild(diffBtn);
   actions.appendChild(rejectBtn);
   actions.appendChild(regenerateBtn);
+  actions.appendChild(aigisRetryBtn);
 
   // Stale banner — shown when a 409 approve conflict tells us the page
   // changed since this update was proposed (see isStaleConflict above).
@@ -529,8 +562,51 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement, selection?: CardS
   staleBanner.textContent = "Stale — page changed since this was proposed";
   staleBanner.style.display = "none";
 
+  // Aigis submission outcome — shown after approving an aigisRollup card
+  // (success / failed-with-reason / skipped-not-connected). See
+  // approve.ts's aigisSubmission result and task-17 brief §B.
+  const aigisStatus = document.createElement("div");
+  aigisStatus.className = "aigis-submission-status";
+  aigisStatus.style.display = "none";
+
+  function showAigisOutcome(outcome: AigisSubmissionOutcome | undefined): void {
+    if (!outcome) return;
+    aigisStatus.style.display = "";
+    if (outcome.ok) {
+      aigisStatus.className = "aigis-submission-status success";
+      aigisStatus.textContent = "Submitted to Aigis.";
+      aigisRetryBtn.style.display = "none";
+    } else if (outcome.skipped) {
+      aigisStatus.className = "aigis-submission-status skipped";
+      aigisStatus.textContent = "Not submitted — Aigis isn't connected. Approved content is saved; connect Aigis in Settings, then retry.";
+      aigisRetryBtn.style.display = "";
+    } else {
+      aigisStatus.className = "aigis-submission-status failed";
+      aigisStatus.textContent = `Aigis submission failed: ${outcome.error ?? "unknown error"}`;
+      aigisRetryBtn.style.display = "";
+    }
+  }
+
+  aigisRetryBtn.addEventListener("click", async () => {
+    aigisRetryBtn.disabled = true;
+    aigisRetryBtn.classList.add("loading");
+    try {
+      await resubmitAigisRollup(update.id);
+      log("info", `Retried Aigis submission: ${update.theme}`);
+      showAigisOutcome({ ok: true });
+    } catch (e: unknown) {
+      log("error", `Aigis retry failed: ${update.theme}`, String(e));
+      const message = e instanceof ApiError ? e.message : String(e);
+      showAigisOutcome({ ok: false, error: message });
+    } finally {
+      aigisRetryBtn.disabled = false;
+      aigisRetryBtn.classList.remove("loading");
+    }
+  });
+
   card.appendChild(header);
   card.appendChild(staleBanner);
+  card.appendChild(aigisStatus);
   card.appendChild(label);
   card.appendChild(contentPreview);
   card.appendChild(diffContainer);
@@ -601,8 +677,23 @@ function buildCard(update: PendingUpdate, listEl: HTMLElement, selection?: CardS
     approveBtn.disabled = true;
     try {
       const edited = textarea.value !== update.proposedContent ? textarea.value : undefined;
-      await approveUpdate(update.id, edited);
+      const result = await approveUpdate(update.id, edited);
       log("info", `Approved update: ${update.theme}`, edited ? "with edits" : "as-is");
+
+      if (update.aigisRollup) {
+        // The pending is already gone server-side (approve removes it), but
+        // the card stays put here — with a full loadPending() it would
+        // vanish before its Aigis submission outcome/retry could be shown
+        // (see task-17 brief §B). Just retire its actions in place instead.
+        approveBtn.style.display = "none";
+        editBtn.style.display = "none";
+        rejectBtn.style.display = "none";
+        diffBtn.style.display = "none";
+        showAigisOutcome(result.aigisSubmission);
+        updateReviewBadge();
+        return;
+      }
+
       await loadPending(listEl);
       updateReviewBadge();
     } catch (e: unknown) {

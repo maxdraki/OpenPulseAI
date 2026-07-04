@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection, getAigisLastSubmission, resubmitAigisRollup } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { logoUrl } from "../lib/utils.js";
@@ -184,6 +184,111 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   claudeRow.id = "claude-desktop-row";
   connectionsCard.appendChild(claudeRow);
 
+  // Connect Aigis card
+  const aigisCard = document.createElement("div");
+  aigisCard.className = "card";
+  const aigisH3 = document.createElement("h3");
+  aigisH3.textContent = "Connect Aigis";
+  const aigisDesc = document.createElement("p");
+  aigisDesc.className = "form-help";
+  aigisDesc.textContent = "Connects OpenPulseAI to your aigis.bio candidate-knowledge journal. Nothing is auto-submitted — rollups stay review-gated in the Review tab, same as everything else.";
+  aigisCard.appendChild(aigisH3);
+  aigisCard.appendChild(aigisDesc);
+
+  const aigisSection = document.createElement("div");
+  aigisSection.className = "settings-section";
+
+  const endpointGroup = document.createElement("div");
+  endpointGroup.className = "form-group";
+  const endpointLabel = document.createElement("label");
+  endpointLabel.className = "form-label";
+  endpointLabel.htmlFor = "aigis-endpoint-input";
+  endpointLabel.textContent = "Endpoint";
+  const endpointInput = document.createElement("input");
+  endpointInput.className = "form-input";
+  endpointInput.type = "text";
+  endpointInput.id = "aigis-endpoint-input";
+  endpointInput.placeholder = "https://aigis.bio/mcp";
+  endpointGroup.appendChild(endpointLabel);
+  endpointGroup.appendChild(endpointInput);
+
+  const tokenGroup = document.createElement("div");
+  tokenGroup.className = "form-group";
+  const tokenLabel = document.createElement("label");
+  tokenLabel.className = "form-label";
+  tokenLabel.htmlFor = "aigis-token-input";
+  tokenLabel.textContent = "Auth token";
+  const tokenInput = document.createElement("input");
+  tokenInput.className = "form-input";
+  tokenInput.type = "password";
+  tokenInput.id = "aigis-token-input";
+  tokenGroup.appendChild(tokenLabel);
+  tokenGroup.appendChild(tokenInput);
+
+  const enabledGroup = document.createElement("div");
+  enabledGroup.className = "form-group form-group-checkbox";
+  const enabledLabel = document.createElement("label");
+  enabledLabel.className = "form-label";
+  enabledLabel.htmlFor = "aigis-enabled-toggle";
+  const enabledCheckbox = document.createElement("input");
+  enabledCheckbox.type = "checkbox";
+  enabledCheckbox.id = "aigis-enabled-toggle";
+  enabledLabel.appendChild(enabledCheckbox);
+  enabledLabel.appendChild(document.createTextNode(" Enabled"));
+  enabledGroup.appendChild(enabledLabel);
+
+  const aigisActionsRow = document.createElement("div");
+  aigisActionsRow.className = "actions-row";
+  const aigisSaveBtn = document.createElement("button");
+  aigisSaveBtn.className = "btn btn-primary";
+  aigisSaveBtn.id = "btn-aigis-save";
+  aigisSaveBtn.textContent = "Save";
+  const aigisTestBtn = document.createElement("button");
+  aigisTestBtn.className = "btn btn-secondary";
+  aigisTestBtn.id = "btn-aigis-test";
+  aigisTestBtn.textContent = "Test connection";
+  const aigisStatus = document.createElement("span");
+  aigisStatus.className = "validate-status";
+  aigisStatus.id = "aigis-status";
+  aigisActionsRow.appendChild(aigisSaveBtn);
+  aigisActionsRow.appendChild(aigisTestBtn);
+  aigisActionsRow.appendChild(aigisStatus);
+
+  // Last submission outcome — from vault/aigis/submissions.jsonl (see
+  // task-17 brief §B: "show the last submission outcome + timestamp"). A
+  // failed/skipped last submission gets an inline Retry button (fix round 1
+  // #1) — previously this line pointed users at "retry from Settings" with
+  // no retry affordance anywhere on this page, a dead end.
+  const aigisLastSubmissionRow = document.createElement("div");
+  aigisLastSubmissionRow.className = "actions-row";
+  aigisLastSubmissionRow.id = "aigis-last-submission-row";
+  aigisLastSubmissionRow.style.display = "none";
+
+  const aigisLastSubmission = document.createElement("p");
+  aigisLastSubmission.className = "form-help";
+  aigisLastSubmission.id = "aigis-last-submission";
+
+  const aigisRetryLastBtn = document.createElement("button");
+  aigisRetryLastBtn.className = "btn btn-secondary";
+  aigisRetryLastBtn.id = "btn-aigis-retry-last";
+  aigisRetryLastBtn.textContent = "Retry";
+  aigisRetryLastBtn.style.display = "none";
+
+  const aigisRetryLastStatus = document.createElement("span");
+  aigisRetryLastStatus.className = "validate-status";
+  aigisRetryLastStatus.id = "aigis-retry-last-status";
+
+  aigisLastSubmissionRow.appendChild(aigisLastSubmission);
+  aigisLastSubmissionRow.appendChild(aigisRetryLastBtn);
+  aigisLastSubmissionRow.appendChild(aigisRetryLastStatus);
+
+  aigisSection.appendChild(endpointGroup);
+  aigisSection.appendChild(tokenGroup);
+  aigisSection.appendChild(enabledGroup);
+  aigisSection.appendChild(aigisActionsRow);
+  aigisSection.appendChild(aigisLastSubmissionRow);
+  aigisCard.appendChild(aigisSection);
+
   // Mount everything
   container.textContent = "";
   container.appendChild(pageHeader);
@@ -191,6 +296,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   container.appendChild(credentialsCard);
   container.appendChild(modelCard);
   container.appendChild(connectionsCard);
+  container.appendChild(aigisCard);
   container.appendChild(vaultCard);
 
   // Load vault path
@@ -201,6 +307,12 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
 
   // Load Claude Desktop connection status
   await renderClaudeDesktopConnection();
+
+  // Load Aigis connection settings
+  await renderAigisCard();
+  aigisSaveBtn.addEventListener("click", handleAigisSave);
+  aigisTestBtn.addEventListener("click", handleAigisTest);
+  aigisRetryLastBtn.addEventListener("click", handleAigisRetryLast);
 
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl, hasStoredKey, keyHint);
@@ -517,5 +629,162 @@ async function renderClaudeDesktopConnection(): Promise<void> {
     hint.className = "connection-hint";
     hint.textContent = "Restart Claude Desktop to pick up the new config.";
     row.appendChild(hint);
+  }
+}
+
+async function renderAigisCard(): Promise<void> {
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+  const enabledToggle = document.getElementById("aigis-enabled-toggle") as HTMLInputElement;
+  const statusEl = document.getElementById("aigis-status")!;
+
+  try {
+    const config = await getAigisConfig();
+    endpointInput.value = config.endpoint;
+    tokenInput.placeholder = config.hasToken ? `Saved (${config.tokenHint}) — leave blank to keep` : "Enter your Aigis auth token";
+    // `config.enabled` is already the *effective* state (gated on endpointValid
+    // server-side) — a saved endpoint that fails the https-URL check shows the
+    // toggle off here even if the underlying yaml still says enabled:true, so
+    // the UI never claims "enabled" while the pipeline silently no-ops.
+    enabledToggle.checked = config.enabled;
+    if (config.endpoint && !config.endpointValid) {
+      statusEl.textContent = "This endpoint is invalid (must be a valid https URL) — Aigis is disabled until it's fixed.";
+      statusEl.className = "validate-status error";
+    }
+  } catch { /* use defaults */ }
+
+  await renderAigisLastSubmission();
+}
+
+/** Populates the "last submission" line from vault/aigis/submissions.jsonl —
+ *  the most recent Aigis rollup submission attempt, any outcome — and shows
+ *  an inline Retry button when that attempt didn't succeed (fix round 1 #1:
+ *  this used to point at "retry from the Review tab", but an approved batch
+ *  tears its cards down immediately, leaving no retry affordance anywhere). */
+async function renderAigisLastSubmission(): Promise<void> {
+  const row = document.getElementById("aigis-last-submission-row") as HTMLDivElement | null;
+  const el = document.getElementById("aigis-last-submission") as HTMLParagraphElement | null;
+  const retryBtn = document.getElementById("btn-aigis-retry-last") as HTMLButtonElement | null;
+  const retryStatus = document.getElementById("aigis-retry-last-status") as HTMLSpanElement | null;
+  if (!row || !el || !retryBtn) return;
+
+  retryStatus && (retryStatus.textContent = "");
+
+  try {
+    const last = await getAigisLastSubmission();
+    if (!last.found) {
+      row.style.display = "none";
+      return;
+    }
+    const when = last.submittedAt ? new Date(last.submittedAt).toLocaleString("en-GB", {
+      day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    }) : "unknown time";
+    // Distinguish "skipped — not connected" from a real submission failure
+    // (fix round 1 #2) rather than lumping both under "failed (...)".
+    const outcome = last.ok
+      ? "succeeded"
+      : last.skipped
+        ? "skipped (not connected)"
+        : `failed (${last.error ?? "unknown error"})`;
+    el.textContent = `Last Aigis submission: ${outcome} — ${when}${last.theme ? ` (${last.theme})` : ""}.`;
+    retryBtn.style.display = last.ok ? "none" : "";
+    if (last.updateId) retryBtn.dataset.updateId = last.updateId;
+    row.style.display = "";
+  } catch {
+    row.style.display = "none";
+  }
+}
+
+async function handleAigisRetryLast(): Promise<void> {
+  const retryBtn = document.getElementById("btn-aigis-retry-last") as HTMLButtonElement;
+  const retryStatus = document.getElementById("aigis-retry-last-status")!;
+  const updateId = retryBtn.dataset.updateId;
+  if (!updateId) return;
+
+  retryBtn.classList.add("loading");
+  retryBtn.disabled = true;
+  retryStatus.textContent = "Retrying...";
+  retryStatus.className = "validate-status";
+
+  try {
+    await resubmitAigisRollup(updateId);
+    log("info", "Retried Aigis submission from Settings", updateId);
+    // Refresh the whole line from the new submissions.jsonl record first —
+    // it clears this status span — then layer the transient "Submitted"
+    // confirmation on top so it isn't immediately wiped out.
+    await renderAigisLastSubmission();
+    retryStatus.textContent = "Submitted";
+    retryStatus.className = "validate-status success";
+  } catch (e: any) {
+    const message = e?.message ?? String(e);
+    log("error", "Aigis retry failed from Settings", message);
+    retryStatus.textContent = `Failed: ${message}`;
+    retryStatus.className = "validate-status error";
+  } finally {
+    retryBtn.classList.remove("loading");
+    retryBtn.disabled = false;
+  }
+}
+
+async function handleAigisSave(): Promise<void> {
+  const saveBtn = document.getElementById("btn-aigis-save") as HTMLButtonElement;
+  const statusEl = document.getElementById("aigis-status")!;
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+  const enabledToggle = document.getElementById("aigis-enabled-toggle") as HTMLInputElement;
+
+  saveBtn.classList.add("loading");
+  saveBtn.disabled = true;
+  statusEl.textContent = "";
+  statusEl.className = "validate-status";
+
+  try {
+    await saveAigisConfig(endpointInput.value.trim(), tokenInput.value || undefined, "aigis_submit_journal", enabledToggle.checked);
+    log("info", "Aigis settings saved", endpointInput.value);
+    statusEl.textContent = "Saved";
+    statusEl.className = "validate-status success";
+    tokenInput.value = "";
+    await renderAigisCard();
+    setTimeout(() => { statusEl.textContent = ""; }, 2500);
+  } catch (e: any) {
+    log("error", "Failed to save Aigis settings", e?.message ?? String(e));
+    statusEl.textContent = `Error: ${e?.message ?? e}`;
+    statusEl.className = "validate-status error";
+  } finally {
+    saveBtn.classList.remove("loading");
+    saveBtn.disabled = false;
+  }
+}
+
+async function handleAigisTest(): Promise<void> {
+  const testBtn = document.getElementById("btn-aigis-test") as HTMLButtonElement;
+  const statusEl = document.getElementById("aigis-status")!;
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+
+  testBtn.classList.add("loading");
+  testBtn.disabled = true;
+  statusEl.textContent = "Testing...";
+  statusEl.className = "validate-status";
+
+  try {
+    const result = await testAigisConnection(endpointInput.value.trim() || undefined, tokenInput.value || undefined);
+    if (result.ok) {
+      statusEl.textContent = result.hasSubmitTool
+        ? `✓ Connected — ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} found`
+        : `✓ Connected, but the submit tool wasn't found among: ${result.tools.join(", ") || "(none)"}`;
+      statusEl.className = "validate-status success";
+      log("info", "Aigis connection test passed", `${result.tools.length} tools`);
+    } else {
+      statusEl.textContent = result.error ?? "Connection failed";
+      statusEl.className = "validate-status error";
+      log("warn", "Aigis connection test failed", result.error ?? "unknown error");
+    }
+  } catch (e: any) {
+    statusEl.textContent = `Error: ${e?.message ?? e}`;
+    statusEl.className = "validate-status error";
+  } finally {
+    testBtn.classList.remove("loading");
+    testBtn.disabled = false;
   }
 }

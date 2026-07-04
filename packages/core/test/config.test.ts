@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig, DEFAULT_CONFIG } from "../src/config.js";
+import { loadConfig, DEFAULT_CONFIG, isValidAigisEndpoint } from "../src/config.js";
 
 describe("Config", () => {
   let tempDir: string;
@@ -80,4 +80,121 @@ describe("Config", () => {
     expect(config.llm.provider).toBe("anthropic");
   });
 
+});
+
+describe("Aigis config", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-config-aigis-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("is undefined when no aigis section exists", async () => {
+    const config = await loadConfig(tempDir);
+    expect(config.aigis).toBeUndefined();
+  });
+
+  it("loads a fully-specified aigis section", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: https://aigis.bio/mcp\n  authToken: secret-token\n  submitTool: custom_submit\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis).toEqual({
+      endpoint: "https://aigis.bio/mcp",
+      authToken: "secret-token",
+      submitTool: "custom_submit",
+      enabled: true,
+    });
+  });
+
+  it("defaults submitTool to aigis_submit_journal when absent", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: https://aigis.bio/mcp\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis?.submitTool).toBe("aigis_submit_journal");
+  });
+
+  it("defaults enabled to false when absent", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: https://aigis.bio/mcp\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis?.enabled).toBe(false);
+  });
+
+  it("leaves authToken undefined when absent", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: https://aigis.bio/mcp\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis?.authToken).toBeUndefined();
+  });
+
+  it("forces enabled false when the endpoint is not a valid https URL", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: not-a-url\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis?.enabled).toBe(false);
+  });
+
+  it("forces enabled false for an http (non-https) endpoint", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  endpoint: http://aigis.bio/mcp\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis?.enabled).toBe(false);
+  });
+
+  it("is undefined when the aigis section has no endpoint at all", async () => {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      `aigis:\n  enabled: true\n`,
+      "utf-8"
+    );
+
+    const config = await loadConfig(tempDir);
+    expect(config.aigis).toBeUndefined();
+  });
+});
+
+describe("isValidAigisEndpoint", () => {
+  it("accepts a well-formed https URL", () => {
+    expect(isValidAigisEndpoint("https://aigis.bio/mcp")).toBe(true);
+  });
+
+  it("rejects an http URL", () => {
+    expect(isValidAigisEndpoint("http://aigis.bio/mcp")).toBe(false);
+  });
+
+  it("rejects a malformed URL", () => {
+    expect(isValidAigisEndpoint("not-a-url")).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isValidAigisEndpoint("")).toBe(false);
+  });
 });
