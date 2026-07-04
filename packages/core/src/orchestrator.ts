@@ -67,6 +67,20 @@ export interface SchemaEvolutionPipelineState {
   schedule: Schedule;
 }
 
+/** What actually happened on a single Aigis-rollup pipeline run, from the
+ *  dream-package generator's point of view: either it wrote a new pending
+ *  update, or the period had no activity to draft from at all (see
+ *  `runAigisRollup` in `packages/dream/src/aigis-rollup.ts`). */
+export type AigisRollupRunOutcome = "drafted" | "no-activity";
+
+/** The full outcome space for `Orchestrator.triggerAigisRollup()` — extends
+ *  `AigisRollupRunOutcome` with the two ways a trigger can resolve without
+ *  ever reaching the generator: gated off (`isAigisEnabled()` false / absent)
+ *  or the generator threw. Exists so a manual "Run Now" in the UI can show
+ *  something more informative than a uniform "done" regardless of what
+ *  actually happened — see task-16 review round 1, issue 4. */
+export type AigisRollupOutcome = AigisRollupRunOutcome | "disabled" | "error";
+
 /** Scheduled draft of a candidate-relevant journal update for aigis.bio's
  *  remote knowledge store (see `AigisConfig` in types.ts). This pipeline only
  *  drafts a pending update — submission happens separately, on approval. */
@@ -101,8 +115,12 @@ export interface OrchestratorCallbacks {
   /** Run the Schema Evolution Pipeline. Resolves when done. */
   runSchemaEvolutionPipeline(): Promise<void>;
   /** Run the Aigis rollup pipeline (drafts a pending update only — never
-   *  submits). Resolves when done. */
-  runAigisRollupPipeline(): Promise<void>;
+   *  submits). Resolves with whether a pending update was actually drafted
+   *  ("drafted") or the period had no activity to draft from ("no-activity") —
+   *  surfaced through `Orchestrator.triggerAigisRollup()`'s return value so a
+   *  manual "Run Now" doesn't look identical whether it drafted, found
+   *  nothing, or (via the gating in `runAigisRollup`) was skipped entirely. */
+  runAigisRollupPipeline(): Promise<AigisRollupRunOutcome>;
   /** Return currently known skill names. */
   getSkillNames(): Promise<string[]>;
   /**
@@ -981,10 +999,14 @@ export class Orchestrator {
    * the rollup pipeline only reads hot/cold journals, the vault git log, and
    * warm theme content — it never touches `_facts/` or any dream-pipeline
    * state, so there's nothing for it to race with the Dream Pipeline over.
+   *
+   * Returns the outcome so a manual "Run Now" (`triggerAigisRollup`) can tell
+   * the UI whether it actually drafted something, found no activity, was
+   * gated off, or failed — see `AigisRollupOutcome`'s doc comment.
    */
-  private async runAigisRollup(): Promise<void> {
+  private async runAigisRollup(): Promise<AigisRollupOutcome> {
     const ap = this.state.aigisRollupPipeline;
-    if (ap.running) return;
+    if (ap.running) return "error";
 
     if (this.callbacks.isAigisEnabled) {
       let enabled = false;
@@ -996,39 +1018,53 @@ export class Orchestrator {
       }
       if (!enabled) {
         await vaultLog("info", "[orchestrator] Skipping Aigis rollup — aigis.bio connection not enabled");
-        return;
+        return "disabled";
       }
     } else {
       // No host wiring at all — safer to no-op than to silently draft
       // rollups nobody configured a connection for (see isAigisEnabled? doc).
       await vaultLog("info", "[orchestrator] Skipping Aigis rollup — host did not provide isAigisEnabled");
-      return;
+      return "disabled";
     }
 
     const startedAt = new Date().toISOString();
     ap.running = true;
     await saveState(this.vaultRoot, this.state);
+    let outcome: AigisRollupOutcome;
     try {
       await vaultLog("info", "[orchestrator] Running Aigis rollup pipeline");
-      await this.callbacks.runAigisRollupPipeline();
+      outcome = await this.callbacks.runAigisRollupPipeline();
       ap.lastRun = startedAt;
       ap.lastResult = "success";
       delete ap.lastError;
-      await vaultLog("info", "[orchestrator] Aigis rollup pipeline succeeded");
+      await vaultLog("info", `[orchestrator] Aigis rollup pipeline succeeded (${outcome})`);
     } catch (err) {
-      ap.lastRun = startedAt;
+      // Deliberately do NOT advance ap.lastRun here, unlike the other
+      // scheduled pipelines above. This pipeline's period is window-based
+      // (computeRollupPeriod uses lastRun as periodStart) — advancing lastRun
+      // on a failed run would permanently skip the window between the last
+      // success and this failure. Leaving lastRun untouched means the next
+      // run (triggered by the same cron schedule — no missed-run catch-up
+      // exists for this pipeline, so a persistent failure retries once per
+      // scheduled tick rather than tight-looping) recomputes a period that
+      // still starts from the last success and simply re-covers the
+      // now-extended window.
       ap.lastResult = "error";
       ap.lastError = String(err);
       await vaultLog("error", "[orchestrator] Aigis rollup pipeline failed", String(err));
+      outcome = "error";
     } finally {
       ap.running = false;
       await saveState(this.vaultRoot, this.state);
     }
+    return outcome;
   }
 
-  /** Manually trigger the Aigis rollup pipeline (still gated on isAigisEnabled). */
-  async triggerAigisRollup(): Promise<void> {
-    await this.runAigisRollup();
+  /** Manually trigger the Aigis rollup pipeline (still gated on isAigisEnabled).
+   *  Returns the outcome for the caller (e.g. the UI's "Run Now" button) to
+   *  surface — see `AigisRollupOutcome`. */
+  async triggerAigisRollup(): Promise<AigisRollupOutcome> {
+    return this.runAigisRollup();
   }
 
   getAigisRollupPipelineState(): AigisRollupPipelineState {

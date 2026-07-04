@@ -23,7 +23,13 @@ async function main() {
   const state = await loadState(VAULT_ROOT);
   const { cadence, lastRun } = state.aigisRollupPipeline;
 
-  await runAigisRollup(vault, provider, model, { cadence, lastRun });
+  const drafted = await runAigisRollup(vault, provider, model, { cadence, lastRun });
+  // Printed on its own stdout line so the host process (packages/ui/server.ts's
+  // `runAigisRollupPipeline` callback, spawning this CLI as a subprocess) can tell
+  // whether this run actually drafted a pending update or found no activity —
+  // surfaced through Orchestrator.triggerAigisRollup()'s return value for the
+  // Schedule page's "Run Now" feedback (see task-16 review round 1, issue 4).
+  console.log(`OPENPULSE_ROLLUP_OUTCOME=${drafted ? "drafted" : "no-activity"}`);
 }
 
 /**

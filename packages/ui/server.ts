@@ -607,8 +607,8 @@ app.post("/api/trigger-schema-evolve", async (_req, res) => {
 
 app.post("/api/trigger-aigis-rollup", async (_req, res) => {
   try {
-    await orchestrator.triggerAigisRollup();
-    res.json({ ok: true });
+    const outcome = await orchestrator.triggerAigisRollup();
+    res.json({ ok: true, outcome });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1582,12 +1582,18 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
       timeout: 300000,
     });
   },
-  async runAigisRollupPipeline(): Promise<void> {
+  async runAigisRollupPipeline(): Promise<"drafted" | "no-activity"> {
     const rollupBin = join(process.cwd(), "..", "dream", "dist", "aigis-rollup-cli.js");
-    await execFileAsync("node", [rollupBin], {
+    const { stdout } = await execFileAsync("node", [rollupBin], {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
+    // The CLI prints its outcome on its own stdout line (see aigis-rollup-cli.ts's
+    // main()) since this callback's return value is what surfaces through
+    // Orchestrator.triggerAigisRollup() to the Schedule page's "Run Now" feedback.
+    // Default to "drafted" if the marker is ever missing — matches this pipeline's
+    // pre-existing behavior of treating a clean subprocess exit as success.
+    return stdout.includes("OPENPULSE_ROLLUP_OUTCOME=no-activity") ? "no-activity" : "drafted";
   },
   async isAigisEnabled(): Promise<boolean> {
     const config = await loadConfig(VAULT_ROOT);

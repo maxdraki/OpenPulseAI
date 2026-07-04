@@ -219,7 +219,7 @@ describe("Dream barrier — failed collectors must not count as 'ran'", () => {
       async runLintPipeline() {},
       async runCompactionPipeline() {},
       async runSchemaEvolutionPipeline() {},
-      async runAigisRollupPipeline() {},
+      async runAigisRollupPipeline() { return "drafted" as const; },
       async getSkillNames() {
         return ["collector-a", "collector-b"];
       },
@@ -274,7 +274,7 @@ describe("runCompact — defers while the dream pipeline is active (race fix, ta
         cb.compactionCalls++;
       },
       async runSchemaEvolutionPipeline() {},
-      async runAigisRollupPipeline() {},
+      async runAigisRollupPipeline() { return "drafted" as const; },
       async getSkillNames() {
         return [];
       },
@@ -415,6 +415,7 @@ describe("Aigis rollup pipeline — gated on aigis.enabled", () => {
       async runSchemaEvolutionPipeline() {},
       async runAigisRollupPipeline() {
         cb.rollupCalls++;
+        return "drafted" as const;
       },
       async getSkillNames() {
         return [];
@@ -434,26 +435,29 @@ describe("Aigis rollup pipeline — gated on aigis.enabled", () => {
     const orch = new Orchestrator(tmp, callbacks);
     await orch.start();
 
-    await orch.triggerAigisRollup();
+    const outcome = await orch.triggerAigisRollup();
     expect(callbacks.rollupCalls).toBe(0);
+    expect(outcome).toBe("disabled");
 
     const state = orch.getAigisRollupPipelineState();
     expect(state.lastResult).toBe("never");
     await orch.stop();
   });
 
-  it("runs the callback when isAigisEnabled() reports true", async () => {
+  it("runs the callback when isAigisEnabled() reports true, and surfaces its outcome", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-enabled-"));
-    const callbacks = baseCallbacks({
-      async isAigisEnabled() {
-        return true;
-      },
-    });
+    const callbacks: OrchestratorCallbacks & { rollupCalls: number } = baseCallbacks();
+    callbacks.isAigisEnabled = async () => true;
+    callbacks.runAigisRollupPipeline = async () => {
+      callbacks.rollupCalls++;
+      return "no-activity" as const;
+    };
     const orch = new Orchestrator(tmp, callbacks);
     await orch.start();
 
-    await orch.triggerAigisRollup();
+    const outcome = await orch.triggerAigisRollup();
     expect(callbacks.rollupCalls).toBe(1);
+    expect(outcome).toBe("no-activity");
 
     const state = orch.getAigisRollupPipelineState();
     expect(state.lastResult).toBe("success");
@@ -466,12 +470,13 @@ describe("Aigis rollup pipeline — gated on aigis.enabled", () => {
     const orch = new Orchestrator(tmp, callbacks);
     await orch.start();
 
-    await orch.triggerAigisRollup();
+    const outcome = await orch.triggerAigisRollup();
     expect(callbacks.rollupCalls).toBe(0);
+    expect(outcome).toBe("disabled");
     await orch.stop();
   });
 
-  it("records a failure result when the callback throws", async () => {
+  it("records a failure result when the callback throws, and surfaces the 'error' outcome", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-fail-"));
     const callbacks = baseCallbacks({
       async isAigisEnabled() {
@@ -484,10 +489,48 @@ describe("Aigis rollup pipeline — gated on aigis.enabled", () => {
     const orch = new Orchestrator(tmp, callbacks);
     await orch.start();
 
-    await orch.triggerAigisRollup();
+    const outcome = await orch.triggerAigisRollup();
+    expect(outcome).toBe("error");
     const state = orch.getAigisRollupPipelineState();
     expect(state.lastResult).toBe("error");
     expect(state.lastError).toContain("boom");
+    await orch.stop();
+  });
+
+  it("does NOT advance lastRun on a failed run — the next run must re-cover the same window", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-fail-lastrun-"));
+    let shouldFail = true;
+    const callbacks = baseCallbacks({
+      async isAigisEnabled() {
+        return true;
+      },
+      async runAigisRollupPipeline() {
+        if (shouldFail) throw new Error("boom");
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    // Pre-seed a prior successful lastRun so we can verify a failure doesn't move it.
+    await orch.updateAigisRollupSchedule({ time: "17:00", days: ["sun"] });
+    const before = orch.getAigisRollupPipelineState();
+    expect(before.lastRun).toBeNull();
+
+    await orch.triggerAigisRollup();
+    const afterFailure = orch.getAigisRollupPipelineState();
+    expect(afterFailure.lastResult).toBe("error");
+    // lastRun must remain unchanged (still null here) — a failed run must not
+    // advance the window, or the gap between the last success and this
+    // failure would be permanently skipped.
+    expect(afterFailure.lastRun).toBeNull();
+
+    // Now let the next run succeed — lastRun should advance normally.
+    shouldFail = false;
+    await orch.triggerAigisRollup();
+    const afterSuccess = orch.getAigisRollupPipelineState();
+    expect(afterSuccess.lastResult).toBe("success");
+    expect(afterSuccess.lastRun).not.toBeNull();
+
     await orch.stop();
   });
 

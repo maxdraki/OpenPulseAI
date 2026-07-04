@@ -55,7 +55,13 @@ export interface RollupInputs {
   commitSubjects: string[];
   /** Warm theme names touched in the period, ordered by change frequency (most-changed first). */
   themesTouched: string[];
+  /** Journal entries kept for the prompt, oldest-first. When the window's entries alone exceed
+   *  `MAX_INPUT_CHARS`, this holds only the MOST RECENT entries that fit (see `journalTruncated`). */
   journalEntries: ActivityEntry[];
+  /** True when `journalEntries` omits older entries from the window because the full set of
+   *  journal text alone exceeded `MAX_INPUT_CHARS` — surfaced in the prompt so the LLM knows the
+   *  window it's summarizing is partial. */
+  journalTruncated: boolean;
   /** Current content of the most relevant touched themes, truncated to fit `MAX_INPUT_CHARS`. */
   themeExcerpts: ThemeExcerpt[];
   /** True when there is anything at all to draft from (a commit or a journal entry) — an empty
@@ -121,11 +127,51 @@ export async function readJournalEntriesInWindow(
 }
 
 /**
+ * Keeps only the MOST RECENT entries from `entries` (assumed sorted
+ * oldest-first, as `readJournalEntriesInWindow` returns them) that fit within
+ * `maxChars` of combined `.log` text — recency matters most for a rollup, so
+ * when the window's journal text alone exceeds the budget we drop from the
+ * older end rather than truncating mid-window arbitrarily. Returns entries
+ * still in oldest-first order and a flag indicating whether anything was
+ * dropped.
+ */
+function selectRecentJournalEntries(
+  entries: ActivityEntry[],
+  maxChars: number
+): { selected: ActivityEntry[]; truncated: boolean } {
+  const totalChars = entries.reduce((sum, e) => sum + e.log.length, 0);
+  if (totalChars <= maxChars) {
+    return { selected: entries, truncated: false };
+  }
+
+  const selected: ActivityEntry[] = [];
+  let used = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (used + entry.log.length > maxChars) {
+      // Doesn't fit whole — for the single newest entry, include a truncated
+      // slice rather than dropping it outright so at least some evidence
+      // from the most recent activity always survives the cap.
+      if (selected.length === 0 && maxChars - used > 0) {
+        selected.unshift({ ...entry, log: entry.log.slice(0, maxChars - used) });
+      }
+      break;
+    }
+    selected.unshift(entry);
+    used += entry.log.length;
+  }
+  return { selected, truncated: true };
+}
+
+/**
  * Gathers everything the rollup prompt needs: vault git history for the
  * window, journal entries in the window, and current content of the themes
  * that history touched (prioritized by change count, capped at
  * `MAX_INPUT_CHARS` total so a long window can't blow the model's context).
- * Entirely read-only.
+ * Journal entries are truncated FIRST (keeping the most recent — see
+ * `selectRecentJournalEntries`) since they're the most concrete evidence;
+ * whatever budget remains after that goes to theme excerpts. Entirely
+ * read-only.
  */
 export async function gatherRollupInputs(
   vault: Vault,
@@ -145,7 +191,9 @@ export async function gatherRollupInputs(
     .sort((a, b) => b[1] - a[1])
     .map(([theme]) => theme);
 
-  const journalEntries = await readJournalEntriesInWindow(vault, periodStart, periodEnd);
+  const allJournalEntries = await readJournalEntriesInWindow(vault, periodStart, periodEnd);
+  const { selected: journalEntries, truncated: journalTruncated } =
+    selectRecentJournalEntries(allJournalEntries, MAX_INPUT_CHARS);
 
   const journalChars = journalEntries.reduce((sum, e) => sum + e.log.length, 0);
   let budget = MAX_INPUT_CHARS - journalChars;
@@ -165,8 +213,9 @@ export async function gatherRollupInputs(
     commitSubjects,
     themesTouched,
     journalEntries,
+    journalTruncated,
     themeExcerpts,
-    hasActivity: commits.length > 0 || journalEntries.length > 0,
+    hasActivity: commits.length > 0 || allJournalEntries.length > 0,
   };
 }
 
@@ -192,6 +241,10 @@ export function buildAigisRollupPrompt(
         .join("\n\n")
     : "(none)";
 
+  const journalTruncationNote = inputs.journalTruncated
+    ? "\n(Note: this period's journal entries exceeded the input budget — only the MOST RECENT entries are shown below; earlier entries from this period were omitted. Treat this as a partial window.)\n"
+    : "";
+
   const themesText = inputs.themeExcerpts.length > 0
     ? inputs.themeExcerpts.map((t) => `#### ${t.theme}\n${t.content}`).join("\n\n")
     : "(none)";
@@ -205,7 +258,7 @@ You MUST only include information that is explicitly present in the inputs below
 ## Vault commit history for this period
 ${commitsText}
 
-## Journal entries for this period
+## Journal entries for this period${journalTruncationNote}
 ${entriesText}
 
 ## Warm theme pages touched this period (current content, for context)
@@ -221,12 +274,10 @@ Produce a Markdown journal update with these sections, in this order:
 Return ONLY the Markdown content. No code fences, no commentary before or after.`;
 }
 
-/** Derives the pending update's theme name from the period end date — this
- *  doubles as the "same period" identity used to fold repeated drafts (see
- *  `replaceExistingRollupPending`): two runs landing on the same calendar day
- *  represent the same rollup period even if their exact `periodStart`/
- *  `periodEnd` timestamps differ by seconds (e.g. a retried or manually
- *  re-triggered run). */
+/** Derives the pending update's theme name from the period end date, purely for a
+ *  human-readable label in the review queue. Fold-vs-stack de-duplication is handled
+ *  separately by `replaceExistingRollupPending`, which compares actual period overlap
+ *  (not this label) — see that function's doc comment. */
 function rollupThemeName(periodEnd: string): string {
   return `aigis-rollup-${periodEnd.slice(0, 10)}`;
 }
@@ -251,10 +302,25 @@ function buildAigisRollupUpdate(
   };
 }
 
-/** Removes any existing pending update for the same rollup period (see `rollupThemeName`) —
- *  a fold, not a stack: re-running the pipeline for a period that already has a draft replaces
- *  it rather than piling up duplicates. Tolerates unreadable/corrupt pending files by skipping them. */
-async function replaceExistingRollupPending(vault: Vault, periodEnd: string): Promise<void> {
+/**
+ * Removes any existing aigisRollup pending update whose period OVERLAPS the new one —
+ * a fold, not a stack: at most one rollup draft in the queue per overlapping window.
+ *
+ * Matching on the exact same calendar day (the old behavior) misses the case where a
+ * later run computes an EXTENDED window that overlaps but doesn't share a periodEnd
+ * with an earlier failed-then-retried or manually re-triggered draft (e.g. a run on
+ * 07-01 draft periodStart=06-24..06-30 fails to advance lastRun — see the orchestrator's
+ * runAigisRollup — and a rerun on 07-03 computes 06-24..07-03, whose periodEnd is a
+ * different calendar day but still overlaps the earlier draft's window). Overlap test:
+ * `periodStart < otherPeriodEnd && periodEnd > otherPeriodStart`.
+ *
+ * Tolerates unreadable/corrupt pending files by skipping them.
+ */
+async function replaceExistingRollupPending(
+  vault: Vault,
+  periodStart: string,
+  periodEnd: string
+): Promise<void> {
   let files: string[];
   try {
     files = await readdir(vault.pendingDir);
@@ -262,14 +328,21 @@ async function replaceExistingRollupPending(vault: Vault, periodEnd: string): Pr
     return;
   }
 
-  const theme = rollupThemeName(periodEnd);
+  const newStartMs = Date.parse(periodStart);
+  const newEndMs = Date.parse(periodEnd);
+
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     const filePath = join(vault.pendingDir, file);
     try {
       const raw = await readFile(filePath, "utf-8");
       const parsed = JSON.parse(raw) as PendingUpdate;
-      if (parsed.aigisRollup && parsed.theme === theme) {
+      if (!parsed.aigisRollup) continue;
+
+      const otherStartMs = Date.parse(parsed.aigisRollup.periodStart);
+      const otherEndMs = Date.parse(parsed.aigisRollup.periodEnd);
+      const overlaps = newStartMs < otherEndMs && newEndMs > otherStartMs;
+      if (overlaps) {
         await unlink(filePath);
       }
     } catch {
@@ -321,7 +394,7 @@ export async function runAigisRollup(
     const response = await provider.complete({ model, temperature: 0.2, maxTokens: 3072, prompt });
     const content = stripCodeFences(response).trim();
 
-    await replaceExistingRollupPending(vault, periodEnd);
+    await replaceExistingRollupPending(vault, periodStart, periodEnd);
     const update = buildAigisRollupUpdate(periodStart, periodEnd, cadence, content);
     await writeFile(join(vault.pendingDir, `${update.id}.json`), JSON.stringify(update, null, 2), "utf-8");
 
