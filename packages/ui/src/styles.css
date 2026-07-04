@@ -1030,6 +1030,15 @@ a.wiki-link:hover {
   max-width: 420px;
 }
 
+/* Shown when a packaged/SEA build's search index has no local embedding
+ * model available (see core's isEmbeddingsAvailable + GET /api/search's
+ * `embeddings` flag) — degrades to keyword-only search silently otherwise. */
+.themes-search-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+
 .theme-search-result {
   cursor: pointer;
 }

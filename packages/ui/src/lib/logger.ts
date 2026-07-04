@@ -5,7 +5,7 @@
  * LogLevel/LogEntry types intentionally duplicated from @openpulse/core
  * (browser can't import Node packages). Keep in sync with core/src/logger.ts.
  */
-import { isTauri, tauriInvoke, apiPost, apiGet } from "./tauri-bridge.js";
+import { apiPost, apiGet } from "./tauri-bridge.js";
 
 export type LogLevel = "info" | "warn" | "error";
 
@@ -25,14 +25,12 @@ export async function log(level: LogLevel, message: string, detail?: string): Pr
   };
 
   try {
-    if (isTauri) {
-      await tauriInvoke("append_log", { entry });
-    } else {
-      // Routed through apiPost (not a raw fetch) so it picks up the same
-      // Authorization header as every other /api call — a bare fetch here
-      // would 401 once the dev-server's bearer guard is on by default.
-      await apiPost("/logs", entry as unknown as Record<string, unknown>);
-    }
+    // Routed through apiPost (not a raw fetch) so it picks up the same
+    // Authorization header as every other /api call — a bare fetch here
+    // would 401 once the dev-server's bearer guard is on by default. Same
+    // path under Tauri now too (see tauri-bridge.ts's resolveApiBase) — the
+    // desktop app talks to this same local server over fetch.
+    await apiPost("/logs", entry as unknown as Record<string, unknown>);
   } catch {
     console.warn("[logger] Failed to write log:", message);
   }
@@ -40,9 +38,6 @@ export async function log(level: LogLevel, message: string, detail?: string): Pr
 
 export async function getLogs(level?: LogLevel): Promise<LogEntry[]> {
   try {
-    if (isTauri) {
-      return tauriInvoke("get_logs", { level: level ?? null });
-    }
     const path = level ? `/logs?level=${level}` : `/logs`;
     return await apiGet(path);
   } catch {

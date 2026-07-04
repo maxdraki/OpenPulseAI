@@ -5,7 +5,7 @@ import {
   triggerOrchestratorRun,
   toggleOrchestratorSchedule,
   getAigisConfig,
-  apiBase,
+  apiBaseUrl,
   authHeaders,
   type OrchestratorSchedule,
   type OrchestratorCollector,
@@ -598,9 +598,9 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
     runBtn.textContent = "Running…";
     resultEl.textContent = "";
     try {
-      const res = await fetch(`${apiBase}${opts.triggerPath}`, {
+      const res = await fetch(`${await apiBaseUrl()}${opts.triggerPath}`, {
         method: "POST",
-        headers: { ...(opts.triggerBody ? { "Content-Type": "application/json" } : {}), ...authHeaders() },
+        headers: { ...(opts.triggerBody ? { "Content-Type": "application/json" } : {}), ...(await authHeaders()) },
         body: opts.triggerBody ? JSON.stringify(opts.triggerBody) : undefined,
       });
       if (!res.ok) {
