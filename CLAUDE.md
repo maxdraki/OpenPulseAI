@@ -30,15 +30,16 @@ pnpm workspace monorepo with 4 packages:
 - **Config**: `~/OpenPulseAI/config.yaml` with llm provider/model/apiKey/baseUrl and an optional `aigis` section (`endpoint`, `authToken?`, `submitTool` default `aigis_submit_journal`, `enabled`) for the outbound connection to aigis.bio's remote MCP server — see `packages/core/src/config.ts`'s `isValidAigisEndpoint`/`parseAigisConfig` (a non-https endpoint forces `enabled: false`). Skills are filesystem-based with optional `vault/skill-config/<name>.json` for user settings.
 - **UI**: No framework. Vanilla TS with custom CSS (Shoelace loaded for theme CSS only, not used as components). Hash-based routing. Use `confirmDialog()` from `src/lib/dialog.ts` instead of `window.confirm()`. Dev API server in `server.ts` bridges UI to vault filesystem and starts the orchestrator.
 - **ESM**: All packages use `"type": "module"`. Imports use `.js` extensions.
-- **Tauri**: v2 desktop wrapper exists in `src-tauri/` with Rust backend. Vault I/O, config, skills discovery, sidecar spawning. Not yet tested end-to-end.
+- **Tauri**: v2 desktop wrapper in `src-tauri/`. Rust's ONLY job now is to keep the UI/API server sidecar (`openpulse-ui-server`, built from `packages/ui/server.ts`) alive and hand the webview its address — `src-tauri/src/server_sidecar.rs` spawns it once at startup (long-lived, via the shell plugin's `spawn()`/event-stream API, not the one-shot `.output()` the old `sidecar.rs` used), parses its `OPENPULSE_SERVER_READY port=<n>` stdout line, restarts it up to 3× with backoff if it dies unexpectedly, and sends SIGTERM (not `CommandChild::kill()`, which is SIGKILL) on real app exit (`RunEvent::ExitRequested`). Before spawning it probes `<vaultRoot>/ui-server.json` + a real HTTP request to avoid double-spawning over a dev-run `npx tsx server.ts`. The ONE Tauri command left is `get_server_info` → `{ port, token }` (port from readiness, token from `~/OpenPulseAI/ui-token`); `vault.rs`/`config.rs`/`skills.rs`/`discovery.rs` and the old `sidecar.rs` one-shot commands are gone — `packages/ui/src/lib/tauri-bridge.ts` now talks to the server directly over `fetch` in both runtimes (base URL fixed in the browser, resolved via `get_server_info` and cached in Tauri). `server.ts`'s `resolveBin()`/`resolveBuiltinSkillsDir()` read `OPENPULSE_BIN_DIR`/`OPENPULSE_BUILTIN_SKILLS_DIR` (set by the supervisor) so its dream/skills/aigis-rollup subprocess spawns and skills discovery work with the sidecar's cwd instead of a dev-only `process.cwd()`-relative guess. System tray + close-to-hide window lifecycle (`src-tauri/src/tray.rs`) unchanged: closing the main window hides it instead of exiting; tray menu offers "Open OpenPulseAI" / "Quit"; macOS toggles Dock visibility (`ActivationPolicy`) on hide/show — window hide/show never touches the sidecar. Not yet tested end-to-end with a real display server (see `.superpowers/sdd/task-20-report.md`'s manual verification steps).
 
 ## Build & test
 
 ```bash
 pnpm install && pnpm build    # Build all packages
-pnpm vitest run               # Run all tests (~3188 tests)
+pnpm vitest run               # Run all tests (~3632 tests)
 pnpm build:sea:mcp            # SEA binary for MCP server
 pnpm build:sea:skills         # SEA binary for skills CLI
+pnpm build:sea:ui             # UI API server bundled as a Tauri sidecar (src-tauri/sidecars/)
 pnpm build:desktop            # Full Tauri desktop build
 ```
 
@@ -50,11 +51,13 @@ npx tsx server.ts &            # API server on :3001 (starts orchestrator)
 npx vite --port 1420 &        # UI on :1420
 ```
 
+`server.ts` exports `startServer(opts)` (port/vaultRoot/host/tokenPath overrides) and is also the always-on Tauri sidecar entry point — `npx tsx server.ts` and the bundled binary (`scripts/build-sidecar-ui.sh` → `src-tauri/sidecars/openpulse-ui-server-<triple>`) both boot through the same function, just sourcing options from different places (no args/env for dev; `OPENPULSE_PORT`/`OPENPULSE_VAULT`/`--port` for the sidecar). On EADDRINUSE it tries the next 10 ports; once listening it prints `OPENPULSE_SERVER_READY port=<port>` to stdout (parsed by the Rust supervisor) and writes `<vaultRoot>/ui-server.json` (`{port, pid, startedAt}`, mode 0600) as a fallback discovery file for the webview. SIGTERM/SIGINT stop the orchestrator, close the server, and remove the discovery file before exiting 0.
+
 Both processes read the same auto-generated bearer token from `~/OpenPulseAI/ui-token` (`packages/ui/dev-token.ts`) — whichever starts first creates it, so there's no required startup order. `server.ts`'s `/api` guard is always on (no more "unset token → open").
 
 ## Current state
 
-- 4 packages, 3544 tests passing
+- 4 packages, 3632 tests passing
 - MCP server works with Claude Desktop (one-click setup from Settings page)
 - Wiki-style dream pipeline with multi-tag classification and cross-references
 - Orchestrator with visual Schedule page and barrier-based auto-triggering

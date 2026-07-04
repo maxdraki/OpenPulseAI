@@ -93,6 +93,7 @@ export {
   cosineSimilarity,
   setEmbedderForTests,
   embedTexts,
+  isEmbeddingsAvailable,
   EMBEDDING_MODEL,
   EMBEDDING_DIM,
 } from "./search/embeddings.js";

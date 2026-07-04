@@ -2,6 +2,7 @@
 // All dynamic values are either escaped (escapeHtml) or rendered through marked
 // which handles HTML escaping. No user-supplied input reaches innerHTML.
 import { getWarmThemes, searchThemes, type WarmTheme, type ThemeSearchResult } from "../lib/tauri-bridge.js";
+
 import { renderMarkdown } from "../lib/markdown.js";
 import { escapeHtml } from "../lib/utils.js";
 
@@ -83,6 +84,7 @@ export async function renderThemes(container: HTMLElement): Promise<void> {
     + '</div>'
     + '<div class="themes-search-box">'
     + '<input type="search" id="themes-search-input" class="form-input themes-search-input" placeholder="Search themes...">'
+    + '<p id="themes-search-note" class="themes-search-note" hidden>Semantic search is unavailable in this build — showing keyword matches only.</p>'
     + '</div>'
     + '<div id="themes-list"><div class="empty-state"><p>Loading...</p></div></div>';
 
@@ -90,6 +92,7 @@ export async function renderThemes(container: HTMLElement): Promise<void> {
 
   const list = document.getElementById("themes-list")!;
   const searchInput = document.getElementById("themes-search-input") as HTMLInputElement;
+  const searchNote = document.getElementById("themes-search-note") as HTMLElement;
 
   let allThemes: WarmTheme[] = [];
   try {
@@ -107,6 +110,7 @@ export async function renderThemes(container: HTMLElement): Promise<void> {
     const query = searchInput.value.trim();
 
     if (!query) {
+      searchNote.hidden = true;
       renderThemeCards(allThemes, list);
       return;
     }
@@ -114,10 +118,12 @@ export async function renderThemes(container: HTMLElement): Promise<void> {
     debounceTimer = setTimeout(async () => {
       const seq = ++requestSeq;
       try {
-        const results = await searchThemes(query);
+        const { results, embeddings } = await searchThemes(query);
         if (seq !== requestSeq) return; // a newer keystroke's request already landed
+        searchNote.hidden = embeddings;
         renderSearchResults(results, list, (theme) => {
           searchInput.value = "";
+          searchNote.hidden = true;
           const match = allThemes.filter((t) => t.theme === theme);
           renderThemeCards(match.length > 0 ? match : allThemes, list);
         });

@@ -10,6 +10,7 @@
     "build:sea:mcp": "bash scripts/build-sea.sh mcp-server",
     "build:sea:dream": "bash scripts/build-sea.sh dream",
     "build:sea:skills": "npx esbuild packages/core/dist/skills/cli.js --bundle --platform=node --target=node20 --format=cjs --external:@huggingface/transformers --outfile=dist/skills.cjs && echo 'Skills CLI bundled to dist/skills.cjs — run: node dist/skills.cjs'",
+    "build:sea:ui": "bash scripts/build-sidecar-ui.sh",
     "dev:desktop": "cargo tauri dev",
     "build:desktop": "bash scripts/build-desktop.sh"
   },

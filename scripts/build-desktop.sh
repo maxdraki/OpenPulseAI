@@ -7,6 +7,15 @@ pnpm build
 
 echo "==> Building SEA sidecars..."
 bash scripts/build-sea.sh dream
+# aigis-rollup-cli.js is its own sidecar so server.ts's OPENPULSE_BIN_DIR
+# resolution (see server.ts's resolveBin) can invoke it directly in a
+# packaged app instead of a process.cwd()-relative dev path — see
+# .superpowers/sdd/task-20-brief.md hazard #1.
+bash scripts/build-sea.sh dream packages/dream/dist/aigis-rollup-cli.js aigis-rollup
+# UI API server sidecar (server.ts) — its own script bundles it (esbuild
+# transpiles the TS entry directly) AND copies it into src-tauri/sidecars/
+# with the target-triple suffix, so nothing further to do for it below.
+bash scripts/build-sidecar-ui.sh
 # Skills CLI is now in core — bundle it directly with esbuild into dist/skills
 npx esbuild packages/core/dist/skills/cli.js \
   --bundle \
@@ -56,6 +65,13 @@ if [ -f "dist/dream" ]; then
 elif [ -f "dist/dream.cjs" ]; then
   echo "WARNING: Using .cjs bundle (not a true SEA). Node.js required on PATH."
   cp dist/dream.cjs "src-tauri/sidecars/openpulse-dream-${TRIPLE}"
+fi
+
+if [ -f "dist/aigis-rollup" ]; then
+  cp dist/aigis-rollup "src-tauri/sidecars/openpulse-aigis-rollup-${TRIPLE}"
+elif [ -f "dist/aigis-rollup.cjs" ]; then
+  echo "WARNING: Using .cjs bundle (not a true SEA). Node.js required on PATH."
+  cp dist/aigis-rollup.cjs "src-tauri/sidecars/openpulse-aigis-rollup-${TRIPLE}"
 fi
 
 if [ -f "dist/skills" ]; then

@@ -61,7 +61,6 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 
 // Dev API server base URL
 const API_BASE = "http://localhost:3001/api";
-export const apiBase = API_BASE;
 
 // The dev-server's bearer guard is on by default (see server.ts) — vite.config.ts
 // reads the same auto-generated token file and exposes it here so the browser can
@@ -69,20 +68,93 @@ export const apiBase = API_BASE;
 // stray import in a non-vite test context).
 const DEV_TOKEN = (import.meta.env.VITE_OPENPULSE_TOKEN as string | undefined) ?? "";
 
-/** Auth header for /api calls. Exported so call sites that can't go through
- *  apiGet/apiPost (e.g. a raw fetch for a non-JSON response) still attach it. */
-export function authHeaders(): Record<string, string> {
-  return DEV_TOKEN ? { Authorization: `Bearer ${DEV_TOKEN}` } : {};
+// --- Transport layer ---
+//
+// Everything — Tauri or browser — talks to the SAME local Express server
+// (`packages/ui/server.ts`) over plain `fetch` now. There used to be a
+// per-command fork here (`isTauri ? tauriInvoke(...) : fetch(...)`) backed
+// by ~15 Tauri commands in `src-tauri/src/*.rs`; those commands are gone
+// (see `.superpowers/sdd/task-20-brief.md` — the server owns all vault/
+// skills/dream logic, and the Rust side is now just a supervisor that keeps
+// the server sidecar alive, see `src-tauri/src/server_sidecar.rs`). Several
+// of those old Tauri branches called commands (`append_log`, `get_logs`)
+// that were never even registered in `main.rs` — they would have thrown the
+// moment anyone hit them in a packaged build.
+//
+// The remaining difference between the two runtimes is just how the base
+// URL + auth token are discovered:
+//   - Browser/dev: fixed `http://localhost:3001/api` + the vite-injected
+//     token (unchanged from before).
+//   - Tauri: the server binds an OS-assigned port (see `server.ts`'s
+//     `listenWithFallback`) and generates its own token file — the ONE
+//     remaining Tauri command, `get_server_info`, hands both to the webview
+//     on first use. The result is cached for the lifetime of the page.
+
+interface ResolvedApiBase {
+  base: string;
+  headers: Record<string, string>;
 }
 
-// --- Transport layer (exported for logger.ts) ---
+/**
+ * Builds the (memoizing) base-URL/auth resolver. Exported so tests can drive
+ * it with a fake `invokeFn` and a fake `tauri` flag without needing a real
+ * Tauri webview or `window.__TAURI_INTERNALS__` — the module-level
+ * `resolveApiBase` below is just this, wired to the real `isTauri`/`invoke`.
+ *
+ * Never caches a *failed* lookup: `get_server_info` can legitimately fail
+ * once (e.g. called before the Rust supervisor has parsed the server's
+ * readiness line yet) and should be retried on the next call rather than
+ * wedging every subsequent API call for the rest of the page's lifetime.
+ */
+export function createApiBaseResolver(
+  tauri: boolean,
+  invokeFn: () => Promise<{ port: number; token: string }>,
+  fallback: ResolvedApiBase,
+): () => Promise<ResolvedApiBase> {
+  let inFlight: Promise<ResolvedApiBase> | null = null;
 
-export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  return invoke<T>(cmd, args);
+  return function resolveApiBase(): Promise<ResolvedApiBase> {
+    if (!tauri) return Promise.resolve(fallback);
+    if (inFlight) return inFlight;
+
+    const promise: Promise<ResolvedApiBase> = invokeFn()
+      .then((info) => {
+        const headers: Record<string, string> = info.token ? { Authorization: `Bearer ${info.token}` } : {};
+        return { base: `http://127.0.0.1:${info.port}/api`, headers };
+      })
+      .catch((err) => {
+        inFlight = null; // don't wedge on a transient failure — allow a retry
+        throw err;
+      });
+    inFlight = promise;
+    return promise;
+  };
+}
+
+const DEV_HEADERS: Record<string, string> = DEV_TOKEN ? { Authorization: `Bearer ${DEV_TOKEN}` } : {};
+
+const resolveApiBase = createApiBaseResolver(
+  isTauri,
+  () => invoke<{ port: number; token: string }>("get_server_info"),
+  { base: API_BASE, headers: DEV_HEADERS },
+);
+
+/** Auth header for /api calls. Exported so call sites that can't go through
+ *  apiGet/apiPost (e.g. a raw fetch for a non-JSON response) still attach it. */
+export async function authHeaders(): Promise<Record<string, string>> {
+  return (await resolveApiBase()).headers;
+}
+
+/** Base URL for `/api/*` requests — `http://localhost:3001/api` in the
+ *  browser/dev, `http://127.0.0.1:<port>/api` in Tauri (port learned from
+ *  `get_server_info`, see `createApiBaseResolver` above). */
+export async function apiBaseUrl(): Promise<string> {
+  return (await resolveApiBase()).base;
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  const { base, headers } = await resolveApiBase();
+  const res = await fetch(`${base}${path}`, { headers });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -114,9 +186,10 @@ async function parseErrorBody(res: Response): Promise<unknown> {
 }
 
 export async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const { base, headers } = await resolveApiBase();
+  const res = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new ApiError(res.status, await parseErrorBody(res));
@@ -126,23 +199,15 @@ export async function apiPost<T>(path: string, body: Record<string, unknown>): P
 // --- Public API ---
 
 export async function getVaultHealth(): Promise<VaultHealth> {
-  if (isTauri) return tauriInvoke("get_vault_health");
   return apiGet("/vault-health");
 }
 
-/**
- * Latest Dream Pipeline run's token/call/retry totals, for the Dashboard.
- * Dev-server only for now (the pipeline always runs as a subprocess reading
- * vault/logs — there's no Tauri command for this yet); Tauri callers get a
- * graceful "no data" result rather than an error.
- */
+/** Latest Dream Pipeline run's token/call/retry totals, for the Dashboard. */
 export async function getDreamUsage(): Promise<DreamUsage> {
-  if (isTauri) return { usage: null, at: null };
   return apiGet("/dream-usage");
 }
 
 export async function listPendingUpdates(): Promise<PendingUpdate[]> {
-  if (isTauri) return tauriInvoke("list_pending_updates");
   return apiGet("/pending-updates");
 }
 
@@ -150,10 +215,6 @@ export async function listPendingUpdates(): Promise<PendingUpdate[]> {
  *  approved update was an `aigisRollup` pending (see `POST /api/approve-update`'s
  *  `aigisSubmission` field) — undefined for every other update kind. */
 export async function approveUpdate(id: string, editedContent?: string): Promise<{ aigisSubmission?: AigisSubmissionOutcome }> {
-  if (isTauri) {
-    await tauriInvoke("approve_update", { id, editedContent: editedContent ?? null });
-    return {};
-  }
   const result = await apiPost<{ ok: boolean; aigisSubmission?: AigisSubmissionOutcome }>("/approve-update", { id, editedContent: editedContent ?? null });
   return { aigisSubmission: result.aigisSubmission };
 }
@@ -168,7 +229,6 @@ export interface BatchApproveResult {
 /** Retries a previously failed/skipped Aigis submission for an already-
  *  approved `aigisRollup` update (see `POST /api/aigis-resubmit/:updateId`). */
 export async function resubmitAigisRollup(updateId: string): Promise<void> {
-  if (isTauri) throw new Error("Aigis resubmit is not yet available in the desktop app");
   await apiPost(`/aigis-resubmit/${encodeURIComponent(updateId)}`, {});
 }
 
@@ -187,7 +247,6 @@ export interface AigisLastSubmission {
 /** Last recorded Aigis submission outcome (any update) — backs the Settings
  *  "Connect Aigis" card's status line. */
 export async function getAigisLastSubmission(): Promise<AigisLastSubmission> {
-  if (isTauri) return { found: false };
   return apiGet("/aigis-last-submission");
 }
 
@@ -195,58 +254,35 @@ export async function getAigisLastSubmission(): Promise<AigisLastSubmission> {
  * Approves a whole "Approve All" batch as one server-side action so it lands
  * as a single vault-git commit listing every theme (see
  * `.superpowers/sdd/task-5-brief.md` §B and `POST /api/approve-batch`) rather
- * than one commit per item. The desktop app has no Tauri command for this
- * yet, so it falls back to approving sequentially item-by-item there — each
- * one still gets written, just without the single-commit guarantee (the
- * Tauri backend has no vault-git integration at all yet).
+ * than one commit per item.
  */
 export async function approveUpdatesBatch(ids: string[]): Promise<BatchApproveResult[]> {
-  if (isTauri) {
-    const out: BatchApproveResult[] = [];
-    for (const id of ids) {
-      try {
-        await tauriInvoke("approve_update", { id, editedContent: null });
-        out.push({ id, ok: true });
-      } catch {
-        out.push({ id, ok: false });
-      }
-    }
-    return out;
-  }
   return apiPost("/approve-batch", { ids });
 }
 
 export async function rejectUpdate(id: string): Promise<void> {
-  if (isTauri) return tauriInvoke("reject_update", { id });
   await apiPost("/reject-update", { id });
 }
 
 /**
  * Regenerates a stale pending update against the current on-disk page (see
- * `POST /api/pending/:id/regenerate`). Dev-server only for now, consistent
- * with how Chat is gated — the desktop app has no direct path to the Dream
- * pipeline's LLM merge step yet.
+ * `POST /api/pending/:id/regenerate`).
  */
 export async function regeneratePendingUpdate(id: string): Promise<PendingUpdate> {
-  if (isTauri) throw new Error("Regenerate is not yet available in the desktop app");
   const result = await apiPost<{ ok: boolean; update: PendingUpdate }>(`/pending/${encodeURIComponent(id)}/regenerate`, {});
   return result.update;
 }
 
 export async function triggerDream(): Promise<string> {
-  if (isTauri) return tauriInvoke("trigger_dream");
   const result = await apiPost<{ output: string }>("/trigger-dream", {});
   return result.output;
 }
 
 export async function getLlmConfig(): Promise<{ provider: string; model: string; apiKey?: string; hasKey?: boolean; keyHint?: string; baseUrl?: string }> {
-  if (isTauri) return tauriInvoke("get_llm_config");
-  // Dev-server path returns { hasKey, keyHint } instead of the raw apiKey.
   return apiGet("/llm-config");
 }
 
 export async function saveLlmSettings(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<void> {
-  if (isTauri) return tauriInvoke("save_llm_settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
   await apiPost("/save-llm-settings", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
@@ -262,7 +298,6 @@ export interface ValidateModelsResult {
 }
 
 export async function validateAndListModels(provider: string, apiKey?: string, baseUrl?: string): Promise<ValidateModelsResult> {
-  if (isTauri) return tauriInvoke("validate_and_list_models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
   return apiPost("/validate-models", { provider, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
@@ -273,7 +308,6 @@ export interface TestModelResult {
 }
 
 export async function testModel(provider: string, model: string, apiKey?: string, baseUrl?: string): Promise<TestModelResult> {
-  if (isTauri) return tauriInvoke("test_model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
   return apiPost("/test-model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
@@ -295,35 +329,24 @@ export interface AigisTestResult {
   error?: string;
 }
 
-/**
- * The "Connect Aigis" foundation (outbound MCP client to aigis.bio) is
- * dev-server-only for now — no Tauri command exists yet, same posture as
- * regeneratePendingUpdate/triggerDream above until the desktop app grows a
- * vault-git-style integration for this.
- */
 export async function getAigisConfig(): Promise<AigisConfigInfo> {
-  if (isTauri) return { endpoint: "", submitTool: "aigis_submit_journal", enabled: false, endpointValid: false, hasToken: false };
   return apiGet("/aigis-config");
 }
 
 export async function saveAigisConfig(endpoint: string, authToken: string | undefined, submitTool: string, enabled: boolean): Promise<void> {
-  if (isTauri) throw new Error("Connecting Aigis is not yet available in the desktop app");
   await apiPost("/aigis-config", { endpoint, authToken: authToken ?? null, submitTool, enabled });
 }
 
 export async function testAigisConnection(endpoint?: string, authToken?: string, submitTool?: string): Promise<AigisTestResult> {
-  if (isTauri) return { ok: false, tools: [], hasSubmitTool: false, error: "Not available in the desktop app yet" };
   return apiPost("/aigis-test", { endpoint: endpoint ?? null, authToken: authToken ?? null, submitTool: submitTool ?? null });
 }
 
 export async function getVaultPath(): Promise<string> {
-  if (isTauri) return tauriInvoke("get_vault_path");
   const result = await apiGet<{ path: string }>("/vault-path");
   return result.path;
 }
 
 export async function getProjectPath(): Promise<string> {
-  if (isTauri) return tauriInvoke("get_project_path");
   const result = await apiGet<{ path: string }>("/project-path");
   return result.path;
 }
@@ -335,17 +358,14 @@ export interface ClaudeDesktopStatus {
 }
 
 export async function getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
-  if (isTauri) return tauriInvoke("get_claude_desktop_status");
   return apiGet("/claude-desktop-status");
 }
 
 export async function connectClaudeDesktop(): Promise<void> {
-  if (isTauri) return tauriInvoke("connect_claude_desktop");
   await apiPost("/claude-desktop-connect", {});
 }
 
 export async function disconnectClaudeDesktop(): Promise<void> {
-  if (isTauri) return tauriInvoke("disconnect_claude_desktop");
   await apiPost("/claude-desktop-disconnect", {});
 }
 
@@ -358,8 +378,8 @@ export interface HotEntry {
 }
 
 export async function deleteHotEntry(id: string): Promise<void> {
-  if (isTauri) return tauriInvoke("delete_hot_entry", { id });
-  const res = await fetch(`${API_BASE}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  const { base, headers } = await resolveApiBase();
+  const res = await fetch(`${base}/hot-entries/${encodeURIComponent(id)}`, { method: "DELETE", headers });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -376,12 +396,10 @@ export interface WarmTheme {
 }
 
 export async function getHotEntries(): Promise<HotEntry[]> {
-  if (isTauri) return tauriInvoke("get_hot_entries");
   return apiGet("/hot-entries");
 }
 
 export async function getWarmThemes(): Promise<WarmTheme[]> {
-  if (isTauri) return tauriInvoke("get_warm_themes");
   return apiGet("/warm-themes");
 }
 
@@ -393,15 +411,22 @@ export interface ThemeSearchResult {
   rank: number;
 }
 
+/** Result of the Themes page's search box — `embeddings: false` means the
+ *  local hybrid index is running keyword (FTS)-only in this process, e.g. a
+ *  packaged/SEA build (see `core`'s `isEmbeddingsAvailable` and
+ *  `GET /api/search`'s response shape). */
+export interface ThemeSearchResponse {
+  results: ThemeSearchResult[];
+  embeddings: boolean;
+}
+
 /** Backs the Themes page's search box — ranked snippet search over the
- *  local hybrid index (`GET /api/search`). Not yet wired up for Tauri. */
-export async function searchThemes(query: string): Promise<ThemeSearchResult[]> {
-  if (isTauri) throw new Error("Search is not yet available in the desktop app");
+ *  local hybrid index (`GET /api/search`). */
+export async function searchThemes(query: string): Promise<ThemeSearchResponse> {
   return apiGet(`/search?q=${encodeURIComponent(query)}`);
 }
 
 export async function getBacklinks(): Promise<Record<string, string[]>> {
-  if (isTauri) return {};
   return apiGet("/backlinks");
 }
 
@@ -424,17 +449,14 @@ export interface SkillData {
 }
 
 export async function getSkills(): Promise<SkillData[]> {
-  if (isTauri) return tauriInvoke("get_skills");
   return apiGet("/skills");
 }
 
 export async function getSkillConfig(name: string): Promise<Record<string, string>> {
-  if (isTauri) return tauriInvoke("get_skill_config", { name });
   return apiGet(`/skill-config/${name}`);
 }
 
 export async function saveSkillConfig(name: string, config: Record<string, string>): Promise<void> {
-  if (isTauri) return tauriInvoke("save_skill_config", { name, config });
   await apiPost(`/skill-config/${name}`, config);
 }
 
@@ -443,7 +465,6 @@ export async function fetchConfluenceSpaces(
   email: string,
   token: string
 ): Promise<Array<{ key: string; name: string }>> {
-  if (isTauri) throw new Error("Confluence space discovery is not yet available in the desktop app");
   return apiPost("/confluence-activity/spaces", { domain, email, token });
 }
 
@@ -454,7 +475,6 @@ export interface GithubRepoInfo {
 }
 
 export async function checkGithubRepo(url: string): Promise<GithubRepoInfo> {
-  if (isTauri) throw new Error("GitHub repo check is not yet available in the desktop app");
   return apiPost("/github-activity/check-repo", { url });
 }
 
@@ -464,7 +484,6 @@ export interface ObsidianVault {
 }
 
 export async function fetchObsidianVaults(): Promise<{ vaults: ObsidianVault[]; error?: string }> {
-  if (isTauri) throw new Error("Obsidian vault discovery is not yet available in the desktop app");
   return apiGet("/obsidian-notes/vaults");
 }
 
@@ -481,7 +500,6 @@ export async function chatSendMessage(
   sessionId?: string,
   model?: string,
 ): Promise<ChatResponse> {
-  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
   return apiPost("/chat", { message, sessionId, model });
 }
 
@@ -493,7 +511,6 @@ export interface ChatModelOptions {
 }
 
 export async function fetchChatModels(): Promise<ChatModelOptions> {
-  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
   return apiGet("/chat/models");
 }
 
@@ -516,7 +533,6 @@ export interface ChatSessionFull {
 }
 
 export async function listChatSessions(): Promise<ChatSessionMeta[]> {
-  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
   const r = await apiGet<{ sessions: ChatSessionMeta[] }>("/chat/sessions");
   return r.sessions;
 }
@@ -528,35 +544,31 @@ export interface ChatSessionLoadResult {
 }
 
 export async function getChatSession(id: string): Promise<ChatSessionLoadResult> {
-  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
   return apiGet(`/chat/sessions/${encodeURIComponent(id)}`);
 }
 
 export async function deleteChatSession(id: string): Promise<void> {
-  if (isTauri) throw new Error("Chat is not yet available in the desktop app");
-  const res = await fetch(`${API_BASE}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  const { base, headers } = await resolveApiBase();
+  const res = await fetch(`${base}/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE", headers });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
 export async function installDependency(dep: string): Promise<{ success: boolean; output: string }> {
-  if (isTauri) return tauriInvoke("install_dependency", { dep });
   return apiPost("/install-dependency", { dep });
 }
 
 export async function installSkill(repo: string): Promise<string> {
-  if (isTauri) return tauriInvoke("install_skill", { repo });
   const result = await apiPost<{ output: string }>("/skills/install", { repo });
   return result.output;
 }
 
 export async function removeSkill(name: string): Promise<void> {
-  if (isTauri) return tauriInvoke("remove_skill", { name });
-  const res = await fetch(`${API_BASE}/skills/${name}`, { method: "DELETE", headers: authHeaders() });
+  const { base, headers } = await resolveApiBase();
+  const res = await fetch(`${base}/skills/${name}`, { method: "DELETE", headers });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 export async function runSkillNow(name: string): Promise<string> {
-  if (isTauri) return tauriInvoke("run_skill", { name });
   const result = await apiPost<{ output: string }>(`/skills/${name}/run`, {});
   return result.output;
 }
@@ -632,22 +644,18 @@ export interface OrchestratorStatus {
 }
 
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {
-  if (isTauri) return tauriInvoke("get_orchestrator_status");
   return apiGet("/orchestrator-status");
 }
 
 export async function updateSchedule(skill: string, schedules: OrchestratorSchedule[], enabled: boolean): Promise<void> {
-  if (isTauri) return tauriInvoke("update_schedule", { skill, schedules, enabled });
   await apiPost("/orchestrator-schedule", { skill, schedules, enabled });
 }
 
 export async function triggerOrchestratorRun(target: string): Promise<string> {
-  if (isTauri) return tauriInvoke("trigger_orchestrator_run", { target });
   const result = await apiPost<{ output: string }>("/orchestrator-run", { target });
   return result.output;
 }
 
 export async function toggleOrchestratorSchedule(target: string, enabled: boolean): Promise<void> {
-  if (isTauri) return tauriInvoke("toggle_orchestrator_schedule", { target, enabled });
   await apiPost("/orchestrator-toggle", { target, enabled });
 }

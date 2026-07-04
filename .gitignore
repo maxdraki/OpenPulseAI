@@ -6,6 +6,7 @@ target/
 .worktrees/
 src-tauri/target/
 src-tauri/sidecars/
+src-tauri/gen/
 .claude/settings.local.json
 
 # User data and secrets — never commit these
