@@ -560,6 +560,15 @@ export interface OrchestratorSchemaEvolutionPipeline {
   schedule: { time: string; days: string[] };
 }
 
+export interface OrchestratorAigisRollupPipeline {
+  running: boolean;
+  lastRun: string | null;
+  lastResult: "success" | "error" | "never";
+  lastError?: string;
+  schedule: { time: string; days: string[] };
+  cadence: "weekly" | "monthly";
+}
+
 export interface OrchestratorStatus {
   running: boolean;
   lastHeartbeat: string;
@@ -568,6 +577,7 @@ export interface OrchestratorStatus {
   lintPipeline?: OrchestratorLintPipeline;
   compactionPipeline?: OrchestratorCompactionPipeline;
   schemaEvolutionPipeline?: OrchestratorSchemaEvolutionPipeline;
+  aigisRollupPipeline?: OrchestratorAigisRollupPipeline;
 }
 
 export async function getOrchestratorStatus(): Promise<OrchestratorStatus> {

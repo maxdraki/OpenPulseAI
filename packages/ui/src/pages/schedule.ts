@@ -4,6 +4,7 @@ import {
   updateSchedule,
   triggerOrchestratorRun,
   toggleOrchestratorSchedule,
+  getAigisConfig,
   apiBase,
   authHeaders,
   type OrchestratorSchedule,
@@ -490,6 +491,10 @@ interface PipelineCardOpts {
   runLabel: string;
   extraMeta?: string;
   onDone: () => void | Promise<void>;
+  /** When set, the card renders this note and disables the "Run Now" button —
+   *  used for pipelines whose schedule exists but is currently a no-op (e.g.
+   *  the Aigis rollup pipeline before aigis.bio is connected). */
+  disabledNote?: string;
 }
 
 function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
@@ -552,6 +557,15 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
     section.appendChild(errEl);
   }
 
+  if (opts.disabledNote) {
+    const noteEl = document.createElement("div");
+    noteEl.style.marginTop = "0.35rem";
+    noteEl.style.fontSize = "0.78rem";
+    noteEl.style.color = "var(--text-tertiary)";
+    noteEl.textContent = opts.disabledNote;
+    section.appendChild(noteEl);
+  }
+
   const runBtn = document.createElement("button");
   runBtn.type = "button";
   runBtn.className = "btn btn-ghost btn-sm";
@@ -559,6 +573,7 @@ function buildPipelineCard(opts: PipelineCardOpts): HTMLElement {
   runBtn.style.padding = "0.2rem 0.6rem";
   runBtn.style.marginTop = "0.35rem";
   runBtn.textContent = opts.runLabel;
+  runBtn.disabled = Boolean(opts.disabledNote);
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
     const origLabel = runBtn.textContent;
@@ -631,8 +646,14 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
   async function refresh() {
     let status: OrchestratorStatus;
     let skills: SkillData[];
+    let aigisEnabled = false;
     try {
       [status, skills] = await Promise.all([getOrchestratorStatus(), getSkills()]);
+      // Best-effort — if this fails, the Aigis rollup card just shows as disabled,
+      // which is the safe default and matches the pipeline's own gating.
+      try {
+        aigisEnabled = (await getAigisConfig()).enabled;
+      } catch { /* leave aigisEnabled false */ }
     } catch (e) {
       log("error", "Schedule page: failed to load data", String(e));
       bannerEl.className = "orchestrator-banner stopped";
@@ -900,6 +921,25 @@ export async function renderSchedule(container: HTMLElement): Promise<void> {
           triggerPath: "/trigger-schema-evolve",
           triggerBody: null,
           runLabel: "Run Schema Evolve Now",
+          onDone: refresh,
+        }),
+      );
+    }
+
+    // ── Aigis Rollup Pipeline section ──
+    const aigisRollupState = status.aigisRollupPipeline;
+    if (aigisRollupState) {
+      contentEl.appendChild(
+        buildPipelineCard({
+          title: "Aigis Rollup",
+          state: aigisRollupState,
+          triggerPath: "/trigger-aigis-rollup",
+          triggerBody: null,
+          runLabel: "Run Aigis Rollup Now",
+          extraMeta: `${aigisRollupState.cadence} cadence`,
+          disabledNote: aigisEnabled
+            ? undefined
+            : "Connect Aigis in Settings to enable this pipeline — the schedule is configured but every run is currently skipped.",
           onDone: refresh,
         }),
       );

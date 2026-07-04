@@ -605,6 +605,15 @@ app.post("/api/trigger-schema-evolve", async (_req, res) => {
   }
 });
 
+app.post("/api/trigger-aigis-rollup", async (_req, res) => {
+  try {
+    await orchestrator.triggerAigisRollup();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/api/backlinks", async (_req, res) => {
   const backlinksPath = join(warmDir, "_backlinks.md");
   try {
@@ -1572,6 +1581,17 @@ const orchestratorCallbacks: OrchestratorCallbacks = {
       env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
       timeout: 300000,
     });
+  },
+  async runAigisRollupPipeline(): Promise<void> {
+    const rollupBin = join(process.cwd(), "..", "dream", "dist", "aigis-rollup-cli.js");
+    await execFileAsync("node", [rollupBin], {
+      env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT },
+      timeout: 300000,
+    });
+  },
+  async isAigisEnabled(): Promise<boolean> {
+    const config = await loadConfig(VAULT_ROOT);
+    return Boolean(config.aigis?.enabled);
   },
   async getSkillNames(): Promise<string[]> {
     const builtinDir = join(process.cwd(), "..", "core", "builtin-skills");
