@@ -235,11 +235,11 @@ OpenPulse draws from [Andrej Karpathy's LLM Wiki pattern](https://gist.github.co
 - [x] 12 bundled skills (GitHub, GitLab, Confluence, Jira, Linear, Slack, Trello, Todoist, Sentry, Google, Folder Watcher, Weekly Rollup)
 - [x] GitHub repo watcher — paste any github.com or GHE URL to watch specific repos
 - [x] Confluence space picker — discover and select spaces via API
-- [x] Tauri v2 desktop wrapper (Rust backend built, needs E2E testing)
+- [x] Tauri v2 desktop wrapper — Rust spawns the UI/API server as a persistent sidecar (`src-tauri/src/server_sidecar.rs`) and keeps it alive; the webview talks to it directly over `fetch`. System tray + close-to-hide. Not yet E2E tested with a real display server.
 - [x] One-click Claude Desktop connection
 - [x] Light/dark/system theme toggle
+- [x] System tray (Tauri)
 - [ ] Theme lint/health check
-- [ ] System tray (Tauri)
 - [ ] AI-guided skill setup
 - [ ] Notifications
 

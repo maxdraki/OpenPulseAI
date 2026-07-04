@@ -33,6 +33,7 @@
     "externalBin": [
       "sidecars/openpulse-dream",
       "sidecars/openpulse-skills",
+      "sidecars/openpulse-aigis-rollup",
       "sidecars/openpulse-ui-server"
     ],
     "resources": {
