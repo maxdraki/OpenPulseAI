@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Vault } from "../src/vault.js";
-import { ensureVaultRepo, commitVault } from "../src/vault-git.js";
+import { ensureVaultRepo, commitVault, vaultLogSince } from "../src/vault-git.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -167,5 +167,101 @@ describe("vault-git", () => {
 
     const { stdout } = await execFileAsync("git", ["-C", gitRoot, "show", "--stat", "HEAD"]);
     expect(stdout).not.toContain("outside.txt");
+  });
+});
+
+describe("vaultLogSince", () => {
+  let tempDir: string;
+  let gitRoot: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-vault-logsince-"));
+    gitRoot = join(tempDir, "vault");
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns [] gracefully when the vault directory exists but isn't a git repo", async () => {
+    // vault/ exists on disk but was never `git init`'d (skips Vault.init(),
+    // which would call ensureVaultRepo) — git exits non-zero ("not a git
+    // repository"), which vaultLogSince must treat as "nothing to report",
+    // not throw. Deliberately NOT using a missing directory here: that would
+    // make the `git` spawn itself fail with ENOENT, which vault-git.ts
+    // (correctly, for the real "git binary missing" case) latches as
+    // "git unavailable" for the rest of the process — that latch would then
+    // spuriously break every other test in this file that runs afterward.
+    const bareRoot = await mkdtemp(join(tmpdir(), "openpulse-nogit-"));
+    await mkdir(join(bareRoot, "vault"), { recursive: true });
+    const bareVault = new Vault(bareRoot);
+    const result = await vaultLogSince(bareVault, new Date(0).toISOString());
+    expect(result).toEqual([]);
+  });
+
+  it("summarizes commit subjects and the warm themes each commit touched, since a given date", async () => {
+    // Several sequential git subprocess calls (init + 2 raw + 2 commitVault) —
+    // this sandbox's git/fs is slow enough that the default 5s test timeout
+    // is occasionally too tight; other tests in this file get away with it
+    // only because they invoke far fewer git operations.
+    const vault = new Vault(tempDir);
+    await vault.init();
+    await ensureVaultRepo(vault);
+
+    // Old commit, before our "since" cutoff. Backdated via env vars on a
+    // direct `git commit` (not `commitVault` + `--amend --date=`, which in
+    // some environments blocks on a GPG-signing prompt with no TTY attached).
+    await writeFile(join(vault.warmDir, "old-theme.md"), "# Old\n", "utf-8");
+    await execFileAsync("git", [
+      "-C", gitRoot,
+      "-c", "user.name=OpenPulse", "-c", "user.email=openpulse@local", "-c", "commit.gpgsign=false",
+      "add", "-A", "--", ".",
+    ], { timeout: 10000 });
+    await execFileAsync("git", [
+      "-C", gitRoot,
+      "-c", "user.name=OpenPulse", "-c", "user.email=openpulse@local", "-c", "commit.gpgsign=false",
+      "commit", "--quiet", "-m", "chore: old theme",
+    ], {
+      timeout: 10000,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
+        GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
+      },
+    });
+
+    const sinceIso = "2026-01-01T00:00:00Z";
+
+    await writeFile(join(vault.warmDir, "project-a.md"), "# Project A\n", "utf-8");
+    await writeFile(join(vault.warmDir, "index.md"), "# Index\n", "utf-8");
+    await commitVault(vault, "feat: synthesize project-a");
+
+    await writeFile(join(vault.warmDir, "project-a.md"), "# Project A v2\n", "utf-8");
+    await writeFile(join(vault.warmDir, "concept-b.md"), "# Concept B\n", "utf-8");
+    await commitVault(vault, "feat: synthesize project-a and concept-b");
+
+    const result = await vaultLogSince(vault, sinceIso);
+
+    // Old pre-cutoff commit excluded.
+    expect(result.some((c) => c.subject.includes("old theme"))).toBe(false);
+
+    const subjects = result.map((c) => c.subject);
+    expect(subjects).toContain("feat: synthesize project-a");
+    expect(subjects).toContain("feat: synthesize project-a and concept-b");
+
+    const secondCommit = result.find((c) => c.subject === "feat: synthesize project-a and concept-b");
+    expect(secondCommit).toBeDefined();
+    expect(secondCommit!.themes.sort()).toEqual(["concept-b", "project-a"]);
+    // index.md is a generated file, never a theme.
+    expect(secondCommit!.themes).not.toContain("index");
+  }, 20000);
+
+  it("returns [] when sinceIso is in the future (no commits qualify)", async () => {
+    const vault = new Vault(tempDir);
+    await vault.init();
+    await ensureVaultRepo(vault);
+
+    const result = await vaultLogSince(vault, new Date(Date.now() + 86_400_000).toISOString());
+    expect(result).toEqual([]);
   });
 });

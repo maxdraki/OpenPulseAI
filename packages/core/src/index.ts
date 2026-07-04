@@ -50,6 +50,9 @@ export {
   type CollectorState as OrchestratorCollectorState,
   type DreamPipelineState,
   type LintPipelineState,
+  type CompactionPipelineState,
+  type SchemaEvolutionPipelineState,
+  type AigisRollupPipelineState,
   type OrchestratorState,
   type OrchestratorCallbacks,
   defaultState,
@@ -69,7 +72,7 @@ export { mergeThemes, isSafeThemeName } from "./merge-themes.js";
 export { sanitizeThemeSlug } from "./theme-slug.js";
 export { SEED_SKILLS, isKnownSkill, isValidSkillTag, normaliseSkill } from "./skills-taxonomy.js";
 export { checkStaleness, normalizeContentForCompare, type StalenessResult } from "./staleness.js";
-export { ensureVaultRepo, commitVault } from "./vault-git.js";
+export { ensureVaultRepo, commitVault, vaultLogSince, type VaultCommitInfo } from "./vault-git.js";
 export {
   searchIndex,
   searchWithRebuildRetry,

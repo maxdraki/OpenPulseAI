@@ -68,6 +68,16 @@ describe("defaultState — new pipelines", () => {
     expect(s.schemaEvolutionPipeline.running).toBe(false);
     expect(s.schemaEvolutionPipeline.schedule).toEqual({ time: "05:00", days: ["sun","mon","tue","wed","thu","fri","sat"] });
   });
+
+  it("includes aigisRollupPipeline with weekly Sunday 17:00 default and weekly cadence", () => {
+    const s = defaultState();
+    expect(s.aigisRollupPipeline).toBeDefined();
+    expect(s.aigisRollupPipeline.running).toBe(false);
+    expect(s.aigisRollupPipeline.lastRun).toBeNull();
+    expect(s.aigisRollupPipeline.lastResult).toBe("never");
+    expect(s.aigisRollupPipeline.schedule).toEqual({ time: "17:00", days: ["sun"] });
+    expect(s.aigisRollupPipeline.cadence).toBe("weekly");
+  });
 });
 
 describe("formatLocalDate", () => {
@@ -113,6 +123,40 @@ describe("loadState — migration", () => {
     expect(state.compactionPipeline).toBeDefined();
     expect(state.schemaEvolutionPipeline).toBeDefined();
     expect(state.compactionPipeline.sizeQueue).toEqual([]);
+  });
+
+  it("adds aigisRollupPipeline when missing from persisted state", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-"));
+    const vaultDir = join(tmp, "vault");
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(
+      join(vaultDir, "orchestrator-state.json"),
+      JSON.stringify({
+        lastHeartbeat: null,
+        collectors: {},
+        dreamPipeline: { autoTrigger: true, running: false, lastRun: null, lastResult: "never", collectorsCompletedToday: [] },
+        lintPipeline: { running: false, lastRun: null, lastResult: "never", schedule: { time: "20:00", days: ["sun"] } },
+        compactionPipeline: { running: false, lastRun: null, lastResult: "never", schedule: { time: "04:00", days: ["sun"] }, perThemeLastCompacted: {}, sizeQueue: [] },
+        schemaEvolutionPipeline: { running: false, lastRun: null, lastResult: "never", schedule: { time: "05:00", days: ["sun"] } },
+      }),
+      "utf-8"
+    );
+    const state = await loadState(tmp);
+    expect(state.aigisRollupPipeline).toBeDefined();
+    expect(state.aigisRollupPipeline.cadence).toBe("weekly");
+    expect(state.aigisRollupPipeline.schedule).toEqual({ time: "17:00", days: ["sun"] });
+  });
+
+  it("resets a stuck aigisRollupPipeline.running flag on load (crash recovery)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-"));
+    const vaultDir = join(tmp, "vault");
+    await mkdir(vaultDir, { recursive: true });
+    const seeded = defaultState();
+    seeded.aigisRollupPipeline.running = true;
+    await writeFile(join(vaultDir, "orchestrator-state.json"), JSON.stringify(seeded), "utf-8");
+
+    const state = await loadState(tmp);
+    expect(state.aigisRollupPipeline.running).toBe(false);
   });
 });
 
@@ -175,6 +219,7 @@ describe("Dream barrier — failed collectors must not count as 'ran'", () => {
       async runLintPipeline() {},
       async runCompactionPipeline() {},
       async runSchemaEvolutionPipeline() {},
+      async runAigisRollupPipeline() { return "drafted" as const; },
       async getSkillNames() {
         return ["collector-a", "collector-b"];
       },
@@ -229,6 +274,7 @@ describe("runCompact — defers while the dream pipeline is active (race fix, ta
         cb.compactionCalls++;
       },
       async runSchemaEvolutionPipeline() {},
+      async runAigisRollupPipeline() { return "drafted" as const; },
       async getSkillNames() {
         return [];
       },
@@ -355,5 +401,148 @@ describe("updateStateSection — scoped read-modify-write", () => {
     });
 
     void cliSnapshot; // documents what the CLI would have held onto pre-fix
+  });
+});
+
+describe("Aigis rollup pipeline — gated on aigis.enabled", () => {
+  function baseCallbacks(overrides: Partial<OrchestratorCallbacks> = {}): OrchestratorCallbacks & { rollupCalls: number } {
+    const cb = {
+      rollupCalls: 0,
+      async runCollector() {},
+      async runDreamPipeline() {},
+      async runLintPipeline() {},
+      async runCompactionPipeline() {},
+      async runSchemaEvolutionPipeline() {},
+      async runAigisRollupPipeline() {
+        cb.rollupCalls++;
+        return "drafted" as const;
+      },
+      async getSkillNames() {
+        return [];
+      },
+      ...overrides,
+    };
+    return cb;
+  }
+
+  it("no-ops (does not run the callback) when isAigisEnabled() reports false", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-disabled-"));
+    const callbacks = baseCallbacks({
+      async isAigisEnabled() {
+        return false;
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const outcome = await orch.triggerAigisRollup();
+    expect(callbacks.rollupCalls).toBe(0);
+    expect(outcome).toBe("disabled");
+
+    const state = orch.getAigisRollupPipelineState();
+    expect(state.lastResult).toBe("never");
+    await orch.stop();
+  });
+
+  it("runs the callback when isAigisEnabled() reports true, and surfaces its outcome", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-enabled-"));
+    const callbacks: OrchestratorCallbacks & { rollupCalls: number } = baseCallbacks();
+    callbacks.isAigisEnabled = async () => true;
+    callbacks.runAigisRollupPipeline = async () => {
+      callbacks.rollupCalls++;
+      return "no-activity" as const;
+    };
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const outcome = await orch.triggerAigisRollup();
+    expect(callbacks.rollupCalls).toBe(1);
+    expect(outcome).toBe("no-activity");
+
+    const state = orch.getAigisRollupPipelineState();
+    expect(state.lastResult).toBe("success");
+    await orch.stop();
+  });
+
+  it("defaults to disabled (no-op) when isAigisEnabled is not provided by the host", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-nocallback-"));
+    const callbacks = baseCallbacks();
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const outcome = await orch.triggerAigisRollup();
+    expect(callbacks.rollupCalls).toBe(0);
+    expect(outcome).toBe("disabled");
+    await orch.stop();
+  });
+
+  it("records a failure result when the callback throws, and surfaces the 'error' outcome", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-fail-"));
+    const callbacks = baseCallbacks({
+      async isAigisEnabled() {
+        return true;
+      },
+      async runAigisRollupPipeline() {
+        throw new Error("boom");
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    const outcome = await orch.triggerAigisRollup();
+    expect(outcome).toBe("error");
+    const state = orch.getAigisRollupPipelineState();
+    expect(state.lastResult).toBe("error");
+    expect(state.lastError).toContain("boom");
+    await orch.stop();
+  });
+
+  it("does NOT advance lastRun on a failed run — the next run must re-cover the same window", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-fail-lastrun-"));
+    let shouldFail = true;
+    const callbacks = baseCallbacks({
+      async isAigisEnabled() {
+        return true;
+      },
+      async runAigisRollupPipeline() {
+        if (shouldFail) throw new Error("boom");
+      },
+    });
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    // Pre-seed a prior successful lastRun so we can verify a failure doesn't move it.
+    await orch.updateAigisRollupSchedule({ time: "17:00", days: ["sun"] });
+    const before = orch.getAigisRollupPipelineState();
+    expect(before.lastRun).toBeNull();
+
+    await orch.triggerAigisRollup();
+    const afterFailure = orch.getAigisRollupPipelineState();
+    expect(afterFailure.lastResult).toBe("error");
+    // lastRun must remain unchanged (still null here) — a failed run must not
+    // advance the window, or the gap between the last success and this
+    // failure would be permanently skipped.
+    expect(afterFailure.lastRun).toBeNull();
+
+    // Now let the next run succeed — lastRun should advance normally.
+    shouldFail = false;
+    await orch.triggerAigisRollup();
+    const afterSuccess = orch.getAigisRollupPipelineState();
+    expect(afterSuccess.lastResult).toBe("success");
+    expect(afterSuccess.lastRun).not.toBeNull();
+
+    await orch.stop();
+  });
+
+  it("updateAigisRollupSchedule persists a new schedule and reschedules the cron job", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "orch-aigis-sched-"));
+    const callbacks = baseCallbacks();
+    const orch = new Orchestrator(tmp, callbacks);
+    await orch.start();
+
+    await orch.updateAigisRollupSchedule({ time: "09:00", days: ["mon"] });
+    const state = orch.getAigisRollupPipelineState();
+    expect(state.schedule).toEqual({ time: "09:00", days: ["mon"] });
+    await orch.stop();
   });
 });
