@@ -132,6 +132,35 @@ describe("aigis-submit.ts", () => {
       expect(callTool).not.toHaveBeenCalled();
       const record = await findAigisSubmissionRecord(vault, "u5");
       expect(record?.error).toBe("skipped: not connected");
+      // Fix round 1 (#2): the JSONL record must be flagged distinctly from a
+      // real submission failure so the Settings display doesn't conflate them.
+      expect(record?.skipped).toBe(true);
+    });
+
+    it("does NOT set skipped on a real (connected) submission failure", async () => {
+      const callTool = vi.fn().mockResolvedValue({ ok: false, error: "boom" });
+      await submitAigisRollup(vault, baseConfig(), "u6", "aigis-rollup-e", "## Content", "2026-06-01", "2026-06-07", callTool);
+      const record = await findAigisSubmissionRecord(vault, "u6");
+      expect(record?.skipped).toBeFalsy();
+    });
+
+    it("appends a pending record before the outbound call, so a crash mid-call still leaves a resubmittable record (#4)", async () => {
+      const seen: Array<AigisSubmissionRecord | undefined> = [];
+      const callTool = vi.fn().mockImplementation(async () => {
+        // Simulate observing vault state mid-flight, as if the process died
+        // right here: a record for this updateId must already exist.
+        seen.push(await findAigisSubmissionRecord(vault, "u7"));
+        return { ok: true };
+      });
+      await submitAigisRollup(vault, baseConfig(), "u7", "aigis-rollup-f", "## Content", "2026-06-01", "2026-06-07", callTool);
+
+      expect(seen[0]).toBeDefined();
+      expect(seen[0]?.ok).toBe(false);
+      expect(seen[0]?.theme).toBe("aigis-rollup-f");
+
+      // And the final record (after the call resolves) reflects the real outcome.
+      const final = await findAigisSubmissionRecord(vault, "u7");
+      expect(final?.ok).toBe(true);
     });
   });
 
@@ -170,6 +199,20 @@ describe("aigis-submit.ts", () => {
 
       const latest = await findAigisSubmissionRecord(vault, "retry-1");
       expect(latest?.ok).toBe(true);
+    });
+
+    it("rejects (400) an unsafe theme name in the found record, without touching the filesystem (#3)", async () => {
+      await appendAigisSubmissionRecord(vault, {
+        updateId: "retry-unsafe", theme: "../../etc/passwd", periodStart: "2026-06-01", periodEnd: "2026-06-07",
+        submittedAt: "2026-06-07T00:00:00.000Z", ok: false, error: "timed out", toolName: "aigis_submit_journal",
+      });
+
+      const callTool = vi.fn();
+      const outcome = await resubmitAigisRollup(tempDir, "retry-unsafe", callTool);
+
+      expect(outcome.ok).toBe(false);
+      expect(outcome.status).toBe(400);
+      expect(callTool).not.toHaveBeenCalled();
     });
 
     it("returns 404 when the record exists but the aigis content file is missing", async () => {

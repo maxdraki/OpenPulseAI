@@ -179,6 +179,9 @@ export interface AigisLastSubmission {
   submittedAt?: string;
   ok?: boolean;
   error?: string;
+  /** True when the last attempt was skipped (Aigis not connected) rather
+   *  than a real submission failure — see aigis-submit.ts's AigisSubmissionRecord. */
+  skipped?: boolean;
 }
 
 /** Last recorded Aigis submission outcome (any update) — backs the Settings

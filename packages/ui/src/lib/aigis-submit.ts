@@ -14,7 +14,7 @@
  */
 import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { callAigisTool, loadConfig, DEFAULT_AIGIS_SUBMIT_TOOL, type AigisConfig, Vault } from "../../../core/dist/index.js";
+import { callAigisTool, loadConfig, DEFAULT_AIGIS_SUBMIT_TOOL, isSafeThemeName, type AigisConfig, Vault } from "../../../core/dist/index.js";
 
 /** Injectable seam for `callAigisTool` — production callers never set this;
  *  tests substitute a fake to avoid a real MCP connection (see brief's "mock
@@ -38,6 +38,11 @@ export interface AigisSubmissionRecord {
   ok: boolean;
   error?: string;
   toolName: string;
+  /** True when this record represents a skipped (Aigis not connected/enabled)
+   *  attempt rather than a real network/tool failure (fix round 1 #2) — lets
+   *  displays distinguish "skipped" from "failed" instead of conflating both
+   *  into `ok: false`. */
+  skipped?: boolean;
 }
 
 export interface AigisSubmissionOutcome {
@@ -131,11 +136,33 @@ export async function submitAigisRollup(
       submittedAt: new Date().toISOString(),
       ok: false,
       error: "skipped: not connected",
+      skipped: true,
     });
     return { ok: false, error: "skipped: not connected", skipped: true };
   }
 
   const args = buildAigisSubmitArgs(content, periodStart, periodEnd);
+
+  // Fix round 1 (#4): append a "pending" record BEFORE the outbound call,
+  // not just after. The theme's content file is written to vault/aigis/ and
+  // the pending update removed *before* this function ever runs (see
+  // approve.ts) — if the process crashes during the network call below (the
+  // one step here with unbounded duration), a record-less crash window would
+  // otherwise leave `resubmitAigisRollup` unable to find the theme/period for
+  // this updateId and 404 forever. `findAigisSubmissionRecord` always returns
+  // the LAST matching line, so the real outcome appended below simply
+  // supersedes this one on the happy path.
+  await appendAigisSubmissionRecord(vault, {
+    updateId,
+    theme,
+    periodStart,
+    periodEnd,
+    toolName,
+    submittedAt: new Date().toISOString(),
+    ok: false,
+    error: "Aigis submission in progress",
+  });
+
   const result = await callTool(config, toolName, args);
 
   await appendAigisSubmissionRecord(vault, {
@@ -174,6 +201,14 @@ export async function resubmitAigisRollup(
 
   const record = await findAigisSubmissionRecord(vault, updateId);
   if (!record) return { ok: false, status: 404, error: "No prior Aigis submission found for this update" };
+
+  // Fix round 1 (#3): defense-in-depth. `record.theme` is safe transitively
+  // today (approve.ts validates it before ever writing a submissions.jsonl
+  // record), but this function builds a filesystem path from it directly —
+  // re-validate here rather than relying on an invariant upheld elsewhere.
+  if (!isSafeThemeName(record.theme)) {
+    return { ok: false, status: 400, error: `Unsafe theme name in submission record: "${record.theme}"` };
+  }
 
   let content: string;
   try {

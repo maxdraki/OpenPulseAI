@@ -827,19 +827,35 @@ app.post("/api/aigis-resubmit/:updateId", async (req, res) => {
 });
 
 /**
+ * Reads the last recorded Aigis submission outcome (any update) straight off
+ * disk — a plain read, no `Vault.init()` (fix round 1 #5): `init()` mkdir's
+ * every vault subdirectory and adopts/creates a git repo, all of which is
+ * unnecessary side effect for what's meant to be a read-only status check,
+ * and would even create vault directories on a machine that has none yet
+ * just from loading the Settings page. Missing file/dir is treated the same
+ * as "no submissions yet" rather than an error.
+ */
+export async function readAigisLastSubmissionForApi(vaultRoot: string): Promise<Record<string, unknown>> {
+  const path = join(vaultRoot, "vault", "aigis", "submissions.jsonl");
+  const raw = await readFile(path, "utf-8").catch(() => "");
+  const lines = raw.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return { found: false };
+  try {
+    const last = JSON.parse(lines[lines.length - 1]);
+    return { found: true, ...last };
+  } catch {
+    return { found: false };
+  }
+}
+
+/**
  * Last recorded Aigis submission outcome (any update), for the Settings
  * "Connect Aigis" card — shown alongside the connection status so the user
  * doesn't have to go dig through the Review tab to see what happened.
  */
 app.get("/api/aigis-last-submission", async (_req, res) => {
   try {
-    const vault = new Vault(VAULT_ROOT);
-    await vault.init();
-    const raw = await readFile(join(vault.aigisDir, "submissions.jsonl"), "utf-8").catch(() => "");
-    const lines = raw.split("\n").filter((l) => l.trim());
-    if (lines.length === 0) return res.json({ found: false });
-    const last = JSON.parse(lines[lines.length - 1]);
-    res.json({ found: true, ...last });
+    res.json(await readAigisLastSubmissionForApi(VAULT_ROOT));
   } catch (e: any) {
     res.json({ found: false, error: e.message });
   }

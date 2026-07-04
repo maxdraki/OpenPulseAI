@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection, getAigisLastSubmission } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection, getAigisLastSubmission, resubmitAigisRollup } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { logoUrl } from "../lib/utils.js";
@@ -255,17 +255,38 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   aigisActionsRow.appendChild(aigisStatus);
 
   // Last submission outcome — from vault/aigis/submissions.jsonl (see
-  // task-17 brief §B: "show the last submission outcome + timestamp").
+  // task-17 brief §B: "show the last submission outcome + timestamp"). A
+  // failed/skipped last submission gets an inline Retry button (fix round 1
+  // #1) — previously this line pointed users at "retry from Settings" with
+  // no retry affordance anywhere on this page, a dead end.
+  const aigisLastSubmissionRow = document.createElement("div");
+  aigisLastSubmissionRow.className = "actions-row";
+  aigisLastSubmissionRow.id = "aigis-last-submission-row";
+  aigisLastSubmissionRow.style.display = "none";
+
   const aigisLastSubmission = document.createElement("p");
   aigisLastSubmission.className = "form-help";
   aigisLastSubmission.id = "aigis-last-submission";
-  aigisLastSubmission.style.display = "none";
+
+  const aigisRetryLastBtn = document.createElement("button");
+  aigisRetryLastBtn.className = "btn btn-secondary";
+  aigisRetryLastBtn.id = "btn-aigis-retry-last";
+  aigisRetryLastBtn.textContent = "Retry";
+  aigisRetryLastBtn.style.display = "none";
+
+  const aigisRetryLastStatus = document.createElement("span");
+  aigisRetryLastStatus.className = "validate-status";
+  aigisRetryLastStatus.id = "aigis-retry-last-status";
+
+  aigisLastSubmissionRow.appendChild(aigisLastSubmission);
+  aigisLastSubmissionRow.appendChild(aigisRetryLastBtn);
+  aigisLastSubmissionRow.appendChild(aigisRetryLastStatus);
 
   aigisSection.appendChild(endpointGroup);
   aigisSection.appendChild(tokenGroup);
   aigisSection.appendChild(enabledGroup);
   aigisSection.appendChild(aigisActionsRow);
-  aigisSection.appendChild(aigisLastSubmission);
+  aigisSection.appendChild(aigisLastSubmissionRow);
   aigisCard.appendChild(aigisSection);
 
   // Mount everything
@@ -291,6 +312,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   await renderAigisCard();
   aigisSaveBtn.addEventListener("click", handleAigisSave);
   aigisTestBtn.addEventListener("click", handleAigisTest);
+  aigisRetryLastBtn.addEventListener("click", handleAigisRetryLast);
 
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl, hasStoredKey, keyHint);
@@ -626,25 +648,72 @@ async function renderAigisCard(): Promise<void> {
 }
 
 /** Populates the "last submission" line from vault/aigis/submissions.jsonl —
- *  the most recent Aigis rollup submission attempt, any outcome. */
+ *  the most recent Aigis rollup submission attempt, any outcome — and shows
+ *  an inline Retry button when that attempt didn't succeed (fix round 1 #1:
+ *  this used to point at "retry from the Review tab", but an approved batch
+ *  tears its cards down immediately, leaving no retry affordance anywhere). */
 async function renderAigisLastSubmission(): Promise<void> {
+  const row = document.getElementById("aigis-last-submission-row") as HTMLDivElement | null;
   const el = document.getElementById("aigis-last-submission") as HTMLParagraphElement | null;
-  if (!el) return;
+  const retryBtn = document.getElementById("btn-aigis-retry-last") as HTMLButtonElement | null;
+  const retryStatus = document.getElementById("aigis-retry-last-status") as HTMLSpanElement | null;
+  if (!row || !el || !retryBtn) return;
+
+  retryStatus && (retryStatus.textContent = "");
 
   try {
     const last = await getAigisLastSubmission();
     if (!last.found) {
-      el.style.display = "none";
+      row.style.display = "none";
       return;
     }
     const when = last.submittedAt ? new Date(last.submittedAt).toLocaleString("en-GB", {
       day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
     }) : "unknown time";
-    const outcome = last.ok ? "succeeded" : `failed (${last.error ?? "unknown error"})`;
-    el.textContent = `Last Aigis submission: ${outcome} — ${when}${last.theme ? ` (${last.theme})` : ""}. Retry a failed/skipped submission from the Review tab.`;
-    el.style.display = "";
+    // Distinguish "skipped — not connected" from a real submission failure
+    // (fix round 1 #2) rather than lumping both under "failed (...)".
+    const outcome = last.ok
+      ? "succeeded"
+      : last.skipped
+        ? "skipped (not connected)"
+        : `failed (${last.error ?? "unknown error"})`;
+    el.textContent = `Last Aigis submission: ${outcome} — ${when}${last.theme ? ` (${last.theme})` : ""}.`;
+    retryBtn.style.display = last.ok ? "none" : "";
+    if (last.updateId) retryBtn.dataset.updateId = last.updateId;
+    row.style.display = "";
   } catch {
-    el.style.display = "none";
+    row.style.display = "none";
+  }
+}
+
+async function handleAigisRetryLast(): Promise<void> {
+  const retryBtn = document.getElementById("btn-aigis-retry-last") as HTMLButtonElement;
+  const retryStatus = document.getElementById("aigis-retry-last-status")!;
+  const updateId = retryBtn.dataset.updateId;
+  if (!updateId) return;
+
+  retryBtn.classList.add("loading");
+  retryBtn.disabled = true;
+  retryStatus.textContent = "Retrying...";
+  retryStatus.className = "validate-status";
+
+  try {
+    await resubmitAigisRollup(updateId);
+    log("info", "Retried Aigis submission from Settings", updateId);
+    // Refresh the whole line from the new submissions.jsonl record first —
+    // it clears this status span — then layer the transient "Submitted"
+    // confirmation on top so it isn't immediately wiped out.
+    await renderAigisLastSubmission();
+    retryStatus.textContent = "Submitted";
+    retryStatus.className = "validate-status success";
+  } catch (e: any) {
+    const message = e?.message ?? String(e);
+    log("error", "Aigis retry failed from Settings", message);
+    retryStatus.textContent = `Failed: ${message}`;
+    retryStatus.className = "validate-status error";
+  } finally {
+    retryBtn.classList.remove("loading");
+    retryBtn.disabled = false;
   }
 }
 

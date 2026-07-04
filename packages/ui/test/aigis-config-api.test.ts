@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { load as loadYaml } from "js-yaml";
-import { readAigisConfigForApi, saveAigisConfigForApi } from "../server.js";
+import { readAigisConfigForApi, saveAigisConfigForApi, readAigisLastSubmissionForApi } from "../server.js";
 
 describe("readAigisConfigForApi (backs GET /api/aigis-config)", () => {
   let tempDir: string;
@@ -115,5 +115,50 @@ describe("saveAigisConfigForApi (backs POST /api/aigis-config)", () => {
     const raw = await readFile(join(tempDir, "config.yaml"), "utf-8");
     const parsed = loadYaml(raw) as any;
     expect(parsed.aigis.submitTool).toBe("aigis_submit_journal");
+  });
+});
+
+describe("readAigisLastSubmissionForApi (backs GET /api/aigis-last-submission)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-aigis-last-submission-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  it("returns found:false without creating any vault directories (fix round 1 #5 — no Vault.init() side effects)", async () => {
+    const result = await readAigisLastSubmissionForApi(tempDir);
+    expect(result).toEqual({ found: false });
+
+    // The whole point: a read-only status check must not mkdir the vault
+    // tree (hot/warm/pending/cold/sessions/aigis) or adopt a git repo, which
+    // Vault.init() does unconditionally.
+    await expect(stat(join(tempDir, "vault"))).rejects.toThrow();
+  });
+
+  it("returns the last JSONL line, spread onto found:true", async () => {
+    await mkdir(join(tempDir, "vault", "aigis"), { recursive: true });
+    await writeFile(
+      join(tempDir, "vault", "aigis", "submissions.jsonl"),
+      [
+        JSON.stringify({ updateId: "u1", theme: "t1", ok: false, error: "boom", submittedAt: "2026-06-01T00:00:00.000Z", toolName: "aigis_submit_journal" }),
+        JSON.stringify({ updateId: "u2", theme: "t2", ok: true, submittedAt: "2026-06-02T00:00:00.000Z", toolName: "aigis_submit_journal" }),
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+
+    const result = await readAigisLastSubmissionForApi(tempDir);
+    expect(result).toMatchObject({ found: true, updateId: "u2", theme: "t2", ok: true });
+  });
+
+  it("treats a malformed last line as found:false rather than throwing", async () => {
+    await mkdir(join(tempDir, "vault", "aigis"), { recursive: true });
+    await writeFile(join(tempDir, "vault", "aigis", "submissions.jsonl"), "not json\n", "utf-8");
+
+    const result = await readAigisLastSubmissionForApi(tempDir);
+    expect(result).toEqual({ found: false });
   });
 });

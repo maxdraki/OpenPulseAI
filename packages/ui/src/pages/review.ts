@@ -279,7 +279,14 @@ async function loadPending(listEl: HTMLElement): Promise<void> {
             const summaryParts: string[] = [];
             if (staleCount) summaryParts.push(`${staleCount} skipped — page changed since proposed`);
             if (otherFailed) summaryParts.push(`${otherFailed} failed`);
-            if (aigisFailed) summaryParts.push(`${aigisFailed} Aigis submission(s) failed — retry from Settings`);
+            // The Settings "Connect Aigis" card can only retry the single
+            // MOST RECENT submission record (see renderAigisLastSubmission
+            // in Settings.ts) — so when more than one failed in this batch,
+            // "retry from Settings" is only true for the last of them (fix
+            // round 1 #1: this copy previously claimed a retry affordance
+            // that didn't exist anywhere at all).
+            if (aigisFailed === 1) summaryParts.push(`1 Aigis submission failed — retry from Settings`);
+            else if (aigisFailed > 1) summaryParts.push(`${aigisFailed} Aigis submissions failed — the most recent can be retried from Settings`);
             if (aigisSkipped) summaryParts.push(`${aigisSkipped} Aigis submission(s) skipped — not connected`);
             if (summaryParts.length > 0) {
               showReviewSummary(`Approve: ${summaryParts.join(", ")}. Approved the rest.`);

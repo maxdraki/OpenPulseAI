@@ -114,6 +114,10 @@ export interface AigisSubmissionRecord {
   ok: boolean;
   error?: string;
   toolName: string;
+  /** True when this record represents a skipped (Aigis not connected/enabled)
+   *  attempt rather than a real network/tool failure — lets displays like the
+   *  Settings "last submission" line distinguish "skipped" from "failed". */
+  skipped?: boolean;
 }
 
 /** Collector runtime state per source */
