@@ -30,7 +30,7 @@ pnpm workspace monorepo with 4 packages:
 - **Config**: `~/OpenPulseAI/config.yaml` with llm provider/model/apiKey/baseUrl and an optional `aigis` section (`endpoint`, `authToken?`, `submitTool` default `aigis_submit_journal`, `enabled`) for the outbound connection to aigis.bio's remote MCP server — see `packages/core/src/config.ts`'s `isValidAigisEndpoint`/`parseAigisConfig` (a non-https endpoint forces `enabled: false`). Skills are filesystem-based with optional `vault/skill-config/<name>.json` for user settings.
 - **UI**: No framework. Vanilla TS with custom CSS (Shoelace loaded for theme CSS only, not used as components). Hash-based routing. Use `confirmDialog()` from `src/lib/dialog.ts` instead of `window.confirm()`. Dev API server in `server.ts` bridges UI to vault filesystem and starts the orchestrator.
 - **ESM**: All packages use `"type": "module"`. Imports use `.js` extensions.
-- **Tauri**: v2 desktop wrapper exists in `src-tauri/` with Rust backend. Vault I/O, config, skills discovery, sidecar spawning. Not yet tested end-to-end.
+- **Tauri**: v2 desktop wrapper exists in `src-tauri/` with Rust backend. Vault I/O, config, skills discovery, sidecar spawning. System tray + close-to-hide window lifecycle implemented (`src-tauri/src/tray.rs`): closing the main window hides it instead of exiting; tray menu offers "Open OpenPulseAI" / "Quit"; macOS toggles Dock visibility (`ActivationPolicy`) on hide/show. Not yet tested end-to-end.
 
 ## Build & test
 

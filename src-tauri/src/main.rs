@@ -5,6 +5,7 @@ mod config;
 mod skills;
 mod sidecar;
 mod discovery;
+mod tray;
 
 fn main() {
     tauri::Builder::default()
@@ -27,6 +28,13 @@ fn main() {
             sidecar::remove_skill,
             discovery::validate_and_list_models,
         ])
+        .on_window_event(tray::handle_window_event)
+        .on_menu_event(tray::handle_menu_event)
+        .on_tray_icon_event(tray::handle_tray_icon_event)
+        .setup(|app| {
+            tray::setup_tray(app)?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

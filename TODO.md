@@ -18,7 +18,7 @@ Dream pipeline currently classifies each entry into ONE theme. One source should
 
 ### System tray (Tauri)
 Tauri system tray indicator so the orchestrator runs when the window is closed.
-- **Status:** Not started
+- **Status:** Done (pure-Rust half) — tray icon + menu ("Open OpenPulseAI" / "Quit"), close-to-hide window lifecycle, macOS Dock show/hide via `ActivationPolicy`. Uses the existing full-color `icons/icon.png` (no monochrome template asset yet — follow-up). Landed independent of the always-on sidecar (separate task); sidecar work will let schedules keep running while hidden.
 - **Why:** Schedules only run while the window is open.
 
 ### Tauri Rust backend parity
