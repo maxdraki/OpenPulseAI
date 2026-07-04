@@ -36,7 +36,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 
 use crate::vault::AppState;
 
@@ -55,6 +55,11 @@ pub struct ServerSupervisor {
     port_rx: watch::Receiver<Option<u16>>,
     child: Mutex<Option<CommandChild>>,
     shutting_down: AtomicBool,
+    /// Notified by `shutdown()` so a pending restart backoff sleep in
+    /// `run_supervised` wakes up immediately instead of finishing its full
+    /// delay and spawning a fresh sidecar that would outlive app exit. See
+    /// the `tokio::select!` in `run_supervised`'s restart path.
+    shutdown_notify: Notify,
 }
 
 impl ServerSupervisor {
@@ -65,6 +70,7 @@ impl ServerSupervisor {
             port_rx,
             child: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
+            shutdown_notify: Notify::new(),
         }
     }
 }
@@ -347,7 +353,29 @@ fn run_supervised(
             "[server-sidecar] Restarting in {backoff:?} (attempt {}/{MAX_RESTART_ATTEMPTS})...",
             attempt + 2
         );
-        tokio::time::sleep(backoff).await;
+
+        // Race the backoff sleep against a shutdown notification so app quit
+        // during the sleep aborts the restart instead of letting a fresh
+        // sidecar spawn after the sleep completes (which would outlive the
+        // app — see this module's doc comment / the review that found this).
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = supervisor.shutdown_notify.notified() => {
+                eprintln!("[server-sidecar] Shutdown requested during restart backoff — not restarting.");
+                return;
+            }
+        }
+
+        // Belt-and-suspenders re-check: `shutdown()` calls `notify_one()`,
+        // which stores a permit if nothing is awaiting `notified()` yet, so
+        // the select! above is race-free even if shutdown happens right as
+        // this task starts sleeping. This second check just guards against
+        // future refactors weakening that guarantee (e.g. switching to
+        // `notify_waiters()`, which does NOT store a permit for latecomers).
+        if supervisor.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+
         run_supervised(app, vault_root, attempt + 1).await;
     })
 }
@@ -362,6 +390,14 @@ fn run_supervised(
 pub fn shutdown(app: &AppHandle) {
     let supervisor = app.state::<ServerSupervisor>();
     supervisor.shutting_down.store(true, Ordering::SeqCst);
+
+    // Wake a pending restart backoff sleep in `run_supervised` (see its
+    // `tokio::select!`) so a quit during the sleep aborts the restart rather
+    // than letting a fresh sidecar spawn after we've already returned here —
+    // otherwise that spawn would outlive the app as an orphaned process.
+    // Harmless no-op (permit stored for next `notified()`, or just unused)
+    // when there's no child to kill / no restart pending.
+    supervisor.shutdown_notify.notify_one();
 
     let Some(child) = supervisor.child.lock().unwrap().take() else {
         return;
