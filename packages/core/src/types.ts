@@ -100,6 +100,20 @@ export interface PendingUpdate {
     question: string;
     themesConsulted: string[];
   };
+  aigisRollup?: {
+    periodStart: string;       // ISO 8601 — start of the rollup window
+    periodEnd: string;         // ISO 8601 — end of the rollup window
+    cadence: "weekly" | "monthly";
+  };
+}
+
+/** Result of submitting an approved Aigis rollup to the remote Aigis MCP (recorded in vault/aigis/submissions.jsonl) */
+export interface AigisSubmissionRecord {
+  updateId: string;
+  submittedAt: string;         // ISO 8601
+  ok: boolean;
+  error?: string;
+  toolName: string;
 }
 
 /** Collector runtime state per source */
