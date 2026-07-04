@@ -399,6 +399,18 @@ body {
 .type-schema     { background: color-mix(in srgb, #ec4899 18%, transparent); color: #be185d; }
 .type-chat       { background: color-mix(in srgb, #6366f1 18%, transparent); color: #4338ca; }
 .type-lint       { background: color-mix(in srgb, #d97706 18%, transparent); color: #b45309; }
+.type-aigis      { background: color-mix(in srgb, #14b8a6 18%, transparent); color: #0f766e; }
+
+/* Aigis submission outcome (shown on a pending card after an aigisRollup approve) */
+.aigis-submission-status {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.aigis-submission-status.success { background: color-mix(in srgb, #10b981 15%, transparent); color: #059669; }
+.aigis-submission-status.failed  { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+.aigis-submission-status.skipped { background: color-mix(in srgb, #6b7280 15%, transparent); color: #4b5563; }
 
 a.wiki-link {
   color: var(--accent);

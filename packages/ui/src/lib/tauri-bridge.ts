@@ -40,6 +40,20 @@ export interface PendingUpdate {
     question: string;
     themesConsulted: string[];
   };
+  aigisRollup?: {
+    periodStart: string;
+    periodEnd: string;
+    cadence: "weekly" | "monthly";
+  };
+}
+
+/** Outcome of submitting an approved `aigisRollup` pending to Aigis — see
+ *  `POST /api/approve-update`'s `aigisSubmission` field and
+ *  `packages/ui/src/lib/aigis-submit.ts`. */
+export interface AigisSubmissionOutcome {
+  ok: boolean;
+  error?: string;
+  skipped?: boolean;
 }
 
 // Detect Tauri runtime — exported for use by logger.ts
@@ -132,15 +146,46 @@ export async function listPendingUpdates(): Promise<PendingUpdate[]> {
   return apiGet("/pending-updates");
 }
 
-export async function approveUpdate(id: string, editedContent?: string): Promise<void> {
-  if (isTauri) return tauriInvoke("approve_update", { id, editedContent: editedContent ?? null });
-  await apiPost("/approve-update", { id, editedContent: editedContent ?? null });
+/** Approves a pending update. Returns the Aigis submission outcome when the
+ *  approved update was an `aigisRollup` pending (see `POST /api/approve-update`'s
+ *  `aigisSubmission` field) — undefined for every other update kind. */
+export async function approveUpdate(id: string, editedContent?: string): Promise<{ aigisSubmission?: AigisSubmissionOutcome }> {
+  if (isTauri) {
+    await tauriInvoke("approve_update", { id, editedContent: editedContent ?? null });
+    return {};
+  }
+  const result = await apiPost<{ ok: boolean; aigisSubmission?: AigisSubmissionOutcome }>("/approve-update", { id, editedContent: editedContent ?? null });
+  return { aigisSubmission: result.aigisSubmission };
 }
 
 export interface BatchApproveResult {
   id: string;
   ok: boolean;
   stale?: boolean;
+  aigisSubmission?: AigisSubmissionOutcome;
+}
+
+/** Retries a previously failed/skipped Aigis submission for an already-
+ *  approved `aigisRollup` update (see `POST /api/aigis-resubmit/:updateId`). */
+export async function resubmitAigisRollup(updateId: string): Promise<void> {
+  if (isTauri) throw new Error("Aigis resubmit is not yet available in the desktop app");
+  await apiPost(`/aigis-resubmit/${encodeURIComponent(updateId)}`, {});
+}
+
+export interface AigisLastSubmission {
+  found: boolean;
+  updateId?: string;
+  theme?: string;
+  submittedAt?: string;
+  ok?: boolean;
+  error?: string;
+}
+
+/** Last recorded Aigis submission outcome (any update) — backs the Settings
+ *  "Connect Aigis" card's status line. */
+export async function getAigisLastSubmission(): Promise<AigisLastSubmission> {
+  if (isTauri) return { found: false };
+  return apiGet("/aigis-last-submission");
 }
 
 /**

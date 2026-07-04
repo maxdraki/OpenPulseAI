@@ -14,6 +14,12 @@ export class Vault {
    *  `VAULT_GITIGNORE` in vault-git.ts) and safe to delete any time; it is
    *  rebuilt from the warm themes on demand (see `search/index-db.ts`). */
   readonly searchIndexPath: string;
+  /** Holds approved Aigis rollup content (`<theme>.md`) and the append-only
+   *  `submissions.jsonl` outcome log — deliberately NOT inside `warmDir`, so
+   *  it's never picked up by the wiki/index/search machinery (see
+   *  `.superpowers/sdd/task-17-brief.md`). Still inside `<root>/vault`, so
+   *  the existing vault-git auto-commit (see `vault-git.ts`) covers it. */
+  readonly aigisDir: string;
 
   constructor(root: string) {
     this.root = root;
@@ -24,6 +30,7 @@ export class Vault {
     this.coldDir = join(root, "vault", "cold");
     this.sessionsDir = join(root, "vault", "sessions");
     this.searchIndexPath = join(root, "vault", ".search-index.sqlite");
+    this.aigisDir = join(root, "vault", "aigis");
   }
 
   async init(): Promise<void> {
@@ -33,6 +40,7 @@ export class Vault {
     await mkdir(this.pendingDir, { recursive: true });
     await mkdir(this.coldDir, { recursive: true });
     await mkdir(this.sessionsDir, { recursive: true });
+    await mkdir(this.aigisDir, { recursive: true });
     // Adopts (or leaves alone) a git repo rooted at vault/ so existing
     // vaults get history on next start. Never throws — see vault-git.ts.
     await ensureVaultRepo(this);

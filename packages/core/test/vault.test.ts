@@ -54,4 +54,16 @@ describe("Vault", () => {
     const { stat } = await import("node:fs/promises");
     expect((await stat(vault.sessionsDir)).isDirectory()).toBe(true);
   });
+
+  it("creates the aigis directory on init and exposes an accessor for it", async () => {
+    const vault = new Vault(tempDir);
+    await vault.init();
+    const { stat } = await import("node:fs/promises");
+    expect((await stat(vault.aigisDir)).isDirectory()).toBe(true);
+  });
+
+  it("aigisDir path helper points inside the vault git root", () => {
+    const vault = new Vault("/tmp/test-vault");
+    expect(vault.aigisDir).toBe("/tmp/test-vault/vault/aigis");
+  });
 });

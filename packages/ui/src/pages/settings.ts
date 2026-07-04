@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection, getAigisLastSubmission } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { logoUrl } from "../lib/utils.js";
@@ -254,10 +254,18 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   aigisActionsRow.appendChild(aigisTestBtn);
   aigisActionsRow.appendChild(aigisStatus);
 
+  // Last submission outcome — from vault/aigis/submissions.jsonl (see
+  // task-17 brief §B: "show the last submission outcome + timestamp").
+  const aigisLastSubmission = document.createElement("p");
+  aigisLastSubmission.className = "form-help";
+  aigisLastSubmission.id = "aigis-last-submission";
+  aigisLastSubmission.style.display = "none";
+
   aigisSection.appendChild(endpointGroup);
   aigisSection.appendChild(tokenGroup);
   aigisSection.appendChild(enabledGroup);
   aigisSection.appendChild(aigisActionsRow);
+  aigisSection.appendChild(aigisLastSubmission);
   aigisCard.appendChild(aigisSection);
 
   // Mount everything
@@ -613,6 +621,31 @@ async function renderAigisCard(): Promise<void> {
     tokenInput.placeholder = config.hasToken ? `Saved (${config.tokenHint}) — leave blank to keep` : "Enter your Aigis auth token";
     enabledToggle.checked = config.enabled;
   } catch { /* use defaults */ }
+
+  await renderAigisLastSubmission();
+}
+
+/** Populates the "last submission" line from vault/aigis/submissions.jsonl —
+ *  the most recent Aigis rollup submission attempt, any outcome. */
+async function renderAigisLastSubmission(): Promise<void> {
+  const el = document.getElementById("aigis-last-submission") as HTMLParagraphElement | null;
+  if (!el) return;
+
+  try {
+    const last = await getAigisLastSubmission();
+    if (!last.found) {
+      el.style.display = "none";
+      return;
+    }
+    const when = last.submittedAt ? new Date(last.submittedAt).toLocaleString("en-GB", {
+      day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    }) : "unknown time";
+    const outcome = last.ok ? "succeeded" : `failed (${last.error ?? "unknown error"})`;
+    el.textContent = `Last Aigis submission: ${outcome} — ${when}${last.theme ? ` (${last.theme})` : ""}. Retry a failed/skipped submission from the Review tab.`;
+    el.style.display = "";
+  } catch {
+    el.style.display = "none";
+  }
 }
 
 async function handleAigisSave(): Promise<void> {

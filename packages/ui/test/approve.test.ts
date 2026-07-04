@@ -12,6 +12,7 @@ import {
   approvePendingUpdatesBatch,
   regeneratePendingUpdate,
 } from "../src/lib/approve.js";
+import { findAigisSubmissionRecord } from "../src/lib/aigis-submit.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -41,6 +42,7 @@ function basePending(overrides: Partial<PendingUpdate> & { id: string; theme: st
     schemaEvolution: overrides.schemaEvolution,
     compactionType: overrides.compactionType,
     querybackSource: overrides.querybackSource,
+    aigisRollup: overrides.aigisRollup,
   };
 }
 
@@ -421,6 +423,201 @@ describe("approvePendingUpdate", () => {
     // was refreshed by the merge, not left behind.
     const results = await searchIndex(vault, "project-theta-dst");
     expect(results.some((r) => r.theme === "project-theta-third")).toBe(true);
+  });
+});
+
+describe("approvePendingUpdate — aigisRollup routing", () => {
+  let tempDir: string;
+  let vault: Vault;
+  let pendingDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "openpulse-approve-aigis-"));
+    vault = new Vault(tempDir);
+    await vault.init();
+    pendingDir = vault.pendingDir;
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  async function writeAigisConfig(enabled: boolean): Promise<void> {
+    await writeFile(
+      join(tempDir, "config.yaml"),
+      [
+        "aigis:",
+        "  endpoint: https://aigis.bio/mcp",
+        "  authToken: tok",
+        "  submitTool: aigis_submit_journal",
+        `  enabled: ${enabled}`,
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+  }
+
+  function aigisPending(overrides: Partial<PendingUpdate> & { id: string }): PendingUpdate {
+    return basePending({
+      theme: `aigis-rollup-2026-06-07`,
+      previousContent: null,
+      aigisRollup: { periodStart: "2026-06-01", periodEnd: "2026-06-07", cadence: "weekly" },
+      ...overrides,
+    });
+  }
+
+  it("writes approved content to vault/aigis/<theme>.md, not a warm theme, and leaves the index untouched", async () => {
+    await writeAigisConfig(false); // not connected — submission is skipped, write still happens
+    const update = aigisPending({ id: "aigis-1", proposedContent: "## Aigis Rollup\n\nWeekly summary." });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-1", undefined);
+    expect(outcome.ok).toBe(true);
+
+    const written = await readFile(join(vault.aigisDir, "aigis-rollup-2026-06-07.md"), "utf-8");
+    expect(written).toBe("## Aigis Rollup\n\nWeekly summary.");
+
+    // Never written as a warm theme.
+    await expect(readFile(vault.themeFilePath("aigis-rollup-2026-06-07"), "utf-8")).rejects.toThrow();
+
+    // Not searchable — it was never indexed.
+    const results = await searchIndex(vault, "Weekly summary");
+    expect(results.length).toBe(0);
+  });
+
+  it("is exempt from the staleness gate (previousContent is null by construction)", async () => {
+    await writeAigisConfig(false);
+    const update = aigisPending({ id: "aigis-stale-exempt", previousContent: null });
+    await writePendingFile(pendingDir, update);
+
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-stale-exempt", undefined);
+    expect(outcome.ok).toBe(true);
+  });
+
+  it("submits to Aigis with the mapped args when connected, and records + surfaces success", async () => {
+    await writeAigisConfig(true);
+    const update = aigisPending({ id: "aigis-success", proposedContent: "## Rollup body" });
+    await writePendingFile(pendingDir, update);
+
+    const aigisCallTool = vi.fn().mockResolvedValue({ ok: true, content: "accepted" });
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-success", undefined, { aigisCallTool });
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.aigisSubmission).toEqual({ ok: true });
+    }
+    expect(aigisCallTool).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "https://aigis.bio/mcp" }),
+      "aigis_submit_journal",
+      { journal: "## Rollup body", period_start: "2026-06-01", period_end: "2026-06-07", source: "openpulse" }
+    );
+
+    const record = await findAigisSubmissionRecord(vault, "aigis-success");
+    expect(record?.ok).toBe(true);
+  });
+
+  it("approval still succeeds when the Aigis submission fails, and records/surfaces the failure", async () => {
+    await writeAigisConfig(true);
+    const update = aigisPending({ id: "aigis-fail" });
+    await writePendingFile(pendingDir, update);
+
+    const aigisCallTool = vi.fn().mockResolvedValue({ ok: false, error: "Aigis server rejected the payload" });
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-fail", undefined, { aigisCallTool });
+
+    expect(outcome.ok).toBe(true); // approval never fails because submission fails
+    if (outcome.ok) {
+      expect(outcome.aigisSubmission).toEqual({ ok: false, error: "Aigis server rejected the payload" });
+    }
+    // The file was still written and the pending removed.
+    const written = await readFile(join(vault.aigisDir, "aigis-rollup-2026-06-07.md"), "utf-8");
+    expect(written).toBeTruthy();
+    const files = await readdir(pendingDir);
+    expect(files).not.toContain("aigis-fail.json");
+
+    const record = await findAigisSubmissionRecord(vault, "aigis-fail");
+    expect(record?.ok).toBe(false);
+    expect(record?.error).toBe("Aigis server rejected the payload");
+  });
+
+  it("skips the submission with a not-connected outcome when aigis.enabled is false", async () => {
+    await writeAigisConfig(false);
+    const update = aigisPending({ id: "aigis-not-connected" });
+    await writePendingFile(pendingDir, update);
+
+    const aigisCallTool = vi.fn();
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-not-connected", undefined, { aigisCallTool });
+
+    expect(outcome.ok).toBe(true);
+    expect(aigisCallTool).not.toHaveBeenCalled();
+    if (outcome.ok) {
+      expect(outcome.aigisSubmission).toEqual({ ok: false, error: "skipped: not connected", skipped: true });
+    }
+  });
+
+  it("skips the submission (no config at all) when config.yaml has no aigis section", async () => {
+    // No config.yaml written at all — loadConfig falls back to defaults with aigis undefined.
+    const update = aigisPending({ id: "aigis-no-config" });
+    await writePendingFile(pendingDir, update);
+
+    const aigisCallTool = vi.fn();
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-no-config", undefined, { aigisCallTool });
+
+    expect(outcome.ok).toBe(true);
+    expect(aigisCallTool).not.toHaveBeenCalled();
+    if (outcome.ok) {
+      expect(outcome.aigisSubmission?.skipped).toBe(true);
+    }
+  });
+
+  it("commits the aigis content file + submissions.jsonl in the vault git repo", async () => {
+    await writeAigisConfig(true);
+    const update = aigisPending({ id: "aigis-commit", batchId: "batch-aigis-1" });
+    await writePendingFile(pendingDir, update);
+
+    const aigisCallTool = vi.fn().mockResolvedValue({ ok: true });
+    const outcome = await approvePendingUpdate(tempDir, pendingDir, "aigis-commit", undefined, { aigisCallTool });
+    expect(outcome.ok).toBe(true);
+
+    const log = await gitLog(vault);
+    expect(log.some((subject) => subject.startsWith("approve(aigis-rollup-2026-06-07): aigis-rollup") && subject.includes("batch=batch-aigis-1"))).toBe(true);
+  });
+
+  it("batch approve handles a mix of an aigisRollup pending and a normal theme pending", async () => {
+    // aigis disabled — this test is about routing (both kinds handled
+    // correctly within one batch), not the network submission path itself
+    // (covered by the dedicated submission tests above); avoids a real
+    // network call to the configured endpoint.
+    await writeAigisConfig(false);
+    await writeTheme(vault, "project-normal", "## Current Status\n\nNormal original.");
+
+    const normalUpdate = basePending({
+      id: "batch-normal",
+      theme: "project-normal",
+      proposedContent: "## Current Status\n\nNormal updated.",
+      previousContent: "## Current Status\n\nNormal original.",
+      batchId: "mixed-batch",
+    });
+    const rollupUpdate = aigisPending({ id: "batch-rollup", batchId: "mixed-batch" });
+    await writePendingFile(pendingDir, normalUpdate);
+    await writePendingFile(pendingDir, rollupUpdate);
+
+    const results = await approvePendingUpdatesBatch(tempDir, pendingDir, ["batch-normal", "batch-rollup"]);
+    expect(results.every((r) => r.outcome.ok)).toBe(true);
+
+    // Normal theme wrote to warm/, is searchable.
+    const normalWritten = await readFile(vault.themeFilePath("project-normal"), "utf-8");
+    expect(normalWritten).toContain("Normal updated.");
+
+    // Rollup wrote to vault/aigis/, not warm/, and was skipped (not connected).
+    const rollupWritten = await readFile(join(vault.aigisDir, "aigis-rollup-2026-06-07.md"), "utf-8");
+    expect(rollupWritten).toBeTruthy();
+    await expect(readFile(vault.themeFilePath("aigis-rollup-2026-06-07"), "utf-8")).rejects.toThrow();
+
+    const rollupResult = results.find((r) => r.id === "batch-rollup");
+    expect(rollupResult?.outcome.ok).toBe(true);
+    if (rollupResult?.outcome.ok) {
+      expect(rollupResult.outcome.aigisSubmission?.skipped).toBe(true);
+    }
   });
 });
 

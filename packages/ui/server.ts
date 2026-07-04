@@ -17,6 +17,7 @@ import { runSkillByName } from "../core/dist/skills/run.js";
 import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, type AigisConfig } from "../core/dist/index.js";
 import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
+import { resubmitAigisRollup } from "./src/lib/aigis-submit.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
 
 const execFileAsync = promisify(execFile);
@@ -178,7 +179,7 @@ app.post("/api/approve-update", async (req, res) => {
     // Size check for dream-pipeline project updates: enqueue compaction if
     // > 14 dated sections (### YYYY-MM-DD). Only for untagged dream updates.
     const update = outcome.update;
-    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+    if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource && !update.aigisRollup) {
       const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
       if (sectionCount > 14 && update.type === "project") {
         await orchestrator.enqueueForCompaction([outcome.theme]);
@@ -189,13 +190,17 @@ app.post("/api/approve-update", async (req, res) => {
       }
     }
 
-    // Rebuild index.md and _backlinks.md in the background — fire and forget
-    const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
-    execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
-      if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
-    });
+    // Rebuild index.md and _backlinks.md in the background — fire and forget.
+    // Skipped for aigisRollup: it never touches warm/index/backlinks (see
+    // approve.ts), so there's nothing for rebuild-meta to do.
+    if (!update.aigisRollup) {
+      const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
+      execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
+        if (err) console.error("[server] rebuild-meta failed:", err.message, stderr || "");
+      });
+    }
 
-    res.json({ ok: true });
+    res.json({ ok: true, ...(outcome.aigisSubmission ? { aigisSubmission: outcome.aigisSubmission } : {}) });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -214,7 +219,7 @@ app.post("/api/approve-batch", async (req, res) => {
     for (const { outcome } of results) {
       if (!outcome.ok) continue;
       const update = outcome.update;
-      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource) {
+      if (!update.lintFix && !update.compactionType && !update.schemaEvolution && !update.querybackSource && !update.aigisRollup) {
         const sectionCount = (outcome.finalContent.match(/^###\s+\d{4}-\d{2}-\d{2}\b/gm) ?? []).length;
         if (sectionCount > 14 && update.type === "project") {
           await orchestrator.enqueueForCompaction([outcome.theme]);
@@ -225,7 +230,9 @@ app.post("/api/approve-batch", async (req, res) => {
       }
     }
 
-    // Rebuild index.md/_backlinks.md once for the whole batch, not per item.
+    // Rebuild index.md/_backlinks.md once for the whole batch, not per item
+    // (an all-aigisRollup batch still triggers it — cheap no-op; see the
+    // single-approve path for the per-item skip).
     if (results.some((r) => r.outcome.ok)) {
       const rebuildBin = join(process.cwd(), "..", "dream", "dist", "rebuild-meta.js");
       execFile("node", [rebuildBin], { env: { ...process.env, OPENPULSE_VAULT: VAULT_ROOT } }, (err, _stdout, stderr) => {
@@ -238,7 +245,7 @@ app.post("/api/approve-batch", async (req, res) => {
         id,
         ok: outcome.ok,
         ...(outcome.ok
-          ? {}
+          ? { ...(outcome.aigisSubmission ? { aigisSubmission: outcome.aigisSubmission } : {}) }
           : { error: outcome.error, ...(outcome.stale ? { stale: true, theme: outcome.theme, reason: outcome.reason } : {}) }),
       }))
     );
@@ -797,6 +804,44 @@ app.post("/api/aigis-test", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.json({ ok: false, tools: [], hasSubmitTool: false, error: e.message });
+  }
+});
+
+/**
+ * Retries a previously failed/skipped Aigis submission for a given (already
+ * approved) update — re-reads `vault/aigis/<theme>.md` and calls the
+ * configured submit tool again, appending a new outcome record to
+ * `submissions.jsonl` (see `resubmitAigisRollup` in `src/lib/aigis-submit.ts`
+ * and task-17 brief §B).
+ */
+app.post("/api/aigis-resubmit/:updateId", async (req, res) => {
+  const updateId = req.params.updateId;
+  if (!/^[\w-]+$/.test(updateId)) return res.status(400).json({ ok: false, error: "Invalid update id" });
+  try {
+    const outcome = await resubmitAigisRollup(VAULT_ROOT, updateId);
+    if (!outcome.ok) return res.status(outcome.status).json({ ok: false, error: outcome.error });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * Last recorded Aigis submission outcome (any update), for the Settings
+ * "Connect Aigis" card — shown alongside the connection status so the user
+ * doesn't have to go dig through the Review tab to see what happened.
+ */
+app.get("/api/aigis-last-submission", async (_req, res) => {
+  try {
+    const vault = new Vault(VAULT_ROOT);
+    await vault.init();
+    const raw = await readFile(join(vault.aigisDir, "submissions.jsonl"), "utf-8").catch(() => "");
+    const lines = raw.split("\n").filter((l) => l.trim());
+    if (lines.length === 0) return res.json({ found: false });
+    const last = JSON.parse(lines[lines.length - 1]);
+    res.json({ found: true, ...last });
+  } catch (e: any) {
+    res.json({ found: false, error: e.message });
   }
 });
 
