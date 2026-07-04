@@ -229,6 +229,42 @@ export async function testModel(provider: string, model: string, apiKey?: string
   return apiPost("/test-model", { provider, model, apiKey: apiKey ?? null, baseUrl: baseUrl ?? null });
 }
 
+export interface AigisConfigInfo {
+  endpoint: string;
+  submitTool: string;
+  enabled: boolean;
+  hasToken: boolean;
+  tokenHint?: string;
+}
+
+export interface AigisTestResult {
+  ok: boolean;
+  tools: string[];
+  hasSubmitTool: boolean;
+  error?: string;
+}
+
+/**
+ * The "Connect Aigis" foundation (outbound MCP client to aigis.bio) is
+ * dev-server-only for now — no Tauri command exists yet, same posture as
+ * regeneratePendingUpdate/triggerDream above until the desktop app grows a
+ * vault-git-style integration for this.
+ */
+export async function getAigisConfig(): Promise<AigisConfigInfo> {
+  if (isTauri) return { endpoint: "", submitTool: "aigis_submit_journal", enabled: false, hasToken: false };
+  return apiGet("/aigis-config");
+}
+
+export async function saveAigisConfig(endpoint: string, authToken: string | undefined, submitTool: string, enabled: boolean): Promise<void> {
+  if (isTauri) throw new Error("Connecting Aigis is not yet available in the desktop app");
+  await apiPost("/aigis-config", { endpoint, authToken: authToken ?? null, submitTool, enabled });
+}
+
+export async function testAigisConnection(endpoint?: string, authToken?: string, submitTool?: string): Promise<AigisTestResult> {
+  if (isTauri) return { ok: false, tools: [], hasSubmitTool: false, error: "Not available in the desktop app yet" };
+  return apiPost("/aigis-test", { endpoint: endpoint ?? null, authToken: authToken ?? null, submitTool: submitTool ?? null });
+}
+
 export async function getVaultPath(): Promise<string> {
   if (isTauri) return tauriInvoke("get_vault_path");
   const result = await apiGet<{ path: string }>("/vault-path");

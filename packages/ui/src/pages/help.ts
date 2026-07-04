@@ -53,6 +53,10 @@ export async function renderHelp(container: HTMLElement): Promise<void> {
       body: `Prefer a URL-based connector (Claude Desktop's "Add custom connector" dialog) over the stdio setup above? Run: node packages/mcp-server/dist/http.js --port 3002. On first run it generates a self-signed cert and a bearer token (${vaultPath}/mcp-token, mode 0600), then prints the full connector URL with the token embedded, e.g. https://localhost:3002/mcp?token=<64 hex chars>. Paste the whole URL — including the token — into the connector dialog. Every /mcp request requires that token (CORS alone doesn't stop a local process from reaching this port). Delete the mcp-token file to rotate it.`,
     },
     {
+      title: "Connect Aigis",
+      body: `OpenPulse's second purpose is a proof-of-work journal for aigis.bio, your candidate-knowledge product. Go to Settings → Connect Aigis, enter your Aigis MCP endpoint and auth token, and click "Test connection" to confirm it can reach your Aigis server and find the expected submit tool. Connecting is just plumbing — it doesn't change how the review flow works: rollup drafts still land as pending updates in Review, and nothing is ever submitted to Aigis without your explicit approval. That promise holds for every future feature built on this connection too.`,
+    },
+    {
       title: "Connect Claude Code",
       body: `Add to your .claude/settings.json or project CLAUDE.md:`,
       code: JSON.stringify({

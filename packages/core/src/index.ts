@@ -2,6 +2,7 @@ export type {
   ActivityEntry,
   OpenPulseConfig,
   LlmProviderName,
+  AigisConfig,
   ClassificationResult,
   SkillConfigField,
   ThemeDocument,
@@ -26,7 +27,13 @@ export {
 } from "./hot.js";
 export { readTheme, writeTheme, listThemes, readAllThemes } from "./warm.js";
 export { archiveHotFile } from "./cold.js";
-export { loadConfig, DEFAULT_CONFIG } from "./config.js";
+export { loadConfig, DEFAULT_CONFIG, isValidAigisEndpoint, DEFAULT_AIGIS_SUBMIT_TOOL } from "./config.js";
+export {
+  testAigisConnection,
+  callAigisTool,
+  type AigisTestResult,
+  type AigisToolCallResult,
+} from "./aigis/client.js";
 export type { LlmProvider, CompletionParams, UsageTotals } from "./llm/provider.js";
 export { createProvider } from "./llm/factory.js";
 export { OllamaProvider } from "./llm/ollama.js";

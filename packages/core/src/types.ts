@@ -23,6 +23,16 @@ export interface OpenPulseConfig {
     apiKey?: string; // resolved from env or keychain if not set
     baseUrl?: string; // Ollama base URL (default http://localhost:11434)
   };
+  /** Outbound connection to aigis.bio's remote MCP server (proof-of-work journal sync). Absent until the user connects it. */
+  aigis?: AigisConfig;
+}
+
+/** Configuration for the outbound connection to aigis.bio's MCP server. */
+export interface AigisConfig {
+  endpoint: string; // https URL of the Aigis MCP server
+  authToken?: string; // bearer token; plaintext in config.yaml (local-first posture, same as llm.apiKey)
+  submitTool: string; // name of the tool used to submit journal rollups (default "aigis_submit_journal")
+  enabled: boolean; // whether the connection is active
 }
 
 /** Result of classifying a hot entry into a theme */

@@ -10,10 +10,11 @@ import { readdir, readFile, writeFile, rm, stat, mkdir, appendFile } from "node:
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { Orchestrator, type OrchestratorCallbacks } from "../core/dist/index.js";
 import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState } from "../core/dist/skills/index.js";
 import { runSkillByName } from "../core/dist/skills/run.js";
-import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry } from "../core/dist/index.js";
+import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, type AigisConfig } from "../core/dist/index.js";
 import { isDreamLockHeld } from "../dream/dist/lock.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
@@ -700,6 +701,102 @@ app.post("/api/save-llm-settings", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Aigis (aigis.bio outbound MCP connection) ---
+
+interface AigisConfigApiShape {
+  endpoint: string;
+  submitTool: string;
+  enabled: boolean;
+  hasToken: boolean;
+  tokenHint?: string;
+}
+
+/** Reads config.yaml's aigis section for the Settings UI. Never returns the raw token — hasToken + a masked hint only, mirroring the llm-config idiom above. */
+export async function readAigisConfigForApi(vaultRoot: string): Promise<AigisConfigApiShape> {
+  const configPath = join(vaultRoot, "config.yaml");
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = (loadYaml(raw) as any) ?? {};
+    const aigis = parsed.aigis ?? {};
+    const token: string | undefined = aigis.authToken;
+    return {
+      endpoint: aigis.endpoint ?? "",
+      submitTool: aigis.submitTool ?? DEFAULT_AIGIS_SUBMIT_TOOL,
+      enabled: Boolean(aigis.enabled),
+      hasToken: Boolean(token),
+      tokenHint: maskKey(token),
+    };
+  } catch {
+    return { endpoint: "", submitTool: DEFAULT_AIGIS_SUBMIT_TOOL, enabled: false, hasToken: false };
+  }
+}
+
+/**
+ * Saves config.yaml's aigis section. A blank authToken means "keep the
+ * existing one" (same convention as save-llm-settings' apiKey handling) —
+ * only an explicitly-typed new token overwrites it. Reads and rewrites the
+ * whole document via js-yaml so other top-level sections (themes, llm) are
+ * preserved rather than clobbered.
+ */
+export async function saveAigisConfigForApi(
+  vaultRoot: string,
+  body: { endpoint?: string; authToken?: string; submitTool?: string; enabled?: boolean }
+): Promise<void> {
+  const configPath = join(vaultRoot, "config.yaml");
+  await mkdir(vaultRoot, { recursive: true });
+
+  let parsed: any = {};
+  try {
+    parsed = (loadYaml(await readFile(configPath, "utf-8")) as any) ?? {};
+  } catch { /* no existing config */ }
+
+  const existingToken: string | undefined = parsed?.aigis?.authToken;
+  const effectiveToken = body.authToken || existingToken;
+
+  parsed.aigis = {
+    endpoint: body.endpoint ?? "",
+    submitTool: body.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL,
+    enabled: Boolean(body.enabled),
+    ...(effectiveToken ? { authToken: effectiveToken } : {}),
+  };
+
+  await writeFile(configPath, dumpYaml(parsed), "utf-8");
+}
+
+app.get("/api/aigis-config", async (_req, res) => {
+  res.json(await readAigisConfigForApi(VAULT_ROOT));
+});
+
+app.post("/api/aigis-config", async (req, res) => {
+  try {
+    await saveAigisConfigForApi(VAULT_ROOT, req.body ?? {});
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/aigis-test", async (req, res) => {
+  try {
+    const stored = await readAigisConfigForApi(VAULT_ROOT);
+    const existingToken = stored.hasToken ? (await loadConfig(VAULT_ROOT)).aigis?.authToken : undefined;
+
+    const endpoint: string | undefined = req.body?.endpoint || stored.endpoint;
+    const authToken: string | undefined = req.body?.authToken || existingToken;
+    const submitTool: string = req.body?.submitTool || stored.submitTool || DEFAULT_AIGIS_SUBMIT_TOOL;
+
+    if (!endpoint) {
+      return res.json({ ok: false, tools: [], hasSubmitTool: false, error: "No endpoint configured" });
+    }
+
+    const config: AigisConfig = { endpoint, authToken, submitTool, enabled: true };
+    const result = await testAigisConnection(config);
+    res.json(result);
+  } catch (e: any) {
+    res.json({ ok: false, tools: [], hasSubmitTool: false, error: e.message });
   }
 });
 

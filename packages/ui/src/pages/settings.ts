@@ -1,4 +1,4 @@
-import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop } from "../lib/tauri-bridge.js";
+import { getLlmConfig, saveLlmSettings, getVaultPath, validateAndListModels, testModel, getClaudeDesktopStatus, connectClaudeDesktop, disconnectClaudeDesktop, getAigisConfig, saveAigisConfig, testAigisConnection } from "../lib/tauri-bridge.js";
 import type { ModelInfo } from "../lib/tauri-bridge.js";
 import { log } from "../lib/logger.js";
 import { logoUrl } from "../lib/utils.js";
@@ -184,6 +184,82 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   claudeRow.id = "claude-desktop-row";
   connectionsCard.appendChild(claudeRow);
 
+  // Connect Aigis card
+  const aigisCard = document.createElement("div");
+  aigisCard.className = "card";
+  const aigisH3 = document.createElement("h3");
+  aigisH3.textContent = "Connect Aigis";
+  const aigisDesc = document.createElement("p");
+  aigisDesc.className = "form-help";
+  aigisDesc.textContent = "Connects OpenPulseAI to your aigis.bio candidate-knowledge journal. Nothing is auto-submitted — rollups stay review-gated in the Review tab, same as everything else.";
+  aigisCard.appendChild(aigisH3);
+  aigisCard.appendChild(aigisDesc);
+
+  const aigisSection = document.createElement("div");
+  aigisSection.className = "settings-section";
+
+  const endpointGroup = document.createElement("div");
+  endpointGroup.className = "form-group";
+  const endpointLabel = document.createElement("label");
+  endpointLabel.className = "form-label";
+  endpointLabel.htmlFor = "aigis-endpoint-input";
+  endpointLabel.textContent = "Endpoint";
+  const endpointInput = document.createElement("input");
+  endpointInput.className = "form-input";
+  endpointInput.type = "text";
+  endpointInput.id = "aigis-endpoint-input";
+  endpointInput.placeholder = "https://aigis.bio/mcp";
+  endpointGroup.appendChild(endpointLabel);
+  endpointGroup.appendChild(endpointInput);
+
+  const tokenGroup = document.createElement("div");
+  tokenGroup.className = "form-group";
+  const tokenLabel = document.createElement("label");
+  tokenLabel.className = "form-label";
+  tokenLabel.htmlFor = "aigis-token-input";
+  tokenLabel.textContent = "Auth token";
+  const tokenInput = document.createElement("input");
+  tokenInput.className = "form-input";
+  tokenInput.type = "password";
+  tokenInput.id = "aigis-token-input";
+  tokenGroup.appendChild(tokenLabel);
+  tokenGroup.appendChild(tokenInput);
+
+  const enabledGroup = document.createElement("div");
+  enabledGroup.className = "form-group form-group-checkbox";
+  const enabledLabel = document.createElement("label");
+  enabledLabel.className = "form-label";
+  enabledLabel.htmlFor = "aigis-enabled-toggle";
+  const enabledCheckbox = document.createElement("input");
+  enabledCheckbox.type = "checkbox";
+  enabledCheckbox.id = "aigis-enabled-toggle";
+  enabledLabel.appendChild(enabledCheckbox);
+  enabledLabel.appendChild(document.createTextNode(" Enabled"));
+  enabledGroup.appendChild(enabledLabel);
+
+  const aigisActionsRow = document.createElement("div");
+  aigisActionsRow.className = "actions-row";
+  const aigisSaveBtn = document.createElement("button");
+  aigisSaveBtn.className = "btn btn-primary";
+  aigisSaveBtn.id = "btn-aigis-save";
+  aigisSaveBtn.textContent = "Save";
+  const aigisTestBtn = document.createElement("button");
+  aigisTestBtn.className = "btn btn-secondary";
+  aigisTestBtn.id = "btn-aigis-test";
+  aigisTestBtn.textContent = "Test connection";
+  const aigisStatus = document.createElement("span");
+  aigisStatus.className = "validate-status";
+  aigisStatus.id = "aigis-status";
+  aigisActionsRow.appendChild(aigisSaveBtn);
+  aigisActionsRow.appendChild(aigisTestBtn);
+  aigisActionsRow.appendChild(aigisStatus);
+
+  aigisSection.appendChild(endpointGroup);
+  aigisSection.appendChild(tokenGroup);
+  aigisSection.appendChild(enabledGroup);
+  aigisSection.appendChild(aigisActionsRow);
+  aigisCard.appendChild(aigisSection);
+
   // Mount everything
   container.textContent = "";
   container.appendChild(pageHeader);
@@ -191,6 +267,7 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
   container.appendChild(credentialsCard);
   container.appendChild(modelCard);
   container.appendChild(connectionsCard);
+  container.appendChild(aigisCard);
   container.appendChild(vaultCard);
 
   // Load vault path
@@ -201,6 +278,11 @@ export async function renderSettings(container: HTMLElement): Promise<void> {
 
   // Load Claude Desktop connection status
   await renderClaudeDesktopConnection();
+
+  // Load Aigis connection settings
+  await renderAigisCard();
+  aigisSaveBtn.addEventListener("click", handleAigisSave);
+  aigisTestBtn.addEventListener("click", handleAigisTest);
 
   // Render credentials for initial provider
   renderCredentials(currentProvider, currentModel, currentApiKey, currentBaseUrl, hasStoredKey, keyHint);
@@ -517,5 +599,81 @@ async function renderClaudeDesktopConnection(): Promise<void> {
     hint.className = "connection-hint";
     hint.textContent = "Restart Claude Desktop to pick up the new config.";
     row.appendChild(hint);
+  }
+}
+
+async function renderAigisCard(): Promise<void> {
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+  const enabledToggle = document.getElementById("aigis-enabled-toggle") as HTMLInputElement;
+
+  try {
+    const config = await getAigisConfig();
+    endpointInput.value = config.endpoint;
+    tokenInput.placeholder = config.hasToken ? `Saved (${config.tokenHint}) — leave blank to keep` : "Enter your Aigis auth token";
+    enabledToggle.checked = config.enabled;
+  } catch { /* use defaults */ }
+}
+
+async function handleAigisSave(): Promise<void> {
+  const saveBtn = document.getElementById("btn-aigis-save") as HTMLButtonElement;
+  const statusEl = document.getElementById("aigis-status")!;
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+  const enabledToggle = document.getElementById("aigis-enabled-toggle") as HTMLInputElement;
+
+  saveBtn.classList.add("loading");
+  saveBtn.disabled = true;
+  statusEl.textContent = "";
+  statusEl.className = "validate-status";
+
+  try {
+    await saveAigisConfig(endpointInput.value.trim(), tokenInput.value || undefined, "aigis_submit_journal", enabledToggle.checked);
+    log("info", "Aigis settings saved", endpointInput.value);
+    statusEl.textContent = "Saved";
+    statusEl.className = "validate-status success";
+    tokenInput.value = "";
+    await renderAigisCard();
+    setTimeout(() => { statusEl.textContent = ""; }, 2500);
+  } catch (e: any) {
+    log("error", "Failed to save Aigis settings", e?.message ?? String(e));
+    statusEl.textContent = `Error: ${e?.message ?? e}`;
+    statusEl.className = "validate-status error";
+  } finally {
+    saveBtn.classList.remove("loading");
+    saveBtn.disabled = false;
+  }
+}
+
+async function handleAigisTest(): Promise<void> {
+  const testBtn = document.getElementById("btn-aigis-test") as HTMLButtonElement;
+  const statusEl = document.getElementById("aigis-status")!;
+  const endpointInput = document.getElementById("aigis-endpoint-input") as HTMLInputElement;
+  const tokenInput = document.getElementById("aigis-token-input") as HTMLInputElement;
+
+  testBtn.classList.add("loading");
+  testBtn.disabled = true;
+  statusEl.textContent = "Testing...";
+  statusEl.className = "validate-status";
+
+  try {
+    const result = await testAigisConnection(endpointInput.value.trim() || undefined, tokenInput.value || undefined);
+    if (result.ok) {
+      statusEl.textContent = result.hasSubmitTool
+        ? `✓ Connected — ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} found`
+        : `✓ Connected, but the submit tool wasn't found among: ${result.tools.join(", ") || "(none)"}`;
+      statusEl.className = "validate-status success";
+      log("info", "Aigis connection test passed", `${result.tools.length} tools`);
+    } else {
+      statusEl.textContent = result.error ?? "Connection failed";
+      statusEl.className = "validate-status error";
+      log("warn", "Aigis connection test failed", result.error ?? "unknown error");
+    }
+  } catch (e: any) {
+    statusEl.textContent = `Error: ${e?.message ?? e}`;
+    statusEl.className = "validate-status error";
+  } finally {
+    testBtn.classList.remove("loading");
+    testBtn.disabled = false;
   }
 }
