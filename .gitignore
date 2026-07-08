@@ -11,6 +11,8 @@ src-tauri/gen/
 
 # User data and secrets — never commit these
 config.yaml
+ui-token
+ui-server.json
 vault/
 certs/
 .DS_Store
