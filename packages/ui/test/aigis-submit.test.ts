@@ -24,13 +24,13 @@ function baseConfig(overrides: Partial<AigisConfig> = {}): AigisConfig {
 }
 
 describe("buildAigisSubmitArgs", () => {
-  it("maps content + period into the conservative submit payload", () => {
+  it("wraps content + a human-readable period in the tool's required `params` object", () => {
     const args = buildAigisSubmitArgs("## Rollup\nBody", "2026-06-01", "2026-06-07");
     expect(args).toEqual({
-      journal: "## Rollup\nBody",
-      period_start: "2026-06-01",
-      period_end: "2026-06-07",
-      source: "openpulse",
+      params: {
+        content: "## Rollup\nBody",
+        period: "2026-06-01 to 2026-06-07",
+      },
     });
   });
 });
@@ -101,7 +101,7 @@ describe("aigis-submit.ts", () => {
       expect(callTool).toHaveBeenCalledWith(
         baseConfig(),
         "aigis_submit_journal",
-        { journal: "## Rollup content", period_start: "2026-06-01", period_end: "2026-06-07", source: "openpulse" }
+        { params: { content: "## Rollup content", period: "2026-06-01 to 2026-06-07" } }
       );
 
       const record = await findAigisSubmissionRecord(vault, "u3");
@@ -194,7 +194,7 @@ describe("aigis-submit.ts", () => {
       expect(callTool).toHaveBeenCalledWith(
         expect.objectContaining({ endpoint: "https://aigis.bio/mcp" }),
         "aigis_submit_journal",
-        expect.objectContaining({ journal: "## Rollup\nRetry content" })
+        expect.objectContaining({ params: expect.objectContaining({ content: "## Rollup\nRetry content" }) })
       );
 
       const latest = await findAigisSubmissionRecord(vault, "retry-1");

@@ -71,11 +71,16 @@ function submissionsLogPath(vault: Vault): string {
  * adjust later without touching the submit/record plumbing around it.
  */
 export function buildAigisSubmitArgs(content: string, periodStart: string, periodEnd: string): Record<string, unknown> {
+  // The `aigis_submit_journal` tool requires a single `params` object holding
+  // a `JournalInput` — `content` (required) plus an optional human-readable
+  // `period` (NOT the two raw ISO timestamps). Sending `{journal, period_start,
+  // period_end, source}` at the top level is rejected with a Pydantic
+  // "params field required" validation error. See the tool's inputSchema.
   return {
-    journal: content,
-    period_start: periodStart,
-    period_end: periodEnd,
-    source: "openpulse",
+    params: {
+      content,
+      period: `${periodStart.slice(0, 10)} to ${periodEnd.slice(0, 10)}`,
+    },
   };
 }
 

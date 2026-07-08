@@ -509,7 +509,7 @@ describe("approvePendingUpdate — aigisRollup routing", () => {
     expect(aigisCallTool).toHaveBeenCalledWith(
       expect.objectContaining({ endpoint: "https://aigis.bio/mcp" }),
       "aigis_submit_journal",
-      { journal: "## Rollup body", period_start: "2026-06-01", period_end: "2026-06-07", source: "openpulse" }
+      { params: { content: "## Rollup body", period: "2026-06-01 to 2026-06-07" } }
     );
 
     const record = await findAigisSubmissionRecord(vault, "aigis-success");
