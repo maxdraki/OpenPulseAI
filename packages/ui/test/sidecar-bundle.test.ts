@@ -67,10 +67,28 @@ describe.skipIf(!bundleExists)("bundled sidecar smoke test", () => {
       throw err;
     } finally {
       if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
-      await rm(vaultRoot, { recursive: true, force: true });
+      await rmWithRetry(vaultRoot);
     }
   }, 30_000);
 });
+
+// The sidecar auto-adopts its vault as a git repo (`ensureVaultRepo` in
+// @openpulse/core spawns `git init`/`git commit` during `Vault.init()`), and
+// those git subprocesses can still be flushing files into `.git/` when the
+// process exits — so a plain `rm` of the temp vault races them and throws
+// ENOTEMPTY. Retry with a short backoff to let git settle before giving up.
+async function rmWithRetry(path: string, attempts = 6): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (i >= attempts - 1 || (code !== "ENOTEMPTY" && code !== "EBUSY")) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (i + 1)));
+    }
+  }
+}
 
 function waitForReadyPort(getStdout: () => string, timeoutMs: number): Promise<number> {
   return new Promise((resolve, reject) => {

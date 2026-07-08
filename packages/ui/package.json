@@ -11,6 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@openpulse/core": "workspace:*",
+    "@openpulse/dream": "workspace:*",
     "@shoelace-style/shoelace": "^2.20.0",
     "js-yaml": "^4.1.1",
     "marked": "^17.0.5"

@@ -31,8 +31,8 @@ import {
   loadConfig,
   type PendingUpdate,
   type LlmProvider,
-} from "../../../core/dist/index.js";
-import { regenerateStaleUpdate } from "../../../dream/dist/synthesize.js";
+} from "@openpulse/core";
+import { regenerateStaleUpdate } from "@openpulse/dream/dist/synthesize.js";
 import { aigisThemeFilePath, submitAigisRollup, type AigisSubmissionOutcome, type CallAigisToolFn } from "./aigis-submit.js";
 
 export interface ApproveSuccess {
