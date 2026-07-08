@@ -14,7 +14,7 @@
  */
 import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { callAigisTool, loadConfig, DEFAULT_AIGIS_SUBMIT_TOOL, isSafeThemeName, type AigisConfig, Vault } from "../../../core/dist/index.js";
+import { callAigisTool, loadConfig, DEFAULT_AIGIS_SUBMIT_TOOL, isSafeThemeName, type AigisConfig, Vault } from "@openpulse/core";
 
 /** Injectable seam for `callAigisTool` — production callers never set this;
  *  tests substitute a fake to avoid a real MCP connection (see brief's "mock

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault } from "../../core/dist/index.js";
-import type { AigisConfig } from "../../core/dist/index.js";
+import { Vault } from "@openpulse/core";
+import type { AigisConfig } from "@openpulse/core";
 import {
   buildAigisSubmitArgs,
   appendAigisSubmissionRecord,

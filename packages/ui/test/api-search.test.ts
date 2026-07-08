@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Vault, writeTheme } from "../../core/dist/index.js";
+import { Vault, writeTheme } from "@openpulse/core";
 import { searchThemesForApi } from "../server.js";
 
 describe("searchThemesForApi (backs GET /api/search)", () => {

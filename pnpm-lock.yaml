@@ -86,6 +86,12 @@ importers:
 
   packages/ui:
     dependencies:
+      '@openpulse/core':
+        specifier: workspace:*
+        version: link:../core
+      '@openpulse/dream':
+        specifier: workspace:*
+        version: link:../dream
       '@shoelace-style/shoelace':
         specifier: ^2.20.0
         version: 2.20.1(@floating-ui/utils@0.2.11)(@types/react@19.2.14)

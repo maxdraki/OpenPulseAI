@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Vault, writeTheme, searchIndex, rebuildIndex } from "../../core/dist/index.js";
-import type { PendingUpdate, LlmProvider } from "../../core/dist/index.js";
+import { Vault, writeTheme, searchIndex, rebuildIndex } from "@openpulse/core";
+import type { PendingUpdate, LlmProvider } from "@openpulse/core";
 import {
   gateOnStaleness,
   approvePendingUpdate,
