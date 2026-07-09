@@ -29,6 +29,7 @@ import { discoverSkills, checkEligibility, loadCollectorState as loadSkillState 
 import { runSkillByName } from "@openpulse/core/dist/skills/run.js";
 import { Vault, readAllThemes, parseActivityBlocks, splitHotFileBlocks, joinHotFileBlocks, loadConfig, rebuildIndex, searchWithRebuildRetry, isEmbeddingsAvailable, testAigisConnection, DEFAULT_AIGIS_SUBMIT_TOOL, isValidAigisEndpoint, type AigisConfig } from "@openpulse/core";
 import { isDreamLockHeld } from "@openpulse/dream/dist/lock.js";
+import { loadProcessedLedger, computeEntryId } from "@openpulse/dream/dist/ledger.js";
 import { approvePendingUpdate, approvePendingUpdatesBatch, regeneratePendingUpdate } from "./src/lib/approve.js";
 import { resubmitAigisRollup } from "./src/lib/aigis-submit.js";
 import { loadOrCreateToken, tokenPath, isAuthorizedHeader } from "./dev-token.js";
@@ -547,19 +548,31 @@ async function dirExists(dir: string): Promise<boolean> {
 app.get("/api/vault-health", async (_req, res) => {
   const vaultExists = await dirExists(vaultDir);
 
-  // Count actual hot entries (blocks in daily files + ingested docs)
+  // Count hot entries (blocks in daily files + ingested docs), and how many are
+  // still UNPROCESSED — i.e. not yet in the dream pipeline's ledger. A processed
+  // entry stays in today's hot file until it archives to cold storage after the
+  // day rolls over, so hotCount (total) and unprocessedHotCount diverge once a
+  // day's entries have been synthesized. The dashboard surfaces the latter so a
+  // fully-reviewed day reads 0 (see the "Awaiting synthesis" tile).
   let hotCount = 0;
+  let unprocessedHotCount = 0;
   try {
+    const ledger = await loadProcessedLedger(new Vault(VAULT_ROOT));
     const files = await readdir(hotDir);
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
-      hotCount += splitHotFileBlocks(content).filter((b) => b.trim()).length;
+      for (const block of parseActivityBlocks(content)) {
+        hotCount += 1;
+        if (!ledger[computeEntryId(block)]) unprocessedHotCount += 1;
+      }
     }
-    // Count ingested documents
+    // Ingested documents follow a separate flow (no dated-file ledger id), so
+    // treat them as awaiting synthesis.
     try {
-      const ingestFiles = await readdir(join(hotDir, "ingest"));
-      hotCount += ingestFiles.filter((f) => f.endsWith(".md")).length;
+      const ingestCount = (await readdir(join(hotDir, "ingest"))).filter((f) => f.endsWith(".md")).length;
+      hotCount += ingestCount;
+      unprocessedHotCount += ingestCount;
     } catch { /* ingest dir may not exist */ }
   } catch { /* hot dir may not exist */ }
 
@@ -569,7 +582,7 @@ app.get("/api/vault-health", async (_req, res) => {
   );
   const warmCount = warmFiles.length;
   const pendingCount = await countFiles(pendingDir, ".json");
-  res.json({ hotCount, warmCount, pendingCount, vaultExists });
+  res.json({ hotCount, unprocessedHotCount, warmCount, pendingCount, vaultExists });
 });
 
 app.get("/api/pending-updates", async (_req, res) => {
@@ -1122,14 +1135,18 @@ app.get("/api/vault-path", (_req, res) => {
 app.get("/api/hot-entries", async (_req, res) => {
   try {
     const files = await readdir(hotDir);
-    const entries: Array<{ id: string; timestamp: string; log: string; theme?: string; source?: string }> = [];
+    const ledger = await loadProcessedLedger(new Vault(VAULT_ROOT));
+    const entries: Array<{ id: string; timestamp: string; log: string; theme?: string; source?: string; processed: boolean }> = [];
 
     for (const file of files) {
       if (!file.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
       const content = await readFile(join(hotDir, file), "utf-8");
       const blocks = parseActivityBlocks(content);
       blocks.forEach((block, i) => {
-        entries.push({ id: `daily:${file}:${i}`, ...block });
+        // `processed` = already consumed by a dream run (present in the ledger).
+        // Such an entry lingers in today's hot file until it archives to cold
+        // storage after the day rolls over — the UI badges it so that's clear.
+        entries.push({ id: `daily:${file}:${i}`, processed: !!ledger[computeEntryId(block)], ...block });
       });
     }
 
@@ -1148,6 +1165,7 @@ app.get("/api/hot-entries", async (_req, res) => {
           log: content,
           theme: "ingested",
           source: file.replace(/\.md$/, ""),
+          processed: false, // ingested docs follow a separate flow; treat as awaiting synthesis
         });
       }
     } catch { /* ingest dir may not exist */ }

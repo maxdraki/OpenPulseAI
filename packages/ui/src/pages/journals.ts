@@ -80,6 +80,14 @@ async function loadEntries(listEl: HTMLElement): Promise<void> {
       });
       header.appendChild(time);
 
+      const status = document.createElement("span");
+      status.className = `journal-entry-status ${entry.processed ? "is-processed" : "is-pending"}`;
+      status.textContent = entry.processed ? "✓ Synthesized" : "Awaiting synthesis";
+      status.title = entry.processed
+        ? "Reviewed & synthesized. Stays here as today's journal, then archives to cold storage after today."
+        : "Not yet processed by the dream pipeline.";
+      header.appendChild(status);
+
       if (entry.theme) {
         const theme = document.createElement("span");
         theme.className = "journal-entry-theme";

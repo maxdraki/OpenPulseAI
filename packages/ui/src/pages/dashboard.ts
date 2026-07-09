@@ -91,7 +91,7 @@ async function loadStats(grid: HTMLElement): Promise<void> {
   try {
     const h = await getVaultHealth();
     grid.textContent = "";
-    grid.appendChild(buildStatCard("hot", String(h.hotCount), "Journals", "journals", JOURNAL_ICON));
+    grid.appendChild(buildStatCard("hot", String(h.unprocessedHotCount), "Awaiting synthesis", "journals", JOURNAL_ICON));
     grid.appendChild(buildStatCard("pending", String(h.pendingCount), "Pending Reviews", "review", REVIEW_ICON));
   } catch {
     grid.textContent = "Failed to load stats";

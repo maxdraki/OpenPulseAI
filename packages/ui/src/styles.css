@@ -1015,6 +1015,23 @@ a.wiki-link:hover {
   border-radius: 10px;
 }
 
+.journal-entry-status {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+}
+
+.journal-entry-status.is-processed {
+  background: rgba(52, 211, 153, 0.14);
+  color: #10b981;
+}
+
+.journal-entry-status.is-pending {
+  background: rgba(251, 191, 36, 0.16);
+  color: #d97706;
+}
+
 .journal-entry-body {
   font-size: 0.85rem;
   color: var(--text-primary);

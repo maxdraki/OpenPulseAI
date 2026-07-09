@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 // Types matching the core package
 export interface VaultHealth {
   hotCount: number;
+  /** Hot entries not yet consumed by a dream run — the rest linger as today's
+   *  journal until they archive to cold after the day. Drives the dashboard's
+   *  "Awaiting synthesis" tile. */
+  unprocessedHotCount: number;
   warmCount: number;
   pendingCount: number;
   vaultExists: boolean;
@@ -375,6 +379,9 @@ export interface HotEntry {
   log: string;
   theme?: string;
   source?: string;
+  /** True once a dream run has consumed this entry (it's in the processed
+   *  ledger). Shown as a status badge on the Journals page. */
+  processed: boolean;
 }
 
 export async function deleteHotEntry(id: string): Promise<void> {

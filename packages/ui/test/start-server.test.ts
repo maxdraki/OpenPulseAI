@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
-import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startServer, type ServerHandle } from "../server.js";
+import { computeEntryId } from "@openpulse/dream/dist/ledger.js";
 
 /** Grabs a free port from the OS, then releases it immediately — good enough
  *  for "start a server on some port and check its shape" tests where the
@@ -122,6 +123,44 @@ describe("startServer", () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(authed.status).toBe(200);
+  });
+
+  it("reports per-entry `processed` and excludes processed entries from unprocessedHotCount", async () => {
+    const vaultRoot = await makeTempVault();
+    tempDirs.push(vaultRoot);
+    const hotDir = join(vaultRoot, "vault", "hot");
+    await mkdir(hotDir, { recursive: true });
+    await writeFile(
+      join(hotDir, "2026-07-09.md"),
+      "## 2026-07-09T10:00:00.000Z\n**Theme:** auto\n**Source:** github-activity\n\n### owner/repo\n**Commits:**\n* abc123: did a thing\n<!-- openpulse:entry -->\n"
+    );
+    const handle = await boot({ vaultRoot });
+    const token = (await readFile(join(vaultRoot, "ui-token"), "utf-8")).trim();
+    const base = `http://127.0.0.1:${handle.port}`;
+    const headers = { Authorization: `Bearer ${token}` };
+
+    // Not in the ledger yet → unprocessed.
+    let entries = await (await fetch(`${base}/api/hot-entries`, { headers })).json();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].processed).toBe(false);
+    let health = await (await fetch(`${base}/api/vault-health`, { headers })).json();
+    expect(health.hotCount).toBe(1);
+    expect(health.unprocessedHotCount).toBe(1);
+
+    // Mark it processed with the SAME id the dream pipeline would write.
+    const { timestamp, source, theme, log } = entries[0];
+    const id = computeEntryId({ timestamp, source, theme, log });
+    await writeFile(
+      join(hotDir, ".processed.json"),
+      JSON.stringify({ [id]: { processedAt: "2026-07-09T10:01:00.000Z", batchId: "b1" } })
+    );
+
+    // processed flips true; total unchanged; unprocessed drops to 0.
+    entries = await (await fetch(`${base}/api/hot-entries`, { headers })).json();
+    expect(entries[0].processed).toBe(true);
+    health = await (await fetch(`${base}/api/vault-health`, { headers })).json();
+    expect(health.hotCount).toBe(1);
+    expect(health.unprocessedHotCount).toBe(0);
   });
 
   it("supports a tokenPath override that writes the token somewhere other than <vaultRoot>/ui-token", async () => {
