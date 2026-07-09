@@ -53,6 +53,17 @@ describe("github-activity SKILL.md", () => {
     expect(skill!.body).toContain('repos/$repo/pulls?state=all&per_page=100');
   });
 
+  it("omits repos (and the cross-repo section) that produced no output, so empty/404 repos never become themes", async () => {
+    const skill = await loadSkillFromFile(SKILL_PATH);
+    // Each category is captured into a variable, then the whole repo block is
+    // skipped when they're all empty — so a 404/inactive repo emits nothing.
+    expect(skill!.body).toContain('[ -z "$commits$prs$issues$comments$releases" ] && continue');
+    // The "=== $repo ===" header is emitted only after that guard passes.
+    expect(skill!.body).toMatch(/&& continue; echo "=== \$repo ==="/);
+    // Same treatment for the cross-repo activity section.
+    expect(skill!.body).toContain('if [ -n "$reviewed$commented" ]; then');
+  });
+
   it("uses --paginate to avoid dropping commits past the first page", async () => {
     const skill = await loadSkillFromFile(SKILL_PATH);
     expect(skill!.body).toContain("--paginate");

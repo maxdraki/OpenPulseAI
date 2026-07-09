@@ -1,10 +1,37 @@
 import { describe, it, expect, vi } from "vitest";
-import { classifyEntries } from "../src/classify.js";
+import { classifyEntries, isAbsenceOnly } from "../src/classify.js";
 import type { ActivityEntry, LlmProvider } from "@openpulse/core";
 
 function mockProvider(responseText: string): LlmProvider {
   return { complete: vi.fn().mockResolvedValue(responseText) };
 }
+
+describe("isAbsenceOnly", () => {
+  it("is true for an absence-only status page", () => {
+    expect(isAbsenceOnly("## Current Status\n\nNo activity recorded.")).toBe(true);
+  });
+
+  it("is true when every dated log line is also an absence statement (with citations)", () => {
+    const content =
+      "## Current Status\n\nNo activity recorded.\n\n### 2026-07-08\n*   No activity recorded for mcp-registry ^[src:2026-07-08-github-activity].";
+    expect(isAbsenceOnly(content)).toBe(true);
+  });
+
+  it("is true for empty / heading-only content", () => {
+    expect(isAbsenceOnly("")).toBe(true);
+    expect(isAbsenceOnly("## Current Status\n\n")).toBe(true);
+  });
+
+  it("is FALSE for short but substantive content (must NOT be skipped)", () => {
+    expect(isAbsenceOnly("## Current Status\n\nFixed the login bug.")).toBe(false);
+    expect(isAbsenceOnly("## Current Status\n\nLogin page refactored.")).toBe(false);
+  });
+
+  it("is FALSE when real work sits alongside an absence line", () => {
+    const content = "## Current Status\n\nNo activity recorded.\n\n### 2026-07-08\n*   Shipped the OAuth flow ^[src:x].";
+    expect(isAbsenceOnly(content)).toBe(false);
+  });
+});
 
 describe("classifyEntries", () => {
   it("classifies entries using LLM provider", async () => {
@@ -172,6 +199,34 @@ describe("classifyEntries", () => {
       expect(Array.isArray(classified[0].themes)).toBe(true);
       expect(classified[0].themes.length).toBeGreaterThanOrEqual(1);
       expect(classified[0].themes[0]).toBe("my-project");
+    });
+
+    it("tags repos with activity but skips repos whose section is empty or errored (404)", async () => {
+      const entries: ActivityEntry[] = [
+        {
+          timestamp: "2026-07-08T18:00:00Z",
+          source: "github-activity",
+          log: [
+            "### maxdraki/OpenPulseAI",
+            "**Commits:**",
+            "*   **fc71316**: fix(ui): send aigis_submit_journal args under params",
+            "### rws-internal-tech/vendors-data-ingestion",
+            '*   Command returned: "Not Found" (404) for all categories.',
+            "### rws-internal-tech/mcp-registry",
+            '*   Command returned: "Not Found" (404) for all categories.',
+          ].join("\n"),
+        },
+      ];
+      const provider = mockProvider("[]");
+
+      const { classified } = await classifyEntries(entries, [], provider, "test-model");
+
+      expect(classified).toHaveLength(1);
+      // The active repo is tagged…
+      expect(classified[0].themes).toContain("openpulseai");
+      // …but the 404 / no-activity repos are NOT (no empty themes → no vacuous pages).
+      expect(classified[0].themes).not.toContain("vendors-data-ingestion");
+      expect(classified[0].themes).not.toContain("mcp-registry");
     });
 
     it("finds secondary themes from existing theme names mentioned in text", async () => {

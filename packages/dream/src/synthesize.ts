@@ -19,6 +19,7 @@ import {
 import { loadSchema, type SchemaTemplate } from "./schema.js";
 import { entryId, extractSources } from "./provenance.js";
 import { buildBacklinks } from "./backlinks.js";
+import { isAbsenceOnly } from "./classify.js";
 import {
   readFactsFile,
   activeFacts,
@@ -405,6 +406,12 @@ export interface SynthesizeOptions {
   /** Called when a theme's synthesis fails (after the provider's own retries
    *  are exhausted) so the caller can decide which entries stay unprocessed. */
   onThemeFailure?: (theme: string, error: unknown) => void;
+  /** Called when a theme's synthesis produced no substantive content (an
+   *  "absence-only" page — see the vacuous-output guard below) and was
+   *  therefore skipped WITHOUT emitting a pending update. Distinct from
+   *  onThemeFailure: the theme succeeded (there was simply nothing to record),
+   *  so the caller should still mark its entries processed rather than defer. */
+  onAbsenceSkip?: (theme: string) => void;
   /** Called once per theme that was ELIGIBLE for append/patch synthesis
    *  (project/source-summary pages with an existing page above the
    *  small-page bypass threshold — see `tryPatchSynthesis`), reporting
@@ -751,6 +758,26 @@ CRITICAL: If the source entries only mention a project as "inactive", "no change
       console.warn(`[dream] ${msg}`);
       await vaultLog("warn", msg);
       throw new Error(msg);
+    }
+
+    // Vacuous-output guard: the synthesis prompt is instructed to write
+    // "No activity recorded" rather than fabricate work when the source entries
+    // don't actually evidence any (anti-hallucination). Emitting that as a
+    // pending update just creates an empty review item to approve. Skip it —
+    // but only when no real content is at stake: a brand-new page, or an
+    // existing page that was already essentially empty. A substantive existing
+    // page collapsing to an absence-only body is caught by the shrinkage guard
+    // above (which defers for retry rather than silently dropping activity), so
+    // we never reach here in that case. Reported via onAbsenceSkip (NOT
+    // onThemeFailure) so the caller marks the entries processed — there is
+    // genuinely nothing to record, and deferring would just regenerate the same
+    // empty page every run.
+    if (isAbsenceOnly(proposedContent) && isAbsenceOnly(synthesisBaseContent ?? "")) {
+      const msg = `Synthesis for theme "${theme}" produced no substantive content — skipping pending (no activity to record)`;
+      console.warn(`[dream] ${msg}`);
+      await vaultLog("info", msg);
+      opts?.onAbsenceSkip?.(theme);
+      return;
     }
 
     // Roll up ^[src:] markers and merge with existing sources

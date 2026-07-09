@@ -58,6 +58,24 @@ function isValidThemeName(name: string): boolean {
 
 export const ABSENCE_LINE =
   /no\s+(recent\s+|file\s+|pr\s+|commit\s+|modification\s+)?activity\b|no\s+commits?\b|no\s+pr\s+activity\b|no\s+(file\s+)?modifications?\b|no\s+repos?\s+configured\b|no\s+.{1,50}\s+since\s+last\s+run\b|no\s+.{1,30}\s+detected\b|no\s+changes?\b|inactive\b|nothing\s+(happened|to\s+report)\b/i;
+/**
+ * True if a synthesized page states nothing but ABSENCE — every meaningful
+ * (non-heading, non-blank) line is a "no activity"/"no changes" statement, or
+ * there are no meaningful lines at all. Used by the dream synthesis
+ * vacuous-output guard (see synthesize.ts) to skip emitting a pending update
+ * that carries no real information. Deliberately STRICTER than lint's
+ * `isEssentiallyEmpty`: a short but substantive update (e.g. "Fixed the login
+ * bug.") is NOT absence-only and must still be emitted for review.
+ */
+export function isAbsenceOnly(content: string): boolean {
+  const meaningful = content
+    .split("\n")
+    .map((l) => l.replace(/\^\[[^\]]*\]/g, "").trim()) // drop ^[src:…] / ^[ambiguous] footnotes
+    .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*]\s*$/.test(l));
+  if (meaningful.length === 0) return true;
+  return meaningful.every((l) => ABSENCE_LINE.test(l));
+}
+
 const HEADING_RE = /^#{1,4}\s+/;
 const LABEL_ONLY_RE = /^[-*]\s*\*\*[^*]+\*\*:\s*$/;
 const EMPTY_BULLET_RE = /^[-*]\s*$/;
@@ -149,6 +167,21 @@ const MAX_SECONDARY_TAGS = 3;
  * - Secondary tags: scan entry text for mentions of existing theme names
  *   (capped, so passing references don't dominate).
  */
+// A github-activity repo section carries no real activity when it is empty or
+// only reports absence/errors. Recognizes the ABSENCE_LINE phrasings plus the
+// collector's error/no-op markers ("Not Found"/404, "command returned", "no
+// reviews or comments"). Bold sub-labels the skill emits ("**Commits:**") with
+// nothing underneath, headings, and empty bullets don't count as activity.
+const SECTION_ERROR_LINE = /not found|\b404\b|command returned|no reviews or comments|^\s*error\b/i;
+function isEmptyOrErrorSection(body: string): boolean {
+  const meaningful = body
+    .split("\n")
+    .map((l) => l.replace(/\^\[[^\]]*\]/g, "").trim())
+    .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*]\s*$/.test(l) && !/^\*\*[^*]+:\*\*$/.test(l));
+  if (meaningful.length === 0) return true;
+  return meaningful.every((l) => ABSENCE_LINE.test(l) || SECTION_ERROR_LINE.test(l));
+}
+
 function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): string[] | null {
   const log = entry.log;
   const tags: string[] = [];
@@ -164,11 +197,20 @@ function deterministicClassify(entry: ActivityEntry, existingThemes: string[]): 
     addTag(m[1].toLowerCase());
   }
 
-  // 2a. "### owner/repo" heading format — github-activity emits one heading per
-  //     repo, often 5-10 in a single entry. Capture ALL of them so each repo
-  //     gets its own theme on the wiki.
-  for (const m of log.matchAll(/^###\s+[a-zA-Z0-9_.-]+\/([a-zA-Z0-9_.-]+)\s*$/gm)) {
-    addTag(m[1].toLowerCase());
+  // 2a. "### owner/repo" heading format — github-activity emits one section per
+  //     CONFIGURED repo, which includes repos with no activity this period and
+  //     repos that errored (e.g. a 404 for a private repo the active gh account
+  //     can't see). Tag ONLY repos whose section shows real activity: an empty
+  //     or errored section must not become a theme, or it synthesizes to a
+  //     vacuous "No activity recorded" page. (The synthesis vacuous-output guard
+  //     is the backstop; this stops such themes from being created at all.)
+  const repoHeadings = [...log.matchAll(/^###\s+[a-zA-Z0-9_.-]+\/([a-zA-Z0-9_.-]+)\s*$/gm)];
+  for (let i = 0; i < repoHeadings.length; i++) {
+    const sectionStart = (repoHeadings[i].index ?? 0) + repoHeadings[i][0].length;
+    const sectionEnd = i + 1 < repoHeadings.length ? (repoHeadings[i + 1].index ?? log.length) : log.length;
+    if (!isEmptyOrErrorSection(log.slice(sectionStart, sectionEnd))) {
+      addTag(repoHeadings[i][1].toLowerCase());
+    }
   }
 
   // 2. GitHub repo references in prose: owner/repo near commit/push/PR/merge/release
