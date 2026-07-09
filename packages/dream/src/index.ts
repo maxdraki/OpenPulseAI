@@ -31,6 +31,11 @@ export interface DreamPipelineResult {
   pending: PendingUpdate[];
   /** Themes whose synthesis failed (after the provider's own retries) this run. */
   failedThemes: string[];
+  /** Themes whose synthesis produced no substantive content and were skipped
+   *  without emitting a pending update (see synthesize.ts's vacuous-output
+   *  guard). Unlike failedThemes, these count as successfully handled — their
+   *  entries are still marked processed. */
+  skippedThemes: string[];
   /** Entries deferred (left unprocessed in the ledger) because at least one of
    *  their themes failed — see the conservative "all themes must succeed" rule
    *  in ledger integration below. */
@@ -159,6 +164,10 @@ export async function runDreamPipeline(
     // error while loading schema/backlinks) — that's still a hard abort with
     // hot files preserved for retry, same as before.
     const failedThemes: string[] = [];
+    // Themes skipped as absence-only (see synthesize.ts's vacuous-output guard).
+    // These succeeded — there was nothing to record — so, unlike failedThemes,
+    // they do NOT defer their entries.
+    const skippedThemes: string[] = [];
     // Append/patch synthesis outcome counts (project/source-summary pages
     // eligible for the patch path — see synthesize.ts's tryPatchSynthesis).
     // Purely observability: doesn't affect which pendings get written.
@@ -170,6 +179,7 @@ export async function runDreamPipeline(
     try {
       pending = await synthesizeToPending(vault, classified, provider, model, proposedTypes, {
         onThemeFailure: (theme) => failedThemes.push(theme),
+        onAbsenceSkip: (theme) => skippedThemes.push(theme),
         onPatchOutcome: (_theme, outcome) => { patchSynthesis[outcome]++; },
         onFactHygiene: (_theme, counts) => {
           factHygiene.added += counts.added;
@@ -226,6 +236,9 @@ export async function runDreamPipeline(
     const failureSummary = failedThemes.length > 0
       ? ` | FAILED: ${failedThemes.join(", ")} (${deferredEntryCount} entr${deferredEntryCount === 1 ? "y" : "ies"} deferred)`
       : "";
+    const skippedSummary = skippedThemes.length > 0
+      ? ` | skipped ${skippedThemes.length} no-activity theme(s): ${skippedThemes.join(", ")}`
+      : "";
     const usageSummary = ` | usage: ${usage.calls} call(s), ${usage.inputTokens} in / ${usage.outputTokens} out tok, ${usage.retries} retr${usage.retries === 1 ? "y" : "ies"}`;
     const patchSummary = (patchSynthesis.patch + patchSynthesis.fallback) > 0
       ? ` | patch synthesis: ${patchSynthesis.patch} patched, ${patchSynthesis.fallback} fell back to whole-page`
@@ -236,7 +249,7 @@ export async function runDreamPipeline(
     await appendLog(
       vault,
       "dream",
-      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${usageSummary}${patchSummary}${factHygieneSummary}`
+      `${entries.length} entries → ${pending.length} updates (${themeNames})${failureSummary}${skippedSummary}${usageSummary}${patchSummary}${factHygieneSummary}`
     );
 
     await archiveProcessedHotFiles(vault);
@@ -246,11 +259,11 @@ export async function runDreamPipeline(
     await vaultLog(
       "info",
       "Dream pipeline complete",
-      `${classified.length} entries → ${pending.length} pending update(s)${failureSummary}`
+      `${classified.length} entries → ${pending.length} pending update(s)${failureSummary}${skippedSummary}`
     );
     console.error("[dream] Hot files archived. Dream complete.");
 
-    return { pending, failedThemes, deferredEntryCount, usage, patchSynthesis, factHygiene };
+    return { pending, failedThemes, skippedThemes, deferredEntryCount, usage, patchSynthesis, factHygiene };
   } finally {
     await releaseLock();
   }

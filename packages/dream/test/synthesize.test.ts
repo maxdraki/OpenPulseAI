@@ -41,6 +41,33 @@ describe("synthesizeToPending", () => {
     expect(pendingFiles[0]).toMatch(/\.json$/);
   });
 
+  it("skips emitting a pending update when synthesis produces absence-only content", async () => {
+    const classified: ClassificationResult[] = [
+      {
+        entry: { timestamp: "2026-04-03T10:00:00Z", log: "idle-project: no changes, repo unmodified" },
+        themes: ["idle-project"],
+        confidence: 0.9,
+      },
+    ];
+
+    // Synthesis correctly declines to fabricate work and writes the absence line.
+    const provider = mockProvider("## Current Status\n\nNo activity recorded.");
+    const failed: string[] = [];
+    const skipped: string[] = [];
+    const pending = await synthesizeToPending(vault, classified, provider, "test-model", undefined, {
+      onThemeFailure: (t) => failed.push(t),
+      onAbsenceSkip: (t) => skipped.push(t),
+    });
+
+    // No vacuous review item is created…
+    expect(pending.length).toBe(0);
+    expect(await readdir(vault.pendingDir)).toEqual([]);
+    // …and it's reported as an absence skip, NOT a failure — so the caller
+    // marks the entry processed rather than deferring it for endless retry.
+    expect(skipped).toEqual(["idle-project"]);
+    expect(failed).toEqual([]);
+  });
+
   it("includes existing warm content in LLM prompt", async () => {
     await writeTheme(vault, "project-auth", "OAuth integration pending.");
 
